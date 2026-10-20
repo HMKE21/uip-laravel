@@ -506,3 +506,5 @@ Services/Controllers جداد + `routes/api.php` مدموج + تحديث `Truste
 Vulnerabilities، Policies، Logs، Blocked IPs (جزء من Logs)، Reports،
 Report Files، Settings. باقي بند 15 (Future — لسه مالوش نطاق محدد) وبند
 26 (Admin — 4 كنترولرز بس من ~24).
+#   u i p - l a r a v e l  
+ 
