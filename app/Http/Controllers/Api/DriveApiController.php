@@ -166,6 +166,16 @@ class DriveApiController extends Controller
         } catch (DriveException $e) {
             return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 404);
         }
+        // Re-validation instead of "no-store": the browser keeps its own copy and asks "still this version?" — a 304 costs no data.
+        // The bytes only ever change through replace()/writeContent(), which update sha1 / size / updated_at.
+        $etag = '"' . substr(sha1($node->id . '|' . ($node->sha1 ?: '') . '|' . (int) $node->size_bytes . '|' . (string) $node->updated_at), 0, 32) . '"';
+        $match = trim((string) $request->header('If-None-Match'));
+        if ($match !== '' && !$request->boolean('download') && in_array($etag, array_map('trim', explode(',', str_replace('W/', '', $match))), true)) {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+            return response('', 304, ['ETag' => $etag, 'Cache-Control' => 'private, no-cache']);
+        }
         $download = $request->boolean('download');
         $name = (string) $node->name;
         $ascii = preg_replace('/[^\x20-\x7E]/', '_', str_replace(['"', '\\'], '_', $name));
@@ -176,7 +186,8 @@ class DriveApiController extends Controller
             // ملف طالب = محتوى غير موثوق: مفيش sniffing ولا تنفيذ سكربتات لو اتفتح مباشرة في تبويب.
             'X-Content-Type-Options'  => 'nosniff',
             'Content-Security-Policy' => "sandbox; default-src 'none'; img-src data:; media-src 'self'; style-src 'unsafe-inline'",
-            'Cache-Control'           => 'private, no-store',
+            'Cache-Control'           => 'private, no-cache',
+            'ETag'                    => $etag,
         ];
         return response()->stream(function () use ($stream) {
             fpassthru($stream);
