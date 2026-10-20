@@ -1,0 +1,16 @@
+/vendor/
+/node_modules/
+/.env
+.env.*
+!.env.example
+
+.phpunit.result.cache
+/storage/framework/*
+!/storage/framework/.gitignore
+/storage/logs/*
+!/storage/logs/.gitignore
+/storage/*.key
+/public/hot
+/public/storage
+
+/app.zip

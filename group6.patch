@@ -1,0 +1,786 @@
+diff --git a/.env.example b/.env.example
+index 8f85edd..93211a9 100644
+--- a/.env.example
++++ b/.env.example
+@@ -26,4 +26,9 @@ SESSION_LIFETIME=120
+ VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
+ VITE_REVERB_HOST="${REVERB_HOST}"
+ VITE_REVERB_PORT="${REVERB_PORT}"
+-VITE_REVERB_SCHEME="${REVERB_SCHEME}"
+\ No newline at end of file
++VITE_REVERB_SCHEME="${REVERB_SCHEME}"
++
++# --- Railway: التخزين الدائم (Volume) -------------------------------------------------------
++# مسار تركيب الـ Volume (مثلًا /data). لما يتحط، الملفات المرفوعة وبيانات مراقبة الامتحانات وسجلات الأمان
++# بتتخزّن على الـ Volume وبتفضل بعد كل نشر. اتركه فاضي لوكال. التفاصيل: docs/RAILWAY_OPERATIONS.md
++PERSISTENT_STORAGE_PATH=
+diff --git a/app/Console/Commands/StorageCheck.php b/app/Console/Commands/StorageCheck.php
+new file mode 100644
+index 0000000..e4a6e7c
+--- /dev/null
++++ b/app/Console/Commands/StorageCheck.php
+@@ -0,0 +1,70 @@
++<?php
++
++namespace App\Console\Commands;
++
++use App\Support\PersistentStorage;
++use App\Support\StorageHealth;
++use Illuminate\Console\Command;
++
++/**
++ * php artisan ops:storage          → تقرير: الملفات على Volume ولا لأ + حدود PHP.
++ * php artisan ops:storage --link   → يطبّق ربط الـ symlinks دلوقتي (بيتعمل تلقائي عند الإقلاع لو
++ *                                    PERSISTENT_STORAGE_PATH متظبط).
++ * بيرجّع exit code 1 لو في مشكلة (مناسب كـ health check في CI/نشر).
++ */
++class StorageCheck extends Command
++{
++    protected $signature = 'ops:storage {--link : Apply the volume symlinks now}';
++
++    protected $description = 'Reports whether uploads/logs live on a persistent volume and whether PHP upload limits are sufficient.';
++
++    public function handle(): int
++    {
++        if ($this->option('link')) {
++            if (PersistentStorage::root() === null) {
++                $this->error('PERSISTENT_STORAGE_PATH is not set — nothing to link.');
++                return self::FAILURE;
++            }
++            foreach (PersistentStorage::apply() as $rel => $status) {
++                $this->line(str_pad($rel, 28) . ' ' . $status);
++            }
++            $this->newLine();
++        }
++
++        $r = StorageHealth::report();
++
++        $this->info('PHP (' . $r['php']['sapi'] . ', ini: ' . ($r['php']['ini_file'] ?? 'none') . ')');
++        foreach (['upload_max_filesize', 'post_max_size'] as $k) {
++            $v = $r['php'][$k];
++            $this->line(sprintf('  %-20s %-8s %s', $k, $v['value'], $v['ok'] ? ($v['unlimited'] ? 'ok (unlimited)' : 'ok') : 'TOO LOW'));
++        }
++        $this->line('  required (upload policy): ' . StorageHealth::human($r['required_upload_bytes']));
++        if ($r['php']['sapi'] === 'cli') {
++            $this->comment('  note: this is the CLI. The web server may use different values — check GET /api/v1/admin/system/storage-health.');
++        }
++
++        $this->newLine();
++        $p = $r['persistence'];
++        $this->info('Persistence (PERSISTENT_STORAGE_PATH ' . ($p['configured'] ? '= ' . $p['volume']['path'] : 'not set') . ')');
++        foreach ($p['paths'] as $row) {
++            $this->line(sprintf('  %-28s %s', $row['path'], $row['persistent'] ? 'persistent' : 'EPHEMERAL (lost on deploy)'));
++        }
++        if ($p['volume']) {
++            $v = $p['volume'];
++            $this->line('  volume: mount=' . ($v['is_mount'] ? 'yes' : 'NO') . ', writable=' . ($v['writable'] ? 'yes' : 'NO')
++                . ', free=' . StorageHealth::human((int) $v['free_bytes']) . ' of ' . StorageHealth::human((int) $v['total_bytes']));
++            $s = $v['sentinel'];
++            if ($s) {
++                $this->line('  survived a redeploy: ' . ($s['survived_redeploy'] === null ? 'unknown yet (redeploy once, then run this again)' : ($s['survived_redeploy'] ? 'YES' : 'no')));
++            }
++        }
++
++        $this->newLine();
++        foreach ($r['warnings'] as $w) {
++            $this->warn('! ' . $w);
++        }
++        $r['ok'] ? $this->info('OK') : $this->error('Problems found.');
++
++        return $r['ok'] ? self::SUCCESS : self::FAILURE;
++    }
++}
+diff --git a/app/Http/Controllers/Api/AdminStorageHealthApiController.php b/app/Http/Controllers/Api/AdminStorageHealthApiController.php
+new file mode 100644
+index 0000000..5460388
+--- /dev/null
++++ b/app/Http/Controllers/Api/AdminStorageHealthApiController.php
+@@ -0,0 +1,15 @@
++<?php
++
++namespace App\Http\Controllers\Api;
++
++use App\Http\Controllers\Controller;
++use App\Support\StorageHealth;
++
++/** GET /api/v1/admin/system/storage-health — قيم PHP الحقيقية للويب + حالة الـ Volume. أدمن بس (uip.admin). */
++class AdminStorageHealthApiController extends Controller
++{
++    public function show()
++    {
++        return $this->apiSuccess(StorageHealth::report(), 'Storage health retrieved successfully.');
++    }
++}
+diff --git a/app/Providers/AppServiceProvider.php b/app/Providers/AppServiceProvider.php
+index 54b2669..ee79e87 100644
+--- a/app/Providers/AppServiceProvider.php
++++ b/app/Providers/AppServiceProvider.php
+@@ -3,6 +3,7 @@
+ namespace App\Providers;
+ 
+ use App\Mail\Transport\BrevoTransport;
++use App\Support\PersistentStorage;
+ use Illuminate\Support\Facades\Mail;
+ use Illuminate\Support\ServiceProvider;
+ 
+@@ -22,5 +23,10 @@ class AppServiceProvider extends ServiceProvider
+     public function boot(): void
+     {
+         Mail::extend('brevo', fn (array $config) => new BrevoTransport((string) ($config['key'] ?? '')));
++
++        // لو PERSISTENT_STORAGE_PATH متظبط (Volume على Railway) اربط مسارات الكتابة بيه. idempotent ورخيص.
++        if (!$this->app->runningUnitTests()) {
++            PersistentStorage::ensure();
++        }
+     }
+ }
+diff --git a/app/Services/FileUploadService.php b/app/Services/FileUploadService.php
+index 2ca9076..9c0f241 100644
+--- a/app/Services/FileUploadService.php
++++ b/app/Services/FileUploadService.php
+@@ -79,7 +79,8 @@ class FileUploadService
+             throw new \RuntimeException('Could not prepare the upload destination.');
+         }
+ 
+-        $storedName = bin2hex(random_bytes(16)) . '.' . $extension;
++        // الامتداد المنفّذ/المعروض كصفحة بيتخزّن بسوفكس .txt (شوف storedExtension) — الاسم الأصلي بيتحفظ في original_name.
++        $storedName = bin2hex(random_bytes(16)) . '.' . self::storedExtension($extension);
+ 
+         if (!$file->move($targetDir, $storedName)) {
+             throw new \RuntimeException('Failed to save the uploaded file.');
+@@ -94,6 +95,23 @@ class FileUploadService
+         ];
+     }
+ 
++    /**
++     * امتدادات السيرفر ممكن ينفّذها (php وأخواتها: FrankenPHP/Caddy بيشغّل أي .php تحت public/ عبر php_server)
++     * أو يعرضها كصفحة من نفس الأوريجن (html/htm/xhtml/shtml => XSS). فئات messages/ai_assistant/general
++     * بتسمح برفعها كملفات مشاركة، فبنخزّنها بسوفكس .txt: بتتخدم text/plain ومبتتنفّذش أبدًا.
++     */
++    private const NEUTRALIZED_EXTENSIONS = [
++        'php', 'php3', 'php4', 'php5', 'php7', 'php8', 'phtml', 'pht', 'phps', 'phar', 'pgif',
++        'html', 'htm', 'xhtml', 'shtml', 'cgi', 'pl',
++    ];
++
++    /** الامتداد اللي بيتحط فعليًا في اسم الملف على الديسك. */
++    public static function storedExtension(string $extension): string
++    {
++        $extension = strtolower($extension);
++        return in_array($extension, self::NEUTRALIZED_EXTENSIONS, true) ? $extension . '.txt' : $extension;
++    }
++
+     /** Best-effort delete of a previously stored file (paths are relative to public/). */
+     public function delete(string $relativePath): void
+     {
+diff --git a/app/Support/PersistentStorage.php b/app/Support/PersistentStorage.php
+new file mode 100644
+index 0000000..c33b076
+--- /dev/null
++++ b/app/Support/PersistentStorage.php
+@@ -0,0 +1,219 @@
++<?php
++
++namespace App\Support;
++
++/**
++ * يربط مسارات الكتابة اللي جوه الـ container (public/uploads، storage/app/private، ...) بـ Volume واحد
++ * عن طريق symlinks — شوف config/persistence.php. كله idempotent وآمن:
++ *  - مبيحوّلش مجلد لـ symlink غير لما يتأكد إن الهدف موجود وقابل للكتابة وإن المحتوى القديم اتنقل بالكامل.
++ *  - لو المسار نفسه Volume مركّب عليه مباشرةً (mount point) بيسيبه زي ما هو.
++ *  - lock على مستوى الملف عشان أكتر من process يبدأوا مع بعض مايتسابقوش.
++ */
++final class PersistentStorage
++{
++    private static bool $ensured = false;
++
++    public static function root(): ?string
++    {
++        $p = config('persistence.path');
++        if (!is_string($p) || trim($p) === '') {
++            return null;
++        }
++        return rtrim(trim($p), '/') ?: null;
++    }
++
++    /** @return array<string,string> مسار مطلق للـ link => مسار مطلق للهدف جوه الـ Volume */
++    public static function plan(): array
++    {
++        $root = self::root();
++        if ($root === null) {
++            return [];
++        }
++        $out = [];
++        foreach ((array) config('persistence.links', []) as $rel => $sub) {
++            $out[base_path(trim((string) $rel, '/'))] = $root . '/' . trim((string) $sub, '/');
++        }
++        return $out;
++    }
++
++    /** true لو $path مجلد حقيقي على filesystem مختلف عن أبوه (يعني Volume/mount مركّب عليه). */
++    public static function isMountPoint(string $path): bool
++    {
++        if (!is_dir($path) || is_link($path)) {
++            return false;
++        }
++        $a = @stat($path);
++        $b = @stat(dirname($path));
++        return $a !== false && $b !== false && $a['dev'] !== $b['dev'];
++    }
++
++    /** حالة سريعة من غير أي كتابة: كل المسارات متربطة/مركّبة بالفعل؟ */
++    public static function isLinked(): bool
++    {
++        foreach (self::plan() as $link => $target) {
++            if (!(is_link($link) && @readlink($link) === $target && is_dir($target)) && !self::isMountPoint($link)) {
++                return false;
++            }
++        }
++        return self::root() !== null;
++    }
++
++    /**
++     * بيتنادى من AppServiceProvider::boot() (مرة لكل process، ورخيص: lstat بس لو كله متربط).
++     * أي فشل بيتسجّل في error_log ومبيكسرش الـ request.
++     */
++    public static function ensure(): void
++    {
++        if (self::$ensured || self::root() === null) {
++            return;
++        }
++        self::$ensured = true;
++        // وقت الـ build على Railway المتغيرات موجودة لكن الـ Volume لسه مش مركّب: مبنلمسش حاجة (من غير
++        // آثار جانبية في الـ image). التحذير بيظهر في ops:storage / storage-health.
++        if (!self::isMountPoint((string) self::root()) || self::isLinked()) {
++            return;
++        }
++        foreach (self::apply() as $rel => $status) {
++            if (str_starts_with($status, 'error')) {
++                error_log("[persistent-storage] {$rel}: {$status}");
++            }
++        }
++    }
++
++    /**
++     * @param bool $requireMount true (الافتراضي): مبيربطش غير لو $root فعلًا Volume مركّب — عشان مننشئ
++     *                           symlinks على disk الـ container بالغلط. false للاختبارات بس.
++     * @return array<string,string> المسار النسبي => ok | linked | mounted | busy | error: ...
++     */
++    public static function apply(bool $requireMount = true): array
++    {
++        $root = self::root();
++        if ($root === null) {
++            return [];
++        }
++
++        $results = [];
++        if ($requireMount && !self::isMountPoint($root)) {
++            foreach (array_keys(self::plan()) as $link) {
++                $results[self::rel($link)] = "error: {$root} is not a mounted volume — mount the Railway Volume at this path first";
++            }
++            return $results;
++        }
++
++        if (!is_dir($root) && !@mkdir($root, 0775, true) && !is_dir($root)) {
++            foreach (array_keys(self::plan()) as $link) {
++                $results[self::rel($link)] = "error: volume path {$root} does not exist and could not be created";
++            }
++            return $results;
++        }
++
++        $lockFile = $root . '/.persist.lock';
++        $lock = @fopen($lockFile, 'c');
++        if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
++            if ($lock) {
++                fclose($lock);
++            }
++            foreach (array_keys(self::plan()) as $link) {
++                $results[self::rel($link)] = 'busy';
++            }
++            return $results;
++        }
++
++        try {
++            foreach (self::plan() as $link => $target) {
++                $results[self::rel($link)] = self::applyOne($link, $target);
++            }
++        } finally {
++            flock($lock, LOCK_UN);
++            fclose($lock);
++        }
++
++        return $results;
++    }
++
++    private static function applyOne(string $link, string $target): string
++    {
++        if (self::isMountPoint($link)) {
++            return 'mounted';
++        }
++
++        if (is_link($link)) {
++            $current = @readlink($link);
++            if ($current !== $target) {
++                return 'error: symlink points to ' . var_export($current, true) . ' (expected ' . $target . ')';
++            }
++            // الـ Volume اتركّب فاضي (أو الهدف اتمسح): نعيد إنشاء مجلد الهدف بدل ما الرفع يتكسر.
++            return (is_dir($target) || @mkdir($target, 0775, true) || is_dir($target)) ? 'ok' : 'error: could not create ' . $target;
++        }
++
++        if (!is_dir($target) && !@mkdir($target, 0775, true) && !is_dir($target)) {
++            return 'error: could not create ' . $target;
++        }
++        if (!is_writable($target)) {
++            return 'error: ' . $target . ' is not writable by the app user (set RAILWAY_RUN_UID=0 on the service)';
++        }
++
++        if (file_exists($link)) {
++            if (!is_dir($link)) {
++                return 'error: ' . $link . ' exists and is not a directory';
++            }
++            if (!self::moveContents($link, $target)) {
++                return 'error: could not move existing files from ' . $link . ' into the volume (left untouched)';
++            }
++            if (!@rmdir($link)) {
++                return 'error: ' . $link . ' is not empty after moving (left untouched)';
++            }
++        } else {
++            $parent = dirname($link);
++            if (!is_dir($parent) && !@mkdir($parent, 0775, true) && !is_dir($parent)) {
++                return 'error: could not create ' . $parent;
++            }
++        }
++
++        return @symlink($target, $link) ? 'linked' : 'error: symlink() failed for ' . $link;
++    }
++
++    /** ينقل محتوى مجلد لمجلد تاني (rename، وcopy+unlink لو filesystem مختلف). مبيكتبش فوق ملف موجود. */
++    private static function moveContents(string $from, string $to): bool
++    {
++        $ok = true;
++        foreach (scandir($from) ?: [] as $name) {
++            if ($name === '.' || $name === '..') {
++                continue;
++            }
++            $src = $from . '/' . $name;
++            $dst = $to . '/' . $name;
++
++            if (is_dir($src) && !is_link($src)) {
++                if (!is_dir($dst) && !@mkdir($dst, 0775, true) && !is_dir($dst)) {
++                    $ok = false;
++                    continue;
++                }
++                if (self::moveContents($src, $dst) && @rmdir($src)) {
++                    continue;
++                }
++                $ok = false;
++                continue;
++            }
++
++            if (file_exists($dst)) {
++                $ok = false; // مبنكتبش فوق حاجة موجودة في الـ Volume
++                continue;
++            }
++            if (@rename($src, $dst)) {
++                continue;
++            }
++            if (@copy($src, $dst) && @unlink($src)) {
++                continue;
++            }
++            $ok = false;
++        }
++        return $ok;
++    }
++
++    private static function rel(string $absolute): string
++    {
++        $base = rtrim(base_path(), '/') . '/';
++        return str_starts_with($absolute, $base) ? substr($absolute, strlen($base)) : $absolute;
++    }
++}
+diff --git a/app/Support/StorageHealth.php b/app/Support/StorageHealth.php
+new file mode 100644
+index 0000000..b48be45
+--- /dev/null
++++ b/app/Support/StorageHealth.php
+@@ -0,0 +1,134 @@
++<?php
++
++namespace App\Support;
++
++use App\Services\FileUploadPolicyService;
++
++/**
++ * تقرير تشغيلي واحد بيجاوب على سؤالين: (1) الملفات والسجلات فعلًا على Volume ولا بتتمسح مع النشر؟
++ * (2) إعدادات PHP كافية لرفع الحد الأقصى المسموح (سياسة الرفع، الافتراضي 50MB)؟
++ *
++ * مهم: القيم بتتقرا من الـ SAPI اللي بينفّذ الكود. من الـ CLI (railway shell / artisan) ممكن تختلف عن
++ * الويب، فاستخدم endpoint الأدمن GET /api/v1/admin/system/storage-health للقيم الحقيقية للويب.
++ */
++final class StorageHealth
++{
++    public static function report(): array
++    {
++        $warnings = [];
++        $requiredBytes = self::requiredBytes();
++
++        // ---- PHP limits
++        $php = ['sapi' => PHP_SAPI, 'ini_file' => php_ini_loaded_file() ?: null, 'version' => PHP_VERSION];
++        $limitsOk = true;
++        foreach (['upload_max_filesize', 'post_max_size'] as $name) {
++            $raw = ini_get($name);
++            $bytes = ($raw === false || $raw === '') ? null : ini_parse_quantity($raw);
++            $unlimited = $bytes !== null && $bytes <= 0;
++            $ok = $unlimited || ($bytes !== null && $bytes >= $requiredBytes);
++            $php[$name] = ['value' => $raw === false ? null : $raw, 'bytes' => $unlimited ? null : $bytes, 'unlimited' => $unlimited, 'ok' => $ok];
++            if (!$ok) {
++                $limitsOk = false;
++                $warnings[] = "{$name} = " . var_export($raw, true) . ' is below the required ' . self::human($requiredBytes) . '.';
++            }
++        }
++        foreach (['max_file_uploads', 'memory_limit', 'max_execution_time', 'max_input_time'] as $name) {
++            $php[$name] = ini_get($name) === false ? null : ini_get($name);
++        }
++
++        // ---- Persistence
++        $root = PersistentStorage::root();
++        $paths = [];
++        $allPersistent = true;
++        $rootIsMount = $root !== null && PersistentStorage::isMountPoint($root);
++
++        $plan = $root !== null ? PersistentStorage::plan() : [];
++        if ($root === null) {
++            foreach ((array) config('persistence.links', []) as $rel => $_) {
++                $plan[base_path(trim((string) $rel, '/'))] = null;
++            }
++        }
++        foreach ($plan as $abs => $target) {
++            $isLink = is_link($abs);
++            $isMount = PersistentStorage::isMountPoint($abs);
++            $linkTarget = $isLink ? @readlink($abs) : null;
++            $persistent = $isMount || ($isLink && $root !== null && $rootIsMount && $linkTarget === $target);
++            $allPersistent = $allPersistent && $persistent;
++            $paths[] = [
++                'path'       => ltrim(str_replace(base_path(), '', $abs), '/'),
++                'exists'     => file_exists($abs),
++                'symlink_to' => $linkTarget ?: null,
++                'mount_point' => $isMount,
++                'writable'   => is_dir($abs) && is_writable($abs),
++                'persistent' => $persistent,
++            ];
++            if (!$persistent) {
++                $warnings[] = ltrim(str_replace(base_path(), '', $abs), '/') . ' is NOT on a persistent volume — its files are lost on every deploy.';
++            }
++        }
++
++        $volume = null;
++        if ($root !== null) {
++            if (!$rootIsMount) {
++                $warnings[] = "PERSISTENT_STORAGE_PATH={$root} is not a mounted volume (it is on the container's own disk).";
++            }
++            $volume = [
++                'path'        => $root,
++                'is_mount'    => $rootIsMount,
++                'writable'    => is_dir($root) && is_writable($root),
++                'free_bytes'  => is_dir($root) ? (int) @disk_free_space($root) : null,
++                'total_bytes' => is_dir($root) ? (int) @disk_total_space($root) : null,
++                'sentinel'    => self::sentinel($root),
++            ];
++        }
++
++        return [
++            'ok'             => $limitsOk && $allPersistent && $warnings === [],
++            'required_upload_bytes' => $requiredBytes,
++            'php'            => $php,
++            'persistence'    => ['configured' => $root !== null, 'all_persistent' => $allPersistent, 'volume' => $volume, 'paths' => $paths],
++            'warnings'       => $warnings,
++        ];
++    }
++
++    private static function requiredBytes(): int
++    {
++        try {
++            return max(1, (int) app(FileUploadPolicyService::class)->defaultMaxKb()) * 1024;
++        } catch (\Throwable) {
++            return max(1, (int) config('upload.max_size_kb', 51200)) * 1024;
++        }
++    }
++
++    /**
++     * ملف صغير على الـ Volume بيسجّل أول deployment شافه. لو بعد نشر جديد لقيناه لسه موجود بـ deployment
++     * مختلف => الـ Volume فعلًا بيعدّي من نشر لنشر (ده الإثبات العملي، مش بس إن المسار متركّب).
++     */
++    private static function sentinel(string $root): ?array
++    {
++        $file = $root . '/.persist-sentinel.json';
++        $current = (string) (getenv('RAILWAY_DEPLOYMENT_ID') ?: '');
++        $data = is_file($file) ? json_decode((string) @file_get_contents($file), true) : null;
++
++        if (!is_array($data)) {
++            if (!is_dir($root) || !is_writable($root)) {
++                return null;
++            }
++            $data = ['first_deployment' => $current ?: null, 'created_at' => gmdate('c')];
++            @file_put_contents($file, json_encode($data));
++        }
++
++        $first = $data['first_deployment'] ?? null;
++        return [
++            'created_at'          => $data['created_at'] ?? null,
++            'first_deployment'    => $first,
++            'current_deployment'  => $current ?: null,
++            'survived_redeploy'   => ($first && $current) ? $first !== $current : null,
++        ];
++    }
++
++    public static function human(int $bytes): string
++    {
++        return $bytes >= 1048576 ? round($bytes / 1048576, 1) . ' MB' : round($bytes / 1024) . ' KB';
++    }
++}
+diff --git a/config/persistence.php b/config/persistence.php
+new file mode 100644
+index 0000000..3a97efc
+--- /dev/null
++++ b/config/persistence.php
+@@ -0,0 +1,25 @@
++<?php
++
++/**
++ * التخزين الدائم على Railway (Volume).
++ *
++ * Railway بيسمح بـ Volume واحد بس لكل خدمة، والكود بيكتب في كذا مكان جوه الـ container
++ * (بيتمسح مع كل نشر). لو PERSISTENT_STORAGE_PATH متظبط (مسار تركيب الـ Volume، مثلًا /data)،
++ * App\Support\PersistentStorage بيعمل symlink من كل مسار تحت لمجلد جوه الـ Volume، وبينقل أي
++ * محتوى موجود قبل كده. من غير المتغير ده مفيش أي تغيير في السلوك (لوكال/اختبارات).
++ *
++ * الشكل: 'المسار نسبةً لـ base_path()' => 'اسم المجلد جوه الـ Volume'
++ *
++ * بديل أبسط: تركّب الـ Volume مباشرةً على /app/public/uploads — بس كده بيحمي الرفع وحده،
++ * ومراقبة الامتحانات وسجلات الأمان وتصدير الامتحانات هتفضل بتتمسح.
++ */
++return [
++    'path' => env('PERSISTENT_STORAGE_PATH'),
++
++    'links' => [
++        'public/uploads'           => 'uploads',          // كل رفع الملفات (مشاريع، رسائل، تقارير، تسجيلات...)
++        'storage/app/private'      => 'storage-private',  // disk 'local': لقطات/تسجيلات مراقبة الامتحانات
++        'storage/app/exam-exports' => 'exam-exports',     // ملفات تصدير الامتحانات (ليها صفوف في DB)
++        'storage/logs/security'    => 'security-logs',    // سجلات الأمان (أثر تدقيق)
++    ],
++];
+diff --git a/docs/RAILWAY_OPERATIONS.md b/docs/RAILWAY_OPERATIONS.md
+new file mode 100644
+index 0000000..d61739d
+--- /dev/null
++++ b/docs/RAILWAY_OPERATIONS.md
+@@ -0,0 +1,89 @@
++# دليل التشغيل على Railway (المجموعة 6)
++
++## 1) التخزين الدائم (Volume) — الأهم
++
++### المشكلة
++الـ container على Railway بيتبني من جديد مع كل نشر، وأي ملف اتكتب جواه بيتمسح. الكود بيكتب في أكتر من مكان:
++
++| المسار | بيخزّن إيه |
++|---|---|
++| `public/uploads` | كل الملفات المرفوعة (مشاريع، رسائل، تقارير، تسجيلات اجتماعات...) |
++| `storage/app/private` | لقطات وتسجيلات مراقبة الامتحانات |
++| `storage/app/exam-exports` | ملفات تصدير الامتحانات (ليها صفوف في الداتابيز) |
++| `storage/logs/security` | سجلات الأمان (أثر تدقيق) |
++
++Railway بيسمح بـ **Volume واحد بس** لكل خدمة، فمش ينفع نركّب Volume لكل مسار. الحل: نركّب Volume واحد على `/data`، والتطبيق نفسه بيربط المسارات الأربعة بيه (symlinks) عند الإقلاع.
++
++### الإعداد (مرة واحدة)
++1. في خدمة **Full-API** ← تبويب **Settings** ← **Volumes**: الـ Volume `full-api-volume` اللي أضفته، خلّي **Mount Path** = `/data`.
++2. في **Variables** أضف:
++   ```
++   PERSISTENT_STORAGE_PATH=/data
++   ```
++3. لو الـ logs ظهر فيها `is not writable by the app user`، أضف كمان `RAILWAY_RUN_UID=0` (الـ Volume بيتركّب بصلاحيات root).
++4. اعمل Redeploy.
++
++> بديل أبسط (مش مفضّل): تركّب الـ Volume مباشرةً على `/app/public/uploads` من غير المتغير. ده بيحمي الرفع وحده، لكن مراقبة الامتحانات وسجلات الأمان هتفضل بتتمسح.
++
++### بيحصل إيه عند الإقلاع
++- لو `/data` فعلًا Volume مركّب: أي ملفات موجودة في المسارات الأربعة بتتنقل للـ Volume (من غير ما تكتب فوق ملف موجود)، وبعدين المسار يبقى symlink.
++- لو `/data` مش Volume (مثلًا وقت الـ build): **مفيش أي تغيير**. ده مقصود عشان ميحصلش ربط غلط.
++- لو حصل أي تعارض أو فشل: المسار الأصلي بيتساب زي ما هو والخطأ بيتسجل في الـ logs بالشكل `[persistent-storage] ...`.
++
++### التحقق (مهم، متثقش في الإعداد بس)
++من **Railway Shell** أو `railway ssh`:
++```
++php artisan ops:storage
++```
++المفروض يطلع `OK` وكل مسار `persistent`. بعد **نشر تاني**، شغّله تاني: لازم يظهر `survived a redeploy: YES` — ده الإثبات الفعلي إن الملفات بتعدّي من نشر لنشر.
++
++وللقيم الحقيقية بتاعة الويب (الـ CLI ممكن يستخدم إعدادات PHP مختلفة)، بحساب أدمن:
++```
++GET /api/v1/admin/system/storage-health
++```
++
++### ملاحظات
++- الملفات اللي اتمسحت قبل كده مش هترجع. أي صف في الداتابيز بيشاور على ملف ضايع هيدي 404 للتحميل.
++- Volume واحد يعني الخدمة لازم تفضل instance واحدة (Railway مش بيسمح بـ replicas مع Volume).
++- حجم الـ Volume ومدة الاحتفاظ بنسخ احتياطية بيعتمدوا على خطتك في Railway — راجعهم من الـ dashboard، وفعّل الـ Backups لو خطتك بتدعمها.
++- راقب المساحة: `ops:storage` بيعرض المساحة الفاضية.
++
++---
++
++## 2) حدود رفع PHP (50MB أو أكتر)
++
++سياسة الرفع في التطبيق افتراضيًا **50MB** (من شاشة Security Policies). PHP نفسه لازم يسمح بنفس القيمة:
++
++| الإعداد | المطلوب |
++|---|---|
++| `upload_max_filesize` | ≥ 50M |
++| `post_max_size` | ≥ 50M (يفضّل أكبر شوية) |
++
++### إيه اللي محتاج تعمله؟ يعتمد على الـ Builder
++افتح **Settings → Build → Builder** في الخدمة:
++
++- **Railpack** (الافتراضي حاليًا، بيشغّل PHP عبر FrankenPHP): الـ `php.ini` الافتراضي بتاعه فيه `upload_max_filesize = 0` و`post_max_size = 0` (يعني من غير حد على مستوى PHP)، والـ Caddy مفيهوش حد لحجم الـ request. **مفيش حاجة تتعمل.** الحد الفعلي هو سياسة التطبيق (50MB).
++- **Nixpacks** (nginx + php-fpm): القيم الافتراضية صغيرة (حوالي 2M/8M) ولازم تتغير، وكمان `client_max_body_size` في nginx. الأسهل تنتقل لـ Railpack.
++
++مهما كان الـ Builder، **اتأكد بنفسك** من `GET /api/v1/admin/system/storage-health`: لو `upload_max_filesize` و`post_max_size` فيهم `"ok": true` يبقى تمام، ولو لا هتلاقي سبب واضح في `warnings`.
++
++لو عايز حد صريح بدل "بلا حد": حط `php.ini` في root المشروع. انتبه إنه **بيستبدل** الملف الافتراضي كله في Railpack، فلازم تنسخ الملف الافتراضي كامل من https://github.com/railwayapp/railpack/blob/main/core/providers/php/php.ini وتعدّل القيمتين بس.
++
++---
++
++## 3) إصلاح أمني: رفع ملفات PHP/HTML
++
++الـ Caddyfile الافتراضي في Railpack بيشغّل `php_server` على كل الـ root، يعني أي ملف `.php` تحت `public/uploads` كان هيتنفّذ. وفئات الرفع `messages` و`ai_assistant` و`general` بتسمح برفع `php` (للمشاركة كملف كود).
++
++اتصلح في `FileUploadService`: الامتدادات (`php`, `php3-8`, `phtml`, `pht`, `phar`, `html`, `htm`, `xhtml`, `shtml`, `cgi`, `pl`) بتتخزّن بسوفكس `.txt` (مثلًا `a1b2….php.txt`)، فبتتخدم كنص عادي ومبتتنفّذش. الاسم الأصلي بيتحفظ في `original_name` والتنزيل شغال زي ما هو.
++
++### لازم تنضّف اللي اترفع قبل الإصلاح
++الملفات اللي اترفعت قبل كده لسه بامتدادها القديم. بعد الإعداد في (1) شغّل من الـ Shell:
++```
++find /data/uploads -type f \( -iname '*.php*' -o -iname '*.phtml' -o -iname '*.phar' -o -iname '*.pht' -o -iname '*.html' -o -iname '*.htm' -o -iname '*.shtml' \)
++```
++- لو مفيش نتيجة: خلاص.
++- لو في نتيجة: راجعها واحذفها (أو غيّر امتدادها). وراجع الـ logs بحثًا عن طلبات غريبة على المسارات دي.
++
++### لسه مفتوح (توصية)
++ملفات `svg` المرفوعة بتتخدم من نفس الأوريجن، وده ممكن يسمح بـ XSS لو حد فتح SVG خبيث مباشرةً. التوصية: خدمة `/uploads/*` بـ header `Content-Security-Policy: sandbox` و`X-Content-Type-Options: nosniff` على مستوى الـ web server.
+diff --git a/routes/api.php b/routes/api.php
+index b80bfbc..f369ea7 100644
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -795,6 +795,10 @@ Route::prefix('v1')->group(function () {
+         Route::post('/{id}/override', [AdminApprovalsApiController::class, 'override']);
+     });
+ 
++    // تشغيل: حالة الـ Volume (التخزين الدائم) + حدود رفع PHP كما يراها الويب فعلًا.
++    Route::get('admin/system/storage-health', [\App\Http\Controllers\Api\AdminStorageHealthApiController::class, 'show'])
++        ->middleware(['uip.auth', 'uip.admin']);
++
+     // بند 11 مرحلة 4 — تنسيق أدمن للمشاريع المميّزة على صفحة الهبوط
+     // العامة. أول ظهور لـ prefix('admin/featured-projects')، فمفيش تضارب.
+     Route::prefix('admin/featured-projects')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+diff --git a/tests/Harness/persistent_storage_harness.php b/tests/Harness/persistent_storage_harness.php
+new file mode 100644
+index 0000000..f0a1401
+--- /dev/null
++++ b/tests/Harness/persistent_storage_harness.php
+@@ -0,0 +1,66 @@
++<?php
++// يختبر App\Support\PersistentStorage على filesystem حقيقي (مجلدات مؤقتة) من غير ما نشغّل Laravel كامل.
++require dirname(__DIR__, 2) . '/vendor/autoload.php';
++
++$tmp = sys_get_temp_dir() . '/ps_' . bin2hex(random_bytes(4));
++$base = "$tmp/app"; $vol = "$tmp/vol";
++mkdir("$base/public/uploads/reports", 0775, true);
++mkdir("$base/storage/app/private/proctor", 0775, true);
++mkdir("$base/storage/logs", 0775, true);
++file_put_contents("$base/public/uploads/reports/old.pdf", 'PDF-OLD');
++file_put_contents("$base/storage/app/private/proctor/snap.jpg", 'SNAP');
++
++$app = new Illuminate\Foundation\Application($base);
++$app->instance('config', new Illuminate\Config\Repository(['persistence' => ['path' => $vol, 'links' => [
++    'public/uploads' => 'uploads', 'storage/app/private' => 'storage-private',
++    'storage/app/exam-exports' => 'exam-exports', 'storage/logs/security' => 'security-logs']]]));
++Illuminate\Container\Container::setInstance($app);
++
++use App\Support\PersistentStorage as P;
++$pass = 0; $fail = 0;
++function check(string $n, bool $c, $x = '') { global $pass, $fail; if ($c) { $pass++; echo "  ok   $n\n"; } else { $fail++; echo "  FAIL $n $x\n"; } }
++
++check('plan has 4 links under volume', count(P::plan()) === 4);
++check('not linked before apply', P::isLinked() === false);
++$strict = P::apply();
++check('strict apply refuses when the volume path is not a real mount', count(array_filter($strict, fn($s) => str_contains($s, 'not a mounted volume'))) === 4 && !is_link("$base/public/uploads"), json_encode($strict));
++P::ensure();
++check('ensure() is a silent no-op when not mounted (build-time safety)', !is_link("$base/public/uploads") && is_file("$base/public/uploads/reports/old.pdf"));
++$r = P::apply(false);
++check('all 4 linked', array_values($r) === ['linked','linked','linked','linked'], json_encode($r));
++check('public/uploads is a symlink to volume', is_link("$base/public/uploads") && readlink("$base/public/uploads") === "$vol/uploads");
++check('existing upload moved into volume', file_get_contents("$vol/uploads/reports/old.pdf") === 'PDF-OLD');
++check('existing proctoring data moved', file_get_contents("$vol/storage-private/proctor/snap.jpg") === 'SNAP');
++check('old file still readable through the path', file_get_contents("$base/public/uploads/reports/old.pdf") === 'PDF-OLD');
++file_put_contents("$base/public/uploads/new.txt", 'NEW');
++check('new writes land in the volume', is_file("$vol/uploads/new.txt"));
++check('missing dirs created + linked (security logs, exports)', is_dir("$vol/security-logs") && is_link("$base/storage/logs/security") && is_link("$base/storage/app/exam-exports"));
++check('isLinked() true now', P::isLinked() === true);
++$r2 = P::apply(false);
++check('second apply is a no-op (ok)', array_values($r2) === ['ok','ok','ok','ok'], json_encode($r2));
++
++// volume re-mounted empty: the symlink is intact but its target is gone -> must be recreated, not left dangling
++exec('rm -rf ' . escapeshellarg("$vol/uploads"));
++check('dangling link detected as not linked', P::isLinked() === false);
++check('apply recreates the missing target dir', P::apply(false)['public/uploads'] === 'ok' && is_dir("$vol/uploads") && is_dir("$base/public/uploads"));
++file_put_contents("$base/public/uploads/new.txt", 'NEW');
++
++// conflict: a real dir whose file already exists in the volume -> must NOT overwrite or lose data
++@unlink("$base/public/uploads"); mkdir("$base/public/uploads", 0775, true);
++file_put_contents("$base/public/uploads/new.txt", 'FROM-IMAGE'); // same name already in volume (content NEW)
++$r3 = P::apply(false);
++check('conflict reported as error, nothing overwritten', str_starts_with($r3['public/uploads'], 'error') && file_get_contents("$vol/uploads/new.txt") === 'NEW');
++check('conflicting source left untouched', file_get_contents("$base/public/uploads/new.txt") === 'FROM-IMAGE' && !is_link("$base/public/uploads"));
++
++// wrong symlink target is reported, not silently re-pointed
++$tmp2 = "$tmp/other"; mkdir($tmp2);
++@unlink("$base/storage/logs/security"); symlink($tmp2, "$base/storage/logs/security");
++check('foreign symlink reported', str_starts_with(P::apply(false)['storage/logs/security'], 'error: symlink points to'));
++
++// no env => feature fully off
++$app->instance('config', new Illuminate\Config\Repository(['persistence' => ['path' => null, 'links' => []]]));
++check('no PERSISTENT_STORAGE_PATH => no plan, apply is empty, ensure is silent', P::root() === null && P::plan() === [] && P::apply() === []);
++
++exec('rm -rf ' . escapeshellarg($tmp));
++echo "\n$pass passed, $fail failed\n";
++exit($fail ? 1 : 0);
+diff --git a/tests/Unit/UploadHardeningTest.php b/tests/Unit/UploadHardeningTest.php
+new file mode 100644
+index 0000000..d87cf60
+--- /dev/null
++++ b/tests/Unit/UploadHardeningTest.php
+@@ -0,0 +1,28 @@
++<?php
++
++namespace Tests\Unit;
++
++use App\Services\FileUploadService;
++use PHPUnit\Framework\Attributes\Test;
++use PHPUnit\Framework\TestCase;
++
++/** الملفات المرفوعة اللي السيرفر ينفّذها/يعرضها كصفحة لازم تتخزّن باسم مش قابل للتنفيذ. */
++class UploadHardeningTest extends TestCase
++{
++    #[Test]
++    public function executable_and_html_extensions_get_a_txt_suffix(): void
++    {
++        foreach (['php', 'PHP', 'phtml', 'phar', 'php8', 'html', 'htm', 'xhtml', 'shtml', 'pht'] as $ext) {
++            $this->assertStringEndsWith('.txt', FileUploadService::storedExtension($ext), $ext);
++        }
++        $this->assertSame('php.txt', FileUploadService::storedExtension('PHP'));
++    }
++
++    #[Test]
++    public function normal_extensions_are_untouched(): void
++    {
++        foreach (['pdf', 'docx', 'zip', 'rar', 'png', 'jpg', 'mp4', 'svg', 'js', 'py', 'csv'] as $ext) {
++            $this->assertSame($ext, FileUploadService::storedExtension($ext));
++        }
++    }
++}

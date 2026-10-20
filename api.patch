@@ -1,0 +1,124 @@
+diff -ruN orig/api/Full-API-main/app/Http/Controllers/Api/ProjectsApiController.php api/Full-API-main/app/Http/Controllers/Api/ProjectsApiController.php
+--- orig/api/Full-API-main/app/Http/Controllers/Api/ProjectsApiController.php	2026-10-11 14:30:32.000000000 +0300
++++ api/Full-API-main/app/Http/Controllers/Api/ProjectsApiController.php	2026-10-11 16:09:05.011446538 +0300
+@@ -368,10 +368,12 @@
+                 (string) $id,
+                 (int) $request->attributes->get('uip_user_id'),
+                 $fileId,
+-                $request->file('file')
++                $request->file('file'),
++                $request->boolean('force')
+             );
+         } catch (\RuntimeException $e) {
+-            return $this->apiError($e->getMessage(), null, 422);
++            // 409 = نسخة أحدث اتحفظت من حد تاني من الفريق (محرر الـ ZIP بيعرض "حفظ فوقها؟").
++            return $this->apiError($e->getMessage(), null, $e->getCode() === 409 ? 409 : 422);
+         }
+ 
+         return $this->apiSuccess($file->toRowArray(), 'File replaced successfully.');
+diff -ruN orig/api/Full-API-main/app/Models/ProjectFile.php api/Full-API-main/app/Models/ProjectFile.php
+--- orig/api/Full-API-main/app/Models/ProjectFile.php	2026-10-11 14:30:32.000000000 +0300
++++ api/Full-API-main/app/Models/ProjectFile.php	2026-10-11 16:09:06.559446630 +0300
+@@ -108,6 +108,8 @@
+     {
+         return [
+             'id'            => $this->id,
++            // نفس id لكل نسخ الملف — الـ viewer بيتتبّع بيه الملف بعد ما حفظ جديد يغيّر الـ id.
++            'root_id'       => (int) ($this->root_file_id ?: $this->id),
+             'original_name' => $this->original_name,
+             'extension'     => strtoupper((string) pathinfo((string) $this->original_name, PATHINFO_EXTENSION)),
+             'mime_type'     => $this->mime_type,
+diff -ruN orig/api/Full-API-main/app/Services/ResearchProjectService.php api/Full-API-main/app/Services/ResearchProjectService.php
+--- orig/api/Full-API-main/app/Services/ResearchProjectService.php	2026-10-11 14:30:32.000000000 +0300
++++ api/Full-API-main/app/Services/ResearchProjectService.php	2026-10-11 16:09:03.339446438 +0300
+@@ -361,7 +361,7 @@
+      * فاضلة (مش بتتمسح) عشان تفضل قابلة للتحميل من بانل سجل الإصدارات؛
+      * الرفعة الجديدة بس اللي بتتعلّم is_latest.
+      */
+-    public function replaceFile(string $uuid, $ownerId, $fileId, $uploadedFile): ProjectFile
++    public function replaceFile(string $uuid, $ownerId, $fileId, $uploadedFile, bool $force = false): ProjectFile
+     {
+         $project = $this->findContributable($uuid, $ownerId);
+         if (!$project) {
+@@ -376,24 +376,54 @@
+             throw new \RuntimeException('File not found.');
+         }
+ 
++        // محرر الـ ZIP: لو حد تاني من الفريق حفظ نسخة أحدث بعد ما الشخص ده فتح الملف، الـ base بتاعه
++        // بقى قديم. من غير فحص كان هيطلع صفّين is_latest=1 لنفس الملف، وحفظ الأول يتمسح بصمت.
++        // 409 = "فيه نسخة أحدث"؛ force=1 = احفظ فوق الأحدث (النسخة التانية فاضلة في سجل الإصدارات).
++        if (!$previous->is_latest) {
++            $latest = null;
++            foreach ($this->files->versionsOf($previous->id, $project->id) as $v) {
++                if ($v->is_latest) {
++                    $latest = $v;
++                    break;
++                }
++            }
++            if ($latest && !$force) {
++                throw new \RuntimeException('A newer version of this file was saved by someone else.', 409);
++            }
++            if ($latest) {
++                $previous = $latest;
++            }
++        }
++
+         $stored = $this->uploads->store($uploadedFile, 'research-projects', $project->uuid);
+         $rootId = $previous->root_file_id ?: $previous->id;
+ 
+-        $file = $this->files->create([
+-            'project_id'    => $project->id,
+-            'uploaded_by'   => $ownerId,
+-            'file_type'     => $this->classifyFileType($stored['extension']),
+-            'file_path'     => $stored['stored_path'],
+-            'original_name' => $stored['original_name'],
+-            'mime_type'     => $stored['mime_type'],
+-            'size_bytes'    => $stored['size_bytes'],
+-            'version'       => (int) $previous->version + 1,
+-            'is_latest'     => 1,
+-            'root_file_id'  => $rootId,
+-        ]);
++        $file = DB::transaction(function () use ($project, $ownerId, $stored, $previous, $rootId) {
++            // قفل الصف القديم: حفظتين متزامنتين من نفس الـ base مينفعش الاتنين ينجحوا.
++            $locked = ProjectFile::whereKey($previous->id)->lockForUpdate()->first();
++            if (!$locked || !$locked->is_latest) {
++                $this->uploads->delete($stored['stored_path']);
++                throw new \RuntimeException('A newer version of this file was saved by someone else.', 409);
++            }
++
++            $created = $this->files->create([
++                'project_id'    => $project->id,
++                'uploaded_by'   => $ownerId,
++                'file_type'     => $this->classifyFileType($stored['extension']),
++                'file_path'     => $stored['stored_path'],
++                'original_name' => $stored['original_name'],
++                'mime_type'     => $stored['mime_type'],
++                'size_bytes'    => $stored['size_bytes'],
++                'version'       => (int) $locked->version + 1,
++                'is_latest'     => 1,
++                'root_file_id'  => $rootId,
++            ]);
++
++            $locked->fill(['is_latest' => 0]);
++            $locked->save();
+ 
+-        $previous->fill(['is_latest' => 0]);
+-        $previous->save();
++            return $created;
++        });
+ 
+         Log::info('Project file replaced', ['project_id' => $project->id, 'file_id' => $file->id, 'previous_file_id' => $previous->id]);
+         $this->auditLog->record($ownerId, 'project.file_replace', 'Project', $project->id, ['file' => $previous->original_name, 'version' => $previous->version], ['file' => $stored['original_name'], 'version' => $file->version]);
+diff -ruN orig/api/Full-API-main/routes/api.php api/Full-API-main/routes/api.php
+--- orig/api/Full-API-main/routes/api.php	2026-10-11 14:30:32.000000000 +0300
++++ api/Full-API-main/routes/api.php	2026-10-11 16:08:54.507445913 +0300
+@@ -743,6 +743,9 @@
+         Route::post('/{id}/files', [ProjectsApiController::class, 'storeFile']);
+         Route::get('/{id}/media', [ProjectsApiController::class, 'media']);
+         Route::put('/{id}/files/{fileId}', [ProjectsApiController::class, 'replaceFile']);
++        // نفس replaceFile بـ POST: PHP مبيقراش multipart على PUT (الملف بيوصل فاضي)،
++        // فمحرر الـ ZIP في الفرونت (زرار Save) بيستخدم الـ POST ده.
++        Route::post('/{id}/files/{fileId}/replace', [ProjectsApiController::class, 'replaceFile']);
+         Route::get('/{id}/files/{fileId}/versions', [ProjectsApiController::class, 'fileVersions']);
+         Route::delete('/{id}/files/{fileId}', [ProjectsApiController::class, 'deleteFile']);
+ 

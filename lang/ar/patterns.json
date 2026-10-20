@@ -1,0 +1,157 @@
+[
+ {
+  "regex": "^\"(.+?)\"\\ is\\ not\\ a\\ valid\\ email\\ address\\.$",
+  "ar": "\"{1}\" ليس بريدًا إلكترونيًا صالحًا.",
+  "groups": 1
+ },
+ {
+  "regex": "^Unknown\\ forecast\\ metric:\\ (.+?)$",
+  "ar": "مقياس التنبؤ غير معروف: {1}",
+  "groups": 1
+ },
+ {
+  "regex": "^You've\\ reached\\ the\\ AI\\ Assistant's\\ rate\\ limit\\ \\((.+?)\\ requests/minute\\)\\.\\ Please\\ wait\\ a\\ moment\\ and\\ try\\ again\\.$",
+  "ar": "لقد وصلت إلى حد طلبات المساعد الذكي ({1} طلب/دقيقة). من فضلك انتظر قليلًا وحاول مرة أخرى.",
+  "groups": 1
+ },
+ {
+  "regex": "^Marks\\ awarded\\ must\\ be\\ between\\ 0\\ and\\ (.+?)\\.$",
+  "ar": "الدرجة الممنوحة لازم تكون بين 0 و{1}.",
+  "groups": 1
+ },
+ {
+  "regex": "^\"(.+?)\"\\ is\\ not\\ a\\ valid\\ 2\\-letter\\ country\\ code\\.$",
+  "ar": "\"{1}\" ليس رمز دولة صالحًا من حرفين.",
+  "groups": 1
+ },
+ {
+  "regex": "^Message\\ is\\ too\\ long\\ \\(max\\ (.+?)\\ characters\\)\\.$",
+  "ar": "الرسالة طويلة جدًا (الحد الأقصى {1} حرف).",
+  "groups": 1
+ },
+ {
+  "regex": "^You\\ can\\ attach\\ at\\ most\\ (.+?)\\ files\\ per\\ message\\.$",
+  "ar": "يمكنك إرفاق {1} ملفات كحد أقصى لكل رسالة.",
+  "groups": 1
+ },
+ {
+  "regex": "^The\\ score\\ for\\ \"(.+?)\"\\ is\\ invalid\\ \\(must\\ be\\ between\\ 0\\ and\\ its\\ max\\ score\\)\\.$",
+  "ar": "درجة \"{1}\" غير صالحة (لازم تكون بين 0 ودرجته القصوى).",
+  "groups": 1
+ },
+ {
+  "regex": "^Every\\ criterion\\ needs\\ a\\ score\\ before\\ finalizing\\ \\(\"(.+?)\"\\ has\\ none\\)\\.$",
+  "ar": "كل معيار يحتاج درجة قبل الاعتماد النهائي (\"{1}\" ليس له درجة).",
+  "groups": 1
+ },
+ {
+  "regex": "^For\\ your\\ security,\\ you\\ can't\\ reuse\\ one\\ of\\ your\\ last\\ (.+?)\\ passwords\\.$",
+  "ar": "لأمانك، لا يمكنك إعادة استخدام واحدة من آخر {1} كلمات مرور.",
+  "groups": 1
+ },
+ {
+  "regex": "^\"(.+?)\"\\ is\\ not\\ a\\ valid\\ IP\\ address\\ or\\ CIDR\\ range\\.$",
+  "ar": "\"{1}\" ليس عنوان IP ولا نطاق CIDR صالحًا.",
+  "groups": 1
+ },
+ {
+  "regex": "^Question\\ type\\ '(.+?)'\\ is\\ not\\ available\\ yet\\ —\\ only$",
+  "ar": "نوع السؤال '{1}' غير متاح بعد — المتاح فقط",
+  "groups": 1
+ },
+ {
+  "regex": "^Rubric\\ points\\ must\\ total\\ the\\ question's\\ marks\\ \\((.+?)\\);\\ the\\ criteria\\ you\\ sent\\ total\\ (.+?)\\.$",
+  "ar": "نقاط المعيار لازم يكون مجموعها درجة السؤال ({1})؛ مجموع ما أرسلته {2}.",
+  "groups": 2
+ },
+ {
+  "regex": "^This\\ pool\\ only\\ has\\ (.+?)\\ question\\(s\\),\\ but\\ questions_to_select\\ is\\ (.+?)\\.$",
+  "ar": "هذه المجموعة بها {1} سؤال فقط، لكن قيمة questions_to_select هي {2}.",
+  "groups": 2
+ },
+ {
+  "regex": "^(.+?)\\ must\\ add\\ up\\ to\\ questions_to_select\\ \\((.+?)\\);\\ it\\ currently\\ totals\\ (.+?)\\.$",
+  "ar": "{1} لازم يكون مجموعها questions_to_select ({2})؛ مجموعها الحالي {3}.",
+  "groups": 3
+ },
+ {
+  "regex": "^Student\\ \\#(.+?)\\ was\\ not\\ found\\ in\\ your\\ university\\.$",
+  "ar": "الطالب رقم {1} غير موجود في جامعتك.",
+  "groups": 1
+ },
+ {
+  "regex": "^Faculty\\ \\#(.+?)\\ was\\ not\\ found\\ in\\ your\\ university\\.$",
+  "ar": "الكلية رقم {1} غير موجودة في جامعتك.",
+  "groups": 1
+ },
+ {
+  "regex": "^Department\\ \\#(.+?)\\ was\\ not\\ found\\ in\\ your\\ university\\.$",
+  "ar": "القسم رقم {1} غير موجود في جامعتك.",
+  "groups": 1
+ },
+ {
+  "regex": "^Group\\ \\#(.+?)\\ was\\ not\\ found\\ in\\ your\\ university\\.$",
+  "ar": "المجموعة رقم {1} غير موجودة في جامعتك.",
+  "groups": 1
+ },
+ {
+  "regex": "^Question\\ pool\\ '(.+?)'(.+?)\\ does\\ not\\ have\\ enough\\ available\\ questions:\\ needs\\ (.+?),\\ has$",
+  "ar": "مجموعة الأسئلة '{1}'{2} لا تحتوي على أسئلة متاحة كافية: المطلوب {3}، والمتاح",
+  "groups": 3
+ },
+ {
+  "regex": "^GitHub\\ API\\ returned\\ HTTP\\ (.+?)\\.$",
+  "ar": "واجهة GitHub أرجعت HTTP {1}.",
+  "groups": 1
+ },
+ {
+  "regex": "^AI\\ provider\\ returned\\ HTTP\\ (.+?):$",
+  "ar": "مزوّد الذكاء الاصطناعي أرجع HTTP {1}:",
+  "groups": 1
+ },
+ {
+  "regex": "^AI\\ provider\\ returned\\ HTTP\\ (.+?)\\ during\\ streaming\\.$",
+  "ar": "مزوّد الذكاء الاصطناعي أرجع HTTP {1} أثناء البث.",
+  "groups": 1
+ },
+ {
+  "regex": "^Unsupported\\ export\\ format\\ \\[(.+?)\\]\\.$",
+  "ar": "صيغة التصدير [{1}] غير مدعومة.",
+  "groups": 1
+ },
+ {
+  "regex": "^(.+?)\\ export\\(s\\)\\ succeeded,\\ (.+?)\\ failed\\.\\ Check\\ the\\ history\\ for\\ details\\.$",
+  "ar": "نجح {1} تصدير وفشل {2}. راجع السجل للتفاصيل.",
+  "groups": 2
+ },
+ {
+  "regex": "^Test\\ email\\ sent\\ to\\ (.+?)\\.$",
+  "ar": "تم إرسال بريد اختباري إلى {1}.",
+  "groups": 1
+ },
+ {
+  "regex": "^Unknown\\ conversation\\ member\\ flag:\\ (.+?)$",
+  "ar": "علامة عضو المحادثة غير معروفة: {1}",
+  "groups": 1
+ },
+ {
+  "regex": "^Column\\ '(.+?)\\.(.+?)'\\ is\\ not\\ available\\.$",
+  "ar": "العمود '{1}.{2}' غير متاح.",
+  "groups": 2
+ },
+ {
+  "regex": "^Statement\\ contains\\ a\\ disallowed\\ keyword:\\ \"(.+?)\"\\.$",
+  "ar": "العبارة تحتوي على كلمة غير مسموحة: \"{1}\".",
+  "groups": 1
+ },
+ {
+  "regex": "^Table\\ \"(.+?)\"\\ is\\ not\\ available\\ in\\ the\\ Query\\ Builder's\\ allow\\-listed\\ datasets\\.$",
+  "ar": "الجدول \"{1}\" غير متاح ضمن مجموعات البيانات المسموحة في منشئ الاستعلامات.",
+  "groups": 1
+ },
+ {
+  "regex": "^Column\\ \"(.+?)\"\\ is\\ not\\ available\\ through\\ the\\ Query\\ Builder\\.$",
+  "ar": "العمود \"{1}\" غير متاح عبر منشئ الاستعلامات.",
+  "groups": 1
+ }
+]

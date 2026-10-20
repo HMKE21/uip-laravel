@@ -1,0 +1,24 @@
+<?php
+
+/**
+ * "جهازي" (My PC) — مساحة الملفات الشخصية للطالب. كل قيمة بتتغير من الـ .env بدون لمس الكود.
+ *
+ *   DRIVE_DISK         اسم الـ disk في config/filesystems.php (الافتراضي 'drive' = storage/app/drive، خاص ومش متاح من الويب).
+ *                      على Railway/Heroku الـ filesystem بيتمسح مع كل deploy: PERSISTENT_STORAGE_PATH بيربطه بالـ Volume، أو استخدم 's3'.
+ *   DRIVE_QUOTA_MB     حصة التخزين لكل طالب.
+ *   DRIVE_MAX_FILE_MB  أكبر ملف واحد (لازم يكون أقل من upload_max_filesize / post_max_size في PHP وفي الـ proxy).
+ *   DRIVE_MAX_ZIP_MB   أقصى حجم غير مضغوط جوّه zip واحد (ضغط/فك/تنزيل مجلد) — حماية من zip-bomb.
+ *   DRIVE_ROLES        الأدوار المسموح لها (افتراضي student؛ للتوسّع: DRIVE_ROLES=student,faculty,supervisor).
+ */
+return [
+    'disk'             => env('DRIVE_DISK', 'drive'),
+    'quota_mb'         => (int) env('DRIVE_QUOTA_MB', 2048),
+    'max_file_mb'      => (int) env('DRIVE_MAX_FILE_MB', 100),
+    'max_zip_mb'       => (int) env('DRIVE_MAX_ZIP_MB', 1024),
+    'max_zip_entries'  => (int) env('DRIVE_MAX_ZIP_ENTRIES', 20000),
+    'max_nodes'        => (int) env('DRIVE_MAX_NODES', 50000),
+    'max_depth'        => (int) env('DRIVE_MAX_DEPTH', 32),
+    'max_text_edit_kb' => (int) env('DRIVE_MAX_TEXT_KB', 2048),
+    'trash_days'       => (int) env('DRIVE_TRASH_DAYS', 30),
+    'roles'            => array_values(array_filter(array_map('trim', explode(',', (string) env('DRIVE_ROLES', 'student'))))),
+];

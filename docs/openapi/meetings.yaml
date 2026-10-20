@@ -1,0 +1,1569 @@
+openapi: 3.0.3
+info:
+  title: UIP Meetings & Collaboration Platform API
+  description: |
+    Native, in-platform video conferencing and collaboration for UIP
+    (Universities Innovation Platform) — meeting scheduling, lobby/guest
+    access, real-time signaling, WebRTC (mesh, client-side), live chat,
+    reactions, screen sharing, host controls, file sharing, notes, polls,
+    attendance, bulk invitations + calendar, client-side recording, and
+    admin analytics/monitoring.
+
+    Every endpoint below returns the project-wide response envelope:
+
+    ```json
+    { "success": true|false, "message": "...", "data": ..., "errors": null, "meta": {} }
+    ```
+
+    `success=false` responses always use this envelope too, with `message`
+    holding the human-readable error and `errors` holding field-level
+    validation messages (Laravel Validator format) when applicable.
+  version: "1.0.0"
+  contact:
+    name: UIP Platform Team
+
+servers:
+  - url: /api/v1
+    description: Same-origin API (Laravel backend, mounted under /api/v1)
+
+tags:
+  - name: Meetings
+    description: Meeting CRUD, lifecycle (start/end/cancel), participants.
+  - name: Invitations & Calendar
+    description: Single/bulk invitations, calendar view, attachable entities (Round 8).
+  - name: Lobby & Guest Access
+    description: Pre-join screen, waiting room, guest join by link (Round 2).
+  - name: Signaling
+    description: WebRTC signaling channel auth, presence, media/connection state, ICE servers (Round 3-4).
+  - name: Host Controls
+    description: Lock, mute, remove, promote/demote, transfer host (Round 6).
+  - name: Live Collaboration
+    description: Chat, reactions, raise hand, screen sharing (Round 5).
+  - name: Collaboration Extras
+    description: Attendance, files, notes/action items, polls (Round 7).
+  - name: Recording
+    description: Client-side meeting recording lifecycle (Round 9).
+  - name: Analytics & Admin
+    description: Per-meeting analytics and platform-wide admin monitoring (Round 10).
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Standard UIP JWT bearer token (UipJwtService), same auth used across
+        the whole platform. Endpoints under `uip.auth.optional` middleware
+        accept either this header OR a `guest_token` (see below) — never
+        both required.
+
+  parameters:
+    MeetingUuid:
+      name: uuid
+      in: path
+      required: true
+      description: The meeting's public UUID (never the internal numeric id).
+      schema:
+        type: string
+        format: uuid
+      example: 8f14e45f-ceea-467e-add6-01ab2cd39e12
+    JoinToken:
+      name: joinToken
+      in: path
+      required: true
+      description: The opaque join token embedded in the shareable meeting link.
+      schema:
+        type: string
+      example: jt_9k3mQ2xVh7pR4sT8
+    GuestTokenBody:
+      description: >
+        Present only for guests admitted via the lobby (Round 2, بند 23).
+        Omit entirely when authenticating with a Bearer token instead.
+      type: string
+      nullable: true
+
+  schemas:
+    ApiEnvelope:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        data: {}
+        errors:
+          type: object
+          nullable: true
+        meta:
+          type: object
+
+    ApiError:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+      example:
+        success: false
+        message: "You are not authorized to join this meeting."
+        data: null
+        errors: null
+        meta: {}
+
+    ValidationError:
+      allOf:
+        - $ref: '#/components/schemas/ApiEnvelope'
+      example:
+        success: false
+        message: "The title field is required."
+        data: null
+        errors:
+          title: ["The title field is required."]
+        meta: {}
+
+    Meeting:
+      type: object
+      properties:
+        id: { type: integer, example: 4210 }
+        uuid: { type: string, format: uuid, example: 8f14e45f-ceea-467e-add6-01ab2cd39e12 }
+        host_user_id: { type: integer, example: 118 }
+        title: { type: string, example: "Graduation Project Meeting" }
+        description: { type: string, nullable: true, example: "Weekly project discussion" }
+        type: { type: string, enum: [instant, scheduled], example: scheduled }
+        status: { type: string, enum: [scheduled, lobby, live, ended, cancelled], example: scheduled }
+        scheduled_start_at: { type: string, format: date-time, nullable: true, example: "2026-09-05T18:00:00Z" }
+        duration_minutes: { type: integer, example: 60 }
+        waiting_room_enabled: { type: boolean, example: true }
+        allow_guests: { type: boolean, example: false }
+        max_participants: { type: integer, example: 8 }
+        has_password: { type: boolean, example: false }
+        locked: { type: boolean, example: false }
+        settings:
+          type: object
+          example:
+            mute_on_entry: false
+            camera_on_entry: true
+            allow_chat: true
+            allow_file_sharing: true
+            recording_enabled: true
+        meeting_code:
+          type: string
+          nullable: true
+          description: Only present when the response explicitly includes join details (create/show).
+          example: "482-119-733"
+        join_url:
+          type: string
+          nullable: true
+          example: "https://uip.example.edu/meetings/join/jt_9k3mQ2xVh7pR4sT8"
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MeetingRecording:
+      type: object
+      properties:
+        id: { type: integer, example: 55 }
+        kind: { type: string, enum: [audio, video, screen_share], example: video }
+        status: { type: string, enum: [recording, processing, completed, failed], example: processing }
+        started_by_key: { type: string, example: "user:118" }
+        started_by_display_name: { type: string, example: "Dr. Ahmed Hassan" }
+        started_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time, nullable: true }
+        duration_seconds: { type: integer, nullable: true, example: 1830 }
+        original_name: { type: string, nullable: true, example: "meeting.webm" }
+        mime_type: { type: string, nullable: true, example: "video/webm" }
+        size_bytes: { type: integer, nullable: true, example: 48213112 }
+        download_url: { type: string, nullable: true }
+        failure_reason: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    MeetingAnalytics:
+      type: object
+      properties:
+        meeting_id: { type: integer }
+        status: { type: string }
+        invited_count: { type: integer }
+        joined_count: { type: integer }
+        currently_connected: { type: integer }
+        peak_participants: { type: integer }
+        duration_minutes: { type: integer, nullable: true }
+        recordings_count: { type: integer }
+        recordings_storage_bytes: { type: integer }
+        failed_connections: { type: integer }
+        chat_messages_count: { type: integer }
+        files_shared_count: { type: integer }
+
+    AdminMeetingsMonitoring:
+      type: object
+      properties:
+        active_meetings: { type: integer, example: 12 }
+        active_participants: { type: integer, example: 87 }
+        total_meetings: { type: integer, example: 5310 }
+        meetings_today: { type: integer, example: 42 }
+        meetings_this_week: { type: integer, example: 260 }
+        duration_stats:
+          type: object
+          properties:
+            average_minutes: { type: number, nullable: true, example: 38.4 }
+            max_minutes: { type: integer, nullable: true, example: 180 }
+            sample_size: { type: integer, example: 4890 }
+        failed_connections:
+          type: object
+          properties:
+            total: { type: integer, example: 231 }
+            today: { type: integer, example: 6 }
+        security_events:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              action: { type: string, example: "meetings.locked" }
+              meeting_id: { type: integer, nullable: true }
+              user_id: { type: integer, nullable: true }
+              created_at: { type: string, format: date-time }
+        recordings:
+          type: object
+          properties:
+            total: { type: integer, example: 918 }
+            by_status:
+              type: object
+              additionalProperties: { type: integer }
+              example: { completed: 890, processing: 3, failed: 25 }
+            storage_bytes: { type: integer, example: 429496729600 }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /meetings:
+    get:
+      tags: [Meetings]
+      summary: List meetings the current user hosts or is/was invited to
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meetings retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Meeting' }
+        '401':
+          description: Missing/invalid bearer token.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+    post:
+      tags: [Meetings]
+      summary: Create a meeting
+      description: >
+        Any authenticated UIP user (any role) may host a meeting.
+        `host_user_id` is always derived from the bearer token, never
+        accepted from the client.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 5000, nullable: true }
+                type: { type: string, enum: [instant, scheduled] }
+                scheduled_start_at:
+                  type: string
+                  format: date-time
+                  description: Required when type=scheduled.
+                duration_minutes: { type: integer, minimum: 5 }
+                max_participants: { type: integer, minimum: 2 }
+                waiting_room_enabled: { type: boolean }
+                allow_guests: { type: boolean }
+                password: { type: string, minLength: 4, maxLength: 100 }
+                settings: { type: object }
+                attachable_type:
+                  type: string
+                  maxLength: 40
+                  description: "Round 8, بند 26 — link this meeting to a project/etc. (e.g. 'project')."
+                attachable_id: { type: integer }
+            example:
+              title: "Graduation Project Meeting"
+              description: "Weekly project discussion"
+              type: scheduled
+              scheduled_start_at: "2026-09-05T18:00:00"
+              duration_minutes: 60
+              waiting_room_enabled: true
+      responses:
+        '201':
+          description: Meeting created successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Meeting' }
+              example:
+                success: true
+                message: "Meeting created successfully."
+                data:
+                  id: 4210
+                  uuid: "8f14e45f-ceea-467e-add6-01ab2cd39e12"
+                  host_user_id: 118
+                  title: "Graduation Project Meeting"
+                  description: "Weekly project discussion"
+                  type: scheduled
+                  status: scheduled
+                  scheduled_start_at: "2026-09-05T18:00:00Z"
+                  duration_minutes: 60
+                  waiting_room_enabled: true
+                  allow_guests: false
+                  max_participants: 8
+                  has_password: false
+                  locked: false
+                  meeting_code: "482-119-733"
+                  join_url: "https://uip.example.edu/meetings/join/jt_9k3mQ2xVh7pR4sT8"
+                  created_at: "2026-08-31T10:00:00Z"
+                  updated_at: "2026-08-31T10:00:00Z"
+                errors: null
+                meta: {}
+        '422':
+          description: Validation failed (e.g. missing title, or scheduled_start_at missing for type=scheduled).
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ValidationError' } }
+
+  /meetings/{uuid}:
+    parameters:
+      - $ref: '#/components/parameters/MeetingUuid'
+    get:
+      tags: [Meetings]
+      summary: Show one meeting (host, invited participant, or co-host)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Meeting' } }
+        '403':
+          description: Not authorized to view this meeting.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+        '404':
+          description: Meeting not found.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+    patch:
+      tags: [Meetings]
+      summary: Update meeting details (host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, maxLength: 200 }
+                description: { type: string, maxLength: 5000 }
+                scheduled_start_at: { type: string, format: date-time }
+                duration_minutes: { type: integer }
+                max_participants: { type: integer }
+                settings: { type: object }
+      responses:
+        '200':
+          description: Meeting updated successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Meeting' } }
+        '403':
+          description: Only the host can update this meeting.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+        '422':
+          description: Validation failed.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ValidationError' } }
+    delete:
+      tags: [Meetings]
+      summary: Delete a meeting (host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting deleted successfully.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } }
+        '403':
+          description: Only the host can delete this meeting.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+
+  /meetings/{uuid}/start:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Meetings]
+      summary: Start a scheduled/instant meeting (host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting started successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/Meeting' } }
+        '403':
+          description: Only the host can start this meeting.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+
+  /meetings/{uuid}/end:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Meetings]
+      summary: End a live meeting (host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting ended successfully.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } }
+        '403':
+          description: Only the host can end this meeting.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+
+  /meetings/{uuid}/cancel:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Meetings]
+      summary: Cancel a scheduled meeting (host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting cancelled successfully.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } }
+
+  /meetings/{uuid}/participants:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Meetings]
+      summary: List meeting participants
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Participants retrieved successfully.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } }
+
+  /meetings/{uuid}/invitations:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Invitations & Calendar]
+      summary: List invitations for a meeting (host/co-host)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Invitations retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    post:
+      tags: [Invitations & Calendar]
+      summary: Invite a single user by id
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invited_user_id]
+              properties:
+                invited_user_id: { type: integer }
+      responses:
+        '201': { description: Invitation sent successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '422': { description: Validation failed., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/invitations/bulk:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Invitations & Calendar]
+      summary: Bulk-invite by user ids, role, university, group, or project team (Round 8, بند 13)
+      description: >
+        Host/co-host only. `target_type` selects the resolution strategy:
+        `users` (explicit ids), `university` (all students of a university —
+        admin only), `group` (a student group's members), or `project`
+        (a project's owner + accepted team members).
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_type]
+              properties:
+                target_type: { type: string, enum: [users, university, group, project] }
+                user_ids:
+                  type: array
+                  items: { type: integer }
+                  description: Required when target_type=users.
+                university_id: { type: integer, description: Required when target_type=university (admin only). }
+                group_id: { type: integer, description: Required when target_type=group. }
+                project_id: { type: integer, description: Required when target_type=project. }
+            example:
+              target_type: users
+              user_ids: [201, 202, 305]
+      responses:
+        '200':
+          description: Bulk invitations sent successfully.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiEnvelope' }
+              example:
+                success: true
+                message: "12 invitations sent."
+                data: { invited_count: 12, skipped_count: 1 }
+                errors: null
+                meta: {}
+        '403': { description: Only the host/co-host can send invitations (or, for target_type=university, admin only)., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '422': { description: Unknown target_type or missing required field for the chosen type., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/calendar:
+    get:
+      tags: [Invitations & Calendar]
+      summary: Calendar view of the current user's meetings (Round 8, بند 14)
+      description: Day/Week/Month view — filtered by date range, includes meetings the user hosts or actually participates in (not just invited).
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: "2026-09-01"
+        - name: end
+          in: query
+          required: true
+          schema: { type: string, format: date }
+          example: "2026-09-30"
+      responses:
+        '200':
+          description: Calendar meetings retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Meeting' }
+
+  /meetings/by-attachable:
+    get:
+      tags: [Invitations & Calendar]
+      summary: List meetings linked to a project/attachable entity (Round 8, بند 26)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: attachable_type
+          in: query
+          required: true
+          schema: { type: string }
+          example: project
+        - name: attachable_id
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Meetings retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/join/{joinToken}/info:
+    parameters:
+      - $ref: '#/components/parameters/JoinToken'
+    get:
+      tags: [Lobby & Guest Access]
+      summary: Pre-join screen info (Round 2, بند 3) — public link, auth optional
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Meeting information retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Meeting not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/join/{joinToken}/verify-password:
+    parameters:
+      - $ref: '#/components/parameters/JoinToken'
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Verify a meeting password before requesting access
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { password: { type: string } }
+      responses:
+        '200':
+          description: Result of the password check (always 200; check `data.valid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiEnvelope' }
+              example: { success: true, message: "Incorrect password.", data: { valid: false }, errors: null, meta: {} }
+
+  /meetings/join/{joinToken}/request:
+    parameters:
+      - $ref: '#/components/parameters/JoinToken'
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Request to join (admits immediately, or queues in the waiting room)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string }
+                guest_display_name:
+                  type: string
+                  description: Required for unauthenticated guests (Round 2, بند 23).
+                device_preferences:
+                  type: object
+                  properties:
+                    mic_enabled: { type: boolean }
+                    camera_enabled: { type: boolean }
+      responses:
+        '200':
+          description: Access request created — check `data.status` (admitted vs pending).
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } }
+        '422':
+          description: Incorrect password, or meeting locked/unavailable.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ValidationError' } }
+
+  /meetings/{uuid}/signaling/auth:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Authorize a presence/private WebSocket channel subscription
+      description: >
+        Custom channel auth (JWT-based, not Laravel's default `Auth::user()`
+        broadcasting guard — see docs/openapi/../MEETINGS_DEPLOYMENT.md).
+        Accepts either a Bearer token (registered participant) or a
+        `guest_token` issued at admission (Round 2).
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [socket_id, channel_name]
+              properties:
+                socket_id: { type: string }
+                channel_name: { type: string, example: "presence-meeting.8f14e45f-ceea-467e-add6-01ab2cd39e12" }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Signed channel auth payload (Pusher-protocol compatible)., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Not authorized for this meeting/channel., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/signaling/media-state:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Update mic/camera/screen-share state (broadcasts to other participants)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mic_enabled: { type: boolean }
+                camera_enabled: { type: boolean }
+                screen_sharing: { type: boolean }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Media state updated successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Screen sharing is disabled by the host., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/signaling/ice-servers:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Signaling]
+      summary: Get STUN/TURN server list with a short-lived TURN credential (Round 4, بند 6)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200':
+          description: ICE server list retrieved successfully.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiEnvelope' }
+              example:
+                success: true
+                message: "ICE servers retrieved successfully."
+                data:
+                  - urls: "stun:stun.l.google.com:19302"
+                  - urls: ["turn:turn.uip.example.edu:3478"]
+                    username: "1735689600:meeting-guest"
+                    credential: "b64:HMAC-SHA1-signature=="
+                errors: null
+                meta: {}
+
+  /meetings/{uuid}/signaling/failure:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Report a client-side connection failure (camera/microphone/webrtc/network)
+      description: Persisted to the audit log (`meetings.connection_failure`) for admin monitoring statistics (Round 10, بند 39).
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [failure_type]
+              properties:
+                failure_type: { type: string, enum: [camera, microphone, webrtc, network] }
+                message: { type: string, maxLength: 500, nullable: true }
+      responses:
+        '200': { description: Failure reported., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '422': { description: Invalid failure_type., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/host-controls/lock:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Lock/unlock the meeting (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { locked: { type: boolean } } }
+      responses:
+        '200': { description: Meeting lock state updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can lock this meeting., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/remove:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Remove a participant (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [participant_key], properties: { participant_key: { type: string, example: "user:305" } } }
+      responses:
+        '200': { description: Participant removed successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can remove participants., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/chat:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Live Collaboration]
+      summary: List chat messages visible to the current actor (public + own private threads)
+      security: [{ bearerAuth: [] }, {}]
+      parameters:
+        - name: after_id
+          in: query
+          schema: { type: integer }
+          description: Return only messages newer than this id (polling fallback).
+      responses:
+        '200': { description: Messages retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    post:
+      tags: [Live Collaboration]
+      summary: Send a chat message (public, or private to one recipient key)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 4000 }
+                recipient_key: { type: string, nullable: true, description: "Round 5, بند 8 — private chat, e.g. 'user:305'." }
+      responses:
+        '201': { description: Message sent successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Chat is disabled for this meeting., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/files:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: List shared files
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Files retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    post:
+      tags: [Collaboration Extras]
+      summary: Upload/share a file (Round 7, بند 19)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '201': { description: File shared successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '422': { description: File sharing disabled, or the file was rejected (size/type/security scan)., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/polls:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: List polls
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Polls retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    post:
+      tags: [Collaboration Extras]
+      summary: Create a poll (host/co-host only, Round 7 بند 21)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question, options]
+              properties:
+                question: { type: string }
+                poll_type: { type: string, enum: [single_choice, multiple_choice] }
+                is_anonymous: { type: boolean }
+                options:
+                  type: array
+                  minItems: 2
+                  items: { type: string }
+            example:
+              question: "Should we move next week's meeting to Thursday?"
+              poll_type: single_choice
+              options: ["Yes", "No", "Either works"]
+      responses:
+        '201': { description: Poll created successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host or co-host can manage polls., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '422': { description: A poll needs at least two options., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/attendance/report:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: Attendance report (host/co-host only, Round 7 بند 17)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Attendance report retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/attendance/export:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: Export attendance as CSV (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: CSV file.
+          content:
+            text/csv:
+              schema: { type: string }
+
+  /meetings/{uuid}/recordings:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Recording]
+      summary: List recordings for this meeting (any participant)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200':
+          description: Recordings retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          recordings:
+                            type: array
+                            items: { $ref: '#/components/schemas/MeetingRecording' }
+    post:
+      tags: [Recording]
+      summary: Start a recording (host/co-host only, Round 9 بند 18)
+      description: >
+        Client-side recording (MediaRecorder API in the browser) — this call
+        only opens the recording's lifecycle row; the actual audio/video
+        file is uploaded later via the `/stop` endpoint below.
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [audio, video, screen_share], default: video }
+                guest_token: { type: string, nullable: true }
+            example: { kind: video }
+      responses:
+        '201':
+          description: Recording started.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/MeetingRecording' } }
+        '403': { description: Only the host/co-host can manage recordings, or recording is disabled for this meeting., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '422': { description: Invalid kind, or a recording of that kind is already in progress., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/recordings/{recordingId}/stop:
+    parameters:
+      - $ref: '#/components/parameters/MeetingUuid'
+      - name: recordingId
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [Recording]
+      summary: Stop a recording and upload the final file (host/co-host only)
+      description: >
+        Marks the recording `processing` and dispatches
+        `ProcessMeetingRecordingJob` (queued) to finalize it asynchronously
+        (بند "Use asynchronous processing where appropriate"); the client
+        should listen for the `meeting.recording_ready` WebSocket event
+        instead of polling.
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: webm, mp4, ogg, mp3, wav, or m4a — up to `meetings.recording_max_kb` (default 500MB).
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Recording stopped, processing.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/MeetingRecording' } }
+        '403': { description: Only the host/co-host can manage recordings., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: Recording not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '422': { description: This recording has already been stopped, or the uploaded file was rejected (disallowed type/size)., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/recordings/{recordingId}:
+    parameters:
+      - $ref: '#/components/parameters/MeetingUuid'
+      - name: recordingId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Recording]
+      summary: Delete a recording (host/co-host only)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Recording removed successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can manage recordings., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: Recording not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/analytics:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Analytics & Admin]
+      summary: Per-meeting analytics widget (host/co-host only, Round 10 بند 15)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meeting analytics retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/MeetingAnalytics' } }
+        '403': { description: Only the host or co-host can view meeting analytics., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /admin/meetings/monitoring:
+    get:
+      tags: [Analytics & Admin]
+      summary: Platform-wide meetings monitoring dashboard (admin only, Round 10 بند 39)
+      description: >
+        Aggregate counters only — admins do not get automatic access to
+        private meeting content (chat, files, recording playback) through
+        this endpoint, per spec بند 39.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Meetings monitoring data retrieved successfully.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties: { data: { $ref: '#/components/schemas/AdminMeetingsMonitoring' } }
+        '403':
+          description: Only admin accounts can view the meetings monitoring dashboard.
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/ApiError' } }
+
+  /meetings/invitations:
+    get:
+      tags: [Invitations & Calendar]
+      summary: List the current user's own pending/past meeting invitations
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Invitations retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/verify-password:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Meetings]
+      summary: Verify a meeting's password for an already-authenticated member (distinct from the guest join-link password check)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { password: { type: string } }
+      responses:
+        '200': { description: Password verification result., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Meeting not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/invitations/{invitationId}/respond:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: invitationId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Invitations & Calendar]
+      summary: Accept or decline a meeting invitation
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accept]
+              properties: { accept: { type: boolean } }
+      responses:
+        '200': { description: Invitation response recorded., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Invitation not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/waiting-room:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Lobby & Guest Access]
+      summary: List pending waiting-room join requests (host/co-host only, بند 22)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Waiting-room requests retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can view the waiting room., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/waiting-room/accept-all:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Accept every pending waiting-room request at once (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: All pending requests accepted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can manage the waiting room., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/waiting-room/reject-all:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Reject every pending waiting-room request at once (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: All pending requests rejected., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can manage the waiting room., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/waiting-room/{requestId}/accept:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: requestId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Accept a single waiting-room join request (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Request accepted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can manage the waiting room., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: Request not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/waiting-room/{requestId}/reject:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: requestId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Lobby & Guest Access]
+      summary: Reject a single waiting-room join request (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Request rejected., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can manage the waiting room., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: Request not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/join/{joinToken}/request/{requestId}/status:
+    parameters:
+      - { $ref: '#/components/parameters/JoinToken' }
+      - { name: requestId, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Lobby & Guest Access]
+      summary: Poll the status of a guest/member join request while waiting to be let in
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Request status retrieved., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Request not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/mute:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Force-mute a participant's microphone (host/co-host only, بند 5/10)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Participant muted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can use host controls., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/disable-camera:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Force-disable a participant's camera (host/co-host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Participant camera disabled., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can use host controls., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/promote:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Promote a participant to co-host (host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Participant promoted to co-host., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host can promote participants., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/demote:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Demote a co-host back to a regular participant (host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Co-host demoted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host can demote co-hosts., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/host-controls/transfer-host:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Host Controls]
+      summary: Transfer host ownership to another participant (host only)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Host transferred., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the current host can transfer host., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/signaling/connection-state:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Report the caller's own WebRTC connection state (connecting/connected/disconnected)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connection_state]
+              properties:
+                connection_state: { type: string, enum: [connecting, connected, disconnected] }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Connection state updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/heartbeat:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Keep-alive heartbeat while connected to a meeting's signaling channel
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { guest_token: { type: string, nullable: true } }
+      responses:
+        '200': { description: Heartbeat acknowledged., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/leave:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Explicitly leave the meeting's signaling channel (writes meetings.signaling_left to the audit log)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { guest_token: { type: string, nullable: true } }
+      responses:
+        '200': { description: Left the meeting., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/connection-quality:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Signaling]
+      summary: Report the caller's own measured connection quality (Round 4، بند 34)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connection_quality]
+              properties:
+                connection_quality: { type: string, enum: [good, fair, poor] }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Connection quality recorded., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/roster:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Signaling]
+      summary: Current presence roster (who's connected, media/hand state) for the mesh WebRTC grid
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Roster retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/hand:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Live Collaboration]
+      summary: Raise or lower the caller's own hand (بند 11)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [raised]
+              properties:
+                raised: { type: boolean }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Hand state updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/reaction:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Live Collaboration]
+      summary: Send an ephemeral emoji reaction, broadcast to the meeting channel (بند 11)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, emoji]
+              properties:
+                type: { type: string }
+                emoji: { type: string }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Reaction broadcast., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/signaling/screen-share-policy:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Live Collaboration]
+      summary: Lock/unlock screen sharing meeting-wide, host/co-host only (بند 9)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locked]
+              properties: { locked: { type: boolean } }
+      responses:
+        '200': { description: Screen-share policy updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can change screen-share policy., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/signaling/screen-share-policy/participant:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Live Collaboration]
+      summary: Grant/revoke one specific participant's screen-share permission (بند 9)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Participant screen-share permission updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can change this permission., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/signaling/screen-share/stop:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    post:
+      tags: [Live Collaboration]
+      summary: Host force-stops another participant's active screen share (writes meetings.screen_share_force_stopped, بند 38)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participant_key]
+              properties: { participant_key: { type: string } }
+      responses:
+        '200': { description: Screen share force-stopped., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host can force-stop a screen share., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/chat/{messageId}/react:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: messageId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Live Collaboration]
+      summary: Toggle an emoji reaction on a chat message (بند 7)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emoji]
+              properties:
+                emoji: { type: string }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Reaction toggled., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Message not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/files/{fileId}:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: fileId, in: path, required: true, schema: { type: integer } }
+    delete:
+      tags: [Collaboration Extras]
+      summary: Delete a shared meeting file (uploader or host/co-host only, بند 19)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: File deleted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the uploader or host/co-host can delete this file., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: File not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/notes:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: Get the meeting's single shared notes document (بند 20)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Notes retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    put:
+      tags: [Collaboration Extras]
+      summary: Replace the meeting's shared notes body (last-write-wins)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Notes updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+
+  /meetings/{uuid}/action-items:
+    parameters: [{ $ref: '#/components/parameters/MeetingUuid' }]
+    get:
+      tags: [Collaboration Extras]
+      summary: List a meeting's decisions/action items/tasks (بند 20)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Action items retrieved successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+    post:
+      tags: [Collaboration Extras]
+      summary: Create a decision, action item, or task from the meeting notes panel
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                type: { type: string, enum: [decision, action_item, task], nullable: true }
+                title: { type: string, maxLength: 500 }
+                assignee_display_name: { type: string, nullable: true }
+                due_at: { type: string, format: date-time, nullable: true }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '201': { description: Action item created successfully., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '422': { description: Validation error., content: { application/json: { schema: { $ref: '#/components/schemas/ValidationError' } } } }
+
+  /meetings/{uuid}/action-items/{itemId}:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: itemId, in: path, required: true, schema: { type: integer } }
+    patch:
+      tags: [Collaboration Extras]
+      summary: Update an action item (title, assignee, due date, or status open/done)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: { type: string, enum: [decision, action_item, task], nullable: true }
+                title: { type: string, maxLength: 500, nullable: true }
+                assignee_display_name: { type: string, nullable: true }
+                due_at: { type: string, format: date-time, nullable: true }
+                status: { type: string, enum: [open, done], nullable: true }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Action item updated., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Action item not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+    delete:
+      tags: [Collaboration Extras]
+      summary: Delete an action item
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Action item deleted., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Action item not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/polls/{pollId}/vote:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: pollId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Collaboration Extras]
+      summary: Cast (or replace) the caller's own vote on a poll (بند 21)
+      security: [{ bearerAuth: [] }, {}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [option_ids]
+              properties:
+                option_ids: { type: array, items: { type: integer } }
+                guest_token: { type: string, nullable: true }
+      responses:
+        '200': { description: Vote recorded., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '404': { description: Poll not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+
+  /meetings/{uuid}/polls/{pollId}/close:
+    parameters:
+      - { $ref: '#/components/parameters/MeetingUuid' }
+      - { name: pollId, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Collaboration Extras]
+      summary: Close a poll to further votes and freeze its results (host/co-host or poll creator only)
+      security: [{ bearerAuth: [] }, {}]
+      responses:
+        '200': { description: Poll closed., content: { application/json: { schema: { $ref: '#/components/schemas/ApiEnvelope' } } } }
+        '403': { description: Only the host/co-host or poll creator can close this poll., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '404': { description: Poll not found., content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }

@@ -1,0 +1,1029 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\DriveNode;
+use App\Support\DriveArchive;
+use App\Support\DriveException;
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use ZipArchive;
+
+/**
+ * "جهازي" (My PC): نظام ملفات شخصي معزول لكل مستخدم.
+ *
+ * العزل: كل دالة هنا بتاخد $uid وكل استعلام بيتقيّد بيه — id بتاع حد تاني => 404 (مش 403، عشان مفيش تسريب وجود).
+ * التخزين: الملفات على disk 'drive' (خاص) باسم UUID تحت u{uid}/، والشجرة والأسماء في جدول drive_nodes.
+ * الحذف: soft (سلة 30 يوم)؛ الحصة بتحسب الملفات اللي في السلة كمان لحد ما تتمسح فعليًا.
+ */
+class DriveService
+{
+    /** @var array<int,int> memo لعمق المجلدات (بيتمسح مع أي نقل) */
+    private array $depthMemo = [];
+
+    // ---- infra ---------------------------------------------------------------------------------------
+
+    private function disk(): Filesystem
+    {
+        return Storage::disk((string) config('drive.disk'));
+    }
+
+    private function q(int $uid)
+    {
+        return DriveNode::query()->where('user_id', $uid);
+    }
+
+    private function quotaBytes(): int
+    {
+        return max(1, (int) config('drive.quota_mb')) * 1048576;
+    }
+
+    private function maxFileBytes(): int
+    {
+        return max(1, (int) config('drive.max_file_mb')) * 1048576;
+    }
+
+    private function maxZipBytes(): int
+    {
+        return max(1, (int) config('drive.max_zip_mb')) * 1048576;
+    }
+
+    public function find(int $uid, int $id, bool $trashed = false): DriveNode
+    {
+        $q = $this->q($uid)->where('id', $id);
+        $trashed ? $q->whereNotNull('deleted_at') : $q->whereNull('deleted_at');
+        $n = $q->first();
+        if (!$n) {
+            throw new DriveException('Item not found.', 404);
+        }
+        return $n;
+    }
+
+    /** null = الجذر ("جهازي"). */
+    private function folderOrRoot(int $uid, ?int $id): ?DriveNode
+    {
+        if ($id === null || $id === 0) {
+            return null;
+        }
+        $n = $this->find($uid, $id);
+        if (!$n->isFolder()) {
+            throw new DriveException('The destination is not a folder.', 422);
+        }
+        return $n;
+    }
+
+    private function depthOf(int $uid, ?int $folderId): int
+    {
+        if ($folderId === null) {
+            return 0;
+        }
+        if (isset($this->depthMemo[$folderId])) {
+            return $this->depthMemo[$folderId];
+        }
+        $d = 0;
+        $cur = $folderId;
+        $guard = 0;
+        while ($cur !== null && $guard++ < 200) {
+            $d++;
+            $cur = $this->q($uid)->where('id', $cur)->value('parent_id');
+            $cur = $cur !== null ? (int) $cur : null;
+        }
+        return $this->depthMemo[$folderId] = $d;
+    }
+
+    public function usedBytes(int $uid): int
+    {
+        return (int) $this->q($uid)->where('type', 'file')->sum('size_bytes');
+    }
+
+    private function assertQuota(int $uid, int $add): void
+    {
+        if ($add > $this->maxFileBytes()) {
+            throw new DriveException('The file is larger than the maximum allowed size (' . (int) config('drive.max_file_mb') . ' MB).', 413);
+        }
+        if ($this->usedBytes($uid) + $add > $this->quotaBytes()) {
+            throw new DriveException('Not enough storage space in My PC. Empty the recycle bin or delete some files.', 413);
+        }
+    }
+
+    private function assertNodeBudget(int $uid, int $add = 1): void
+    {
+        if ($this->q($uid)->count() + $add > (int) config('drive.max_nodes')) {
+            throw new DriveException('Too many items in My PC.', 413);
+        }
+    }
+
+    public function usage(int $uid): array
+    {
+        $used = $this->usedBytes($uid);
+        $quota = $this->quotaBytes();
+        return [
+            'used_bytes'  => $used,
+            'quota_bytes' => $quota,
+            'used_human'  => DriveNode::humanSize($used),
+            'quota_human' => DriveNode::humanSize($quota),
+            'percent'     => $quota > 0 ? round($used * 100 / $quota, 1) : 0,
+            'max_file_mb' => (int) config('drive.max_file_mb'),
+            'trash_days'  => (int) config('drive.trash_days'),
+        ];
+    }
+
+    // ---- names ---------------------------------------------------------------------------------------
+
+    private function nameTaken(int $uid, ?int $parentId, string $name, ?int $ignoreId = null): bool
+    {
+        $q = $this->q($uid)->whereNull('deleted_at')->where('name', $name);
+        $parentId === null ? $q->whereNull('parent_id') : $q->where('parent_id', $parentId);
+        if ($ignoreId !== null) {
+            $q->where('id', '!=', $ignoreId);
+        }
+        return $q->exists();
+    }
+
+    private function freeName(int $uid, ?int $parentId, string $name, ?int $ignoreId = null): string
+    {
+        return DriveArchive::uniqueName($name, fn ($n) => $this->nameTaken($uid, $parentId, $n, $ignoreId));
+    }
+
+    private function validName(string $name): string
+    {
+        $clean = DriveArchive::cleanName($name);
+        if ($clean === '') {
+            throw new DriveException('Invalid name.', 422);
+        }
+        return $clean;
+    }
+
+    // ---- browse --------------------------------------------------------------------------------------
+
+    public function breadcrumb(int $uid, ?int $folderId): array
+    {
+        $out = [];
+        $cur = $folderId;
+        $guard = 0;
+        while ($cur !== null && $guard++ < 200) {
+            $n = $this->q($uid)->where('id', $cur)->first(['id', 'parent_id', 'name']);
+            if (!$n) {
+                break;
+            }
+            array_unshift($out, ['id' => (int) $n->id, 'name' => $n->name]);
+            $cur = $n->parent_id !== null ? (int) $n->parent_id : null;
+        }
+        return $out;
+    }
+
+    public function listFolder(int $uid, ?int $parentId): array
+    {
+        $this->folderOrRoot($uid, $parentId);
+        $q = $this->q($uid)->whereNull('deleted_at');
+        $parentId === null ? $q->whereNull('parent_id') : $q->where('parent_id', $parentId);
+        $items = $q->orderByRaw("type = 'folder' desc")->orderBy('name')->get();
+        return [
+            'items'      => $items->map(fn (DriveNode $n) => $n->toRowArray())->all(),
+            'breadcrumb' => $this->breadcrumb($uid, $parentId),
+            'usage'      => $this->usage($uid),
+        ];
+    }
+
+    /** كل المجلدات (للشجرة الجانبية) — خفيف: id/parent/name/kind. */
+    public function tree(int $uid): array
+    {
+        return $this->q($uid)->whereNull('deleted_at')->where('type', 'folder')->orderBy('name')
+            ->get(['id', 'parent_id', 'name', 'kind'])
+            ->map(fn ($n) => ['id' => (int) $n->id, 'parent_id' => $n->parent_id !== null ? (int) $n->parent_id : null, 'name' => $n->name, 'kind' => $n->kind])
+            ->all();
+    }
+
+    public function search(int $uid, string $term, int $limit = 100): array
+    {
+        $term = trim($term);
+        if ($term === '') {
+            return [];
+        }
+        $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
+        $rows = $this->q($uid)->whereNull('deleted_at')->where('name', 'like', $like)
+            ->orderByRaw("type = 'folder' desc")->orderBy('name')->limit(min(200, max(1, $limit)))->get();
+        return $rows->map(function (DriveNode $n) use ($uid) {
+            $r = $n->toRowArray();
+            $r['path'] = implode('/', array_column($this->breadcrumb($uid, $n->parent_id !== null ? (int) $n->parent_id : null), 'name'));
+            return $r;
+        })->all();
+    }
+
+    // ---- create --------------------------------------------------------------------------------------
+
+    private function insertNode(int $uid, ?int $parentId, string $type, string $name, array $extra = []): DriveNode
+    {
+        $this->assertNodeBudget($uid);
+        return DriveNode::create(array_merge([
+            'user_id' => $uid, 'parent_id' => $parentId, 'type' => $type, 'name' => $name,
+        ], $extra));
+    }
+
+    public function createFolder(int $uid, ?int $parentId, string $name, ?string $kind = null): DriveNode
+    {
+        $parent = $this->folderOrRoot($uid, $parentId);
+        if ($this->depthOf($uid, $parent?->id) + 1 > (int) config('drive.max_depth')) {
+            throw new DriveException('Folders are nested too deeply.', 422);
+        }
+        $name = $this->freeName($uid, $parent?->id, $this->validName($name));
+        return $this->insertNode($uid, $parent?->id, 'folder', $name, ['kind' => $kind]);
+    }
+
+    /** يلاقي/ينشئ سلسلة مجلدات تحت $parentId (للرفع بـ webkitRelativePath وفك الـ zip). بيدمج مع الموجود. */
+    private function ensureFolderPath(int $uid, ?int $parentId, array $segments): ?int
+    {
+        $cur = $parentId;
+        foreach ($segments as $seg) {
+            $q = $this->q($uid)->whereNull('deleted_at')->where('type', 'folder')->where('name', $seg);
+            $cur === null ? $q->whereNull('parent_id') : $q->where('parent_id', $cur);
+            $found = $q->first();
+            if ($found) {
+                $cur = (int) $found->id;
+                continue;
+            }
+            if ($this->nameTaken($uid, $cur, $seg)) { // نفس الاسم ملف
+                $seg = $this->freeName($uid, $cur, $seg);
+            }
+            if ($this->depthOf($uid, $cur) + 1 > (int) config('drive.max_depth')) {
+                throw new DriveException('Folders are nested too deeply.', 422);
+            }
+            $cur = (int) $this->insertNode($uid, $cur, 'folder', $seg)->id;
+        }
+        return $cur;
+    }
+
+    /** mkdir -p: ينشئ/يلاقي سلسلة مجلدات "a/b/c" تحت $parentId ويرجّع آخر مجلد (لرفع مجلدات فاضية بالسحب). */
+    public function ensurePath(int $uid, ?int $parentId, string $path): DriveNode
+    {
+        $parent = $this->folderOrRoot($uid, $parentId);
+        $segs = DriveArchive::segments($path);
+        if ($segs === null || $segs === []) {
+            throw new DriveException('Invalid folder path.', 422);
+        }
+        return DB::transaction(fn () => $this->find($uid, (int) $this->ensureFolderPath($uid, $parent?->id, $segs)));
+    }
+
+    private function detectMime(string $path, string $name): string
+    {
+        $m = function_exists('mime_content_type') ? @mime_content_type($path) : false;
+        if (!$m || $m === 'application/octet-stream' || $m === 'text/plain') {
+            $ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+            $map = ['md' => 'text/markdown', 'json' => 'application/json', 'js' => 'text/javascript', 'css' => 'text/css',
+                'html' => 'text/html', 'svg' => 'image/svg+xml', 'csv' => 'text/csv', 'zip' => 'application/zip',
+                'pdf' => 'application/pdf', 'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mp3' => 'audio/mpeg',
+                'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp'];
+            if (isset($map[$ext])) {
+                return $map[$ext];
+            }
+        }
+        return $m ?: 'application/octet-stream';
+    }
+
+    /** يدخّل ملف محلي (temp) لـ disk وينشئ الـ node. */
+    private function putLocalFile(int $uid, ?int $parentId, string $name, string $localPath, ?string $mime = null): DriveNode
+    {
+        $size = (int) filesize($localPath);
+        $this->assertQuota($uid, $size);
+        $this->assertNodeBudget($uid);
+        $sp = $this->writeBlob($uid, $localPath);
+        try {
+            return DriveNode::create([
+                'user_id' => $uid, 'parent_id' => $parentId, 'type' => 'file', 'name' => $name,
+                'mime_type' => $mime ?: $this->detectMime($localPath, $name), 'size_bytes' => $size,
+                'storage_path' => $sp, 'sha1' => sha1_file($localPath) ?: null,
+            ]);
+        } catch (\Throwable $e) {
+            $this->disk()->delete($sp);
+            throw $e;
+        }
+    }
+
+    private function writeBlob(int $uid, string $localPath): string
+    {
+        $sp = "u{$uid}/" . Str::uuid()->toString();
+        $h = fopen($localPath, 'rb');
+        if (!$h) {
+            throw new DriveException('Could not read the file.', 500);
+        }
+        try {
+            if (!$this->disk()->writeStream($sp, $h)) {
+                throw new DriveException('Could not save the file.', 500);
+            }
+        } finally {
+            if (is_resource($h)) {
+                fclose($h);
+            }
+        }
+        return $sp;
+    }
+
+    public function createTextFile(int $uid, ?int $parentId, string $name, string $content = ''): DriveNode
+    {
+        $parent = $this->folderOrRoot($uid, $parentId);
+        if (strlen($content) > (int) config('drive.max_text_edit_kb') * 1024) {
+            throw new DriveException('The text is too large.', 413);
+        }
+        $name = $this->freeName($uid, $parent?->id, $this->validName($name));
+        $tmp = tempnam(sys_get_temp_dir(), 'drv');
+        try {
+            file_put_contents($tmp, $content);
+            return $this->putLocalFile($uid, $parent?->id, $name, $tmp);
+        } finally {
+            @unlink($tmp);
+        }
+    }
+
+    /** رفع ملف (ممكن بمسار نسبي "dir/sub/file.txt" لرفع مجلد كامل). لو الاسم موجود: "name (2)". */
+    public function upload(int $uid, ?int $parentId, UploadedFile $file, ?string $relativePath = null): DriveNode
+    {
+        if (!$file->isValid()) {
+            throw new DriveException('The upload failed. Please try again.', 422);
+        }
+        $parent = $this->folderOrRoot($uid, $parentId);
+        $name = DriveArchive::cleanName((string) $file->getClientOriginalName());
+        $dirSegs = [];
+        if ($relativePath !== null && $relativePath !== '') {
+            $segs = DriveArchive::segments($relativePath);
+            if ($segs === null || $segs === []) {
+                throw new DriveException('Invalid file path.', 422);
+            }
+            $name = array_pop($segs);
+            $dirSegs = $segs;
+        }
+        if ($name === '') {
+            throw new DriveException('Invalid file name.', 422);
+        }
+        return DB::transaction(function () use ($uid, $parent, $dirSegs, $name, $file) {
+            $target = $dirSegs ? $this->ensureFolderPath($uid, $parent?->id, $dirSegs) : $parent?->id;
+            $name = $this->freeName($uid, $target, $name);
+            return $this->putLocalFile($uid, $target, $name, $file->getRealPath(), $file->getMimeType() ?: null);
+        });
+    }
+
+    // ---- read / write content ------------------------------------------------------------------------
+
+    /** @return array{0:DriveNode,1:resource} */
+    public function openStream(int $uid, int $id): array
+    {
+        $n = $this->find($uid, $id);
+        if ($n->isFolder() || !$n->storage_path) {
+            throw new DriveException('Item not found.', 404);
+        }
+        $s = $this->disk()->readStream($n->storage_path);
+        if (!$s) {
+            throw new DriveException('The file is missing from storage.', 404);
+        }
+        return [$n, $s];
+    }
+
+    /** يستبدل محتوى ملف بمحتوى جديد (محفوظ من المحرر). $newLocal = ملف محلي مؤقت. */
+    private function replaceBlob(int $uid, DriveNode $n, string $newLocal, ?string $mime = null): DriveNode
+    {
+        $size = (int) filesize($newLocal);
+        $delta = $size - (int) $n->size_bytes;
+        if ($delta > 0) {
+            $this->assertQuota($uid, $delta);
+        }
+        if ($size > $this->maxFileBytes()) {
+            throw new DriveException('The file is larger than the maximum allowed size.', 413);
+        }
+        $old = $n->storage_path;
+        $sp = $this->writeBlob($uid, $newLocal);
+        try {
+            $n->forceFill([
+                'storage_path' => $sp, 'size_bytes' => $size, 'sha1' => sha1_file($newLocal) ?: null,
+                'mime_type' => $mime ?: $this->detectMime($newLocal, $n->name),
+            ])->save();
+        } catch (\Throwable $e) {
+            $this->disk()->delete($sp);
+            throw $e;
+        }
+        if ($old) {
+            $this->disk()->delete($old);
+        }
+        return $n;
+    }
+
+    public function writeContent(int $uid, int $id, string $content): DriveNode
+    {
+        $n = $this->find($uid, $id);
+        if ($n->isFolder()) {
+            throw new DriveException('A folder has no content.', 422);
+        }
+        if (strlen($content) > (int) config('drive.max_text_edit_kb') * 1024) {
+            throw new DriveException('The text is too large to edit here.', 413);
+        }
+        $tmp = tempnam(sys_get_temp_dir(), 'drv');
+        try {
+            file_put_contents($tmp, $content);
+            return $this->replaceBlob($uid, $n, $tmp, $n->mime_type);
+        } finally {
+            @unlink($tmp);
+        }
+    }
+
+    /** حفظ من محرر الصور/PDF/ZIP: ملف جديد مكان القديم (والاسم ممكن يتغير لو الامتداد اتغير). */
+    public function replaceFromUpload(int $uid, int $id, UploadedFile $file, ?string $newName = null): DriveNode
+    {
+        if (!$file->isValid()) {
+            throw new DriveException('The upload failed. Please try again.', 422);
+        }
+        $n = $this->find($uid, $id);
+        if ($n->isFolder()) {
+            throw new DriveException('A folder has no content.', 422);
+        }
+        $this->replaceBlob($uid, $n, $file->getRealPath(), $file->getMimeType() ?: null);
+        if ($newName !== null && $newName !== '' && DriveArchive::cleanName($newName) !== $n->name) {
+            $this->rename($uid, $id, $newName);
+            $n->refresh();
+        }
+        return $n;
+    }
+
+    // ---- rename / move / copy ------------------------------------------------------------------------
+
+    public function rename(int $uid, int $id, string $name): DriveNode
+    {
+        $n = $this->find($uid, $id);
+        $name = $this->validName($name);
+        if ($name !== $n->name && $this->nameTaken($uid, $n->parent_id !== null ? (int) $n->parent_id : null, $name, (int) $n->id)) {
+            throw new DriveException('An item with this name already exists here.', 409);
+        }
+        $n->forceFill(['name' => $name])->save();
+        return $n;
+    }
+
+    /** @return int[] ids بتاعة node + كل أحفاده (غير المحذوفين). */
+    private function subtreeIds(int $uid, DriveNode $root): array
+    {
+        $ids = [(int) $root->id];
+        $frontier = [(int) $root->id];
+        while ($frontier) {
+            $kids = $this->q($uid)->whereNull('deleted_at')->whereIn('parent_id', $frontier)->pluck('id')->map(fn ($i) => (int) $i)->all();
+            $ids = array_merge($ids, $kids);
+            $frontier = $kids;
+        }
+        return $ids;
+    }
+
+    public function move(int $uid, array $ids, ?int $targetId): array
+    {
+        $target = $this->folderOrRoot($uid, $targetId);
+        $moved = [];
+        DB::transaction(function () use ($uid, $ids, $target, &$moved) {
+            foreach ($this->cleanIds($ids) as $id) {
+                $n = $this->find($uid, $id);
+                if ($n->isFolder() && $target) {
+                    if (in_array((int) $target->id, $this->subtreeIds($uid, $n), true)) {
+                        throw new DriveException('You cannot move a folder into itself.', 422);
+                    }
+                }
+                if (($n->parent_id !== null ? (int) $n->parent_id : null) === $target?->id) {
+                    $moved[] = $n->toRowArray();
+                    continue;
+                }
+                $n->forceFill([
+                    'parent_id' => $target?->id,
+                    'name'      => $this->freeName($uid, $target?->id, $n->name, (int) $n->id),
+                ])->save();
+                $moved[] = $n->toRowArray();
+            }
+            $this->depthMemo = [];
+            if ($target) {
+                $this->assertDepthUnder($uid, (int) $target->id);
+            }
+        });
+        return $moved;
+    }
+
+    /** بعد النقل: أعمق مجلد تحت الهدف مينفعش يعدّي max_depth. */
+    private function assertDepthUnder(int $uid, int $folderId): void
+    {
+        $max = (int) config('drive.max_depth');
+        $level = $this->depthOf($uid, $folderId);
+        $frontier = [$folderId];
+        while ($frontier) {
+            $level++;
+            $frontier = $this->q($uid)->whereNull('deleted_at')->where('type', 'folder')->whereIn('parent_id', $frontier)->pluck('id')->map(fn ($i) => (int) $i)->all();
+            if ($frontier && $level > $max) {
+                throw new DriveException('Folders are nested too deeply.', 422);
+            }
+        }
+    }
+
+    public function copy(int $uid, array $ids, ?int $targetId): array
+    {
+        $target = $this->folderOrRoot($uid, $targetId);
+        $nodes = array_map(fn ($id) => $this->find($uid, $id), $this->cleanIds($ids));
+
+        // الحجم الكلي والعدد قبل أي نسخ فعلية
+        $totalBytes = 0;
+        $count = 0;
+        foreach ($nodes as $n) {
+            if ($n->isFolder() && $target && in_array((int) $target->id, $this->subtreeIds($uid, $n), true)) {
+                throw new DriveException('You cannot copy a folder into itself.', 422);
+            }
+            $sub = $this->q($uid)->whereIn('id', $this->subtreeIds($uid, $n))->get(['type', 'size_bytes']);
+            $count += $sub->count();
+            $totalBytes += (int) $sub->where('type', 'file')->sum('size_bytes');
+        }
+        if ($this->usedBytes($uid) + $totalBytes > $this->quotaBytes()) {
+            throw new DriveException('Not enough storage space in My PC.', 413);
+        }
+        $this->assertNodeBudget($uid, $count);
+
+        $written = [];
+        $out = [];
+        try {
+            DB::transaction(function () use ($uid, $nodes, $target, &$written, &$out) {
+                foreach ($nodes as $n) {
+                    $out[] = $this->copyNode($uid, $n, $target?->id, $written)->toRowArray();
+                }
+            });
+        } catch (\Throwable $e) {
+            foreach ($written as $sp) {
+                $this->disk()->delete($sp);
+            }
+            throw $e;
+        }
+        return $out;
+    }
+
+    private function copyNode(int $uid, DriveNode $n, ?int $parentId, array &$written): DriveNode
+    {
+        $name = $this->freeName($uid, $parentId, $n->name);
+        if ($n->isFolder()) {
+            if ($this->depthOf($uid, $parentId) + 1 > (int) config('drive.max_depth')) {
+                throw new DriveException('Folders are nested too deeply.', 422);
+            }
+            $copy = $this->insertNode($uid, $parentId, 'folder', $name, ['kind' => $n->kind]);
+            foreach ($this->q($uid)->whereNull('deleted_at')->where('parent_id', $n->id)->get() as $child) {
+                $this->copyNode($uid, $child, (int) $copy->id, $written);
+            }
+            return $copy;
+        }
+        $sp = "u{$uid}/" . Str::uuid()->toString();
+        if (!$n->storage_path || !$this->disk()->copy($n->storage_path, $sp)) {
+            throw new DriveException('Could not copy a file.', 500);
+        }
+        $written[] = $sp;
+        return $this->insertNode($uid, $parentId, 'file', $name, [
+            'mime_type' => $n->mime_type, 'size_bytes' => $n->size_bytes, 'storage_path' => $sp, 'sha1' => $n->sha1,
+        ]);
+    }
+
+    private function cleanIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn ($i) => $i > 0)));
+        if (!$ids) {
+            throw new DriveException('Nothing selected.', 422);
+        }
+        if (count($ids) > 500) {
+            throw new DriveException('Too many items selected.', 422);
+        }
+        return $ids;
+    }
+
+    // ---- recycle bin ---------------------------------------------------------------------------------
+
+    public function trash(int $uid, array $ids): int
+    {
+        $n = 0;
+        DB::transaction(function () use ($uid, $ids, &$n) {
+            foreach ($this->cleanIds($ids) as $id) {
+                $root = $this->find($uid, $id);
+                $all = $this->subtreeIds($uid, $root);
+                $this->q($uid)->whereIn('id', $all)->update(['deleted_at' => now(), 'trash_root_id' => $root->id]);
+                $this->q($uid)->where('id', $root->id)->update(['prev_parent_id' => $root->parent_id]);
+                $n++;
+            }
+        });
+        return $n;
+    }
+
+    /** عناصر السلة (اللي المستخدم حذفها فعلًا — مش أحفادها). */
+    public function trashList(int $uid): array
+    {
+        return $this->q($uid)->whereNotNull('deleted_at')->whereColumn('id', 'trash_root_id')
+            ->orderByDesc('deleted_at')->get()->map(function (DriveNode $n) use ($uid) {
+                $r = $n->toRowArray();
+                if ($n->isFolder()) {
+                    $r['contains'] = $this->q($uid)->where('trash_root_id', $n->id)->where('id', '!=', $n->id)->count();
+                }
+                $r['purge_at'] = $n->deleted_at ? $n->deleted_at->copy()->addDays((int) config('drive.trash_days')) : null;
+                return $r;
+            })->all();
+    }
+
+    public function restore(int $uid, array $ids): array
+    {
+        $out = [];
+        DB::transaction(function () use ($uid, $ids, &$out) {
+            foreach ($this->cleanIds($ids) as $id) {
+                $root = $this->find($uid, $id, true);
+                if ((int) $root->trash_root_id !== (int) $root->id) {
+                    throw new DriveException('Restore the containing folder instead.', 422);
+                }
+                $parent = $root->prev_parent_id !== null
+                    ? $this->q($uid)->whereNull('deleted_at')->where('type', 'folder')->where('id', $root->prev_parent_id)->first()
+                    : null;
+                $pid = $parent?->id;
+                $name = $this->freeName($uid, $pid, $root->name, (int) $root->id);
+                $this->q($uid)->where('trash_root_id', $root->id)->update(['deleted_at' => null, 'trash_root_id' => null]);
+                $this->q($uid)->where('id', $root->id)->update(['parent_id' => $pid, 'name' => $name, 'prev_parent_id' => null]);
+                $out[] = $root->fresh()->toRowArray();
+            }
+        });
+        return $out;
+    }
+
+    private function purgeRoots(int $uid, array $rootIds): int
+    {
+        $freed = 0;
+        foreach (array_chunk($rootIds, 100) as $chunk) {
+            $rows = $this->q($uid)->whereIn('trash_root_id', $chunk)->get(['id', 'type', 'storage_path']);
+            foreach ($rows as $r) {
+                if ($r->type === 'file' && $r->storage_path) {
+                    $this->disk()->delete($r->storage_path);
+                }
+            }
+            $this->q($uid)->whereIn('trash_root_id', $chunk)->delete();
+            $freed += count($chunk);
+        }
+        return $freed;
+    }
+
+    public function purge(int $uid, array $ids): int
+    {
+        $roots = [];
+        foreach ($this->cleanIds($ids) as $id) {
+            $r = $this->find($uid, $id, true);
+            if ((int) $r->trash_root_id === (int) $r->id) {
+                $roots[] = (int) $r->id;
+            }
+        }
+        return $this->purgeRoots($uid, $roots);
+    }
+
+    public function emptyTrash(int $uid): int
+    {
+        $roots = $this->q($uid)->whereNotNull('deleted_at')->whereColumn('id', 'trash_root_id')->pluck('id')->map(fn ($i) => (int) $i)->all();
+        return $this->purgeRoots($uid, $roots);
+    }
+
+    /** أمر drive:purge-trash — بيمسح كل اللي عدّى trash_days، لكل المستخدمين. */
+    public function purgeExpired(): int
+    {
+        $cut = now()->subDays((int) config('drive.trash_days'));
+        $n = 0;
+        DriveNode::query()->whereNotNull('deleted_at')->whereColumn('id', 'trash_root_id')->where('deleted_at', '<', $cut)
+            ->orderBy('id')->chunkById(200, function ($rows) use (&$n) {
+                foreach ($rows->groupBy('user_id') as $uid => $g) {
+                    $n += $this->purgeRoots((int) $uid, $g->pluck('id')->map(fn ($i) => (int) $i)->all());
+                }
+            });
+        return $n;
+    }
+
+    // ---- projects ------------------------------------------------------------------------------------
+
+    private const TEMPLATES = [
+        'blank'  => ['README.md' => "# {name}\n\n"],
+        'web'    => [
+            'index.html' => "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{name}</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <h1>{name}</h1>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n",
+            'style.css'  => "body { font-family: system-ui, sans-serif; margin: 2rem; }\n",
+            'script.js'  => "console.log('Hello from {name}');\n",
+        ],
+        'node'   => [
+            'package.json' => "{\n  \"name\": \"{slug}\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"scripts\": { \"start\": \"node index.js\" }\n}\n",
+            'index.js'     => "console.log('Hello from {name}');\n",
+        ],
+        'python' => [
+            'main.py'          => "print('Hello from {name}')\n",
+            'requirements.txt' => "",
+        ],
+    ];
+
+    public static function templateKeys(): array
+    {
+        return array_keys(self::TEMPLATES);
+    }
+
+    public function createProject(int $uid, ?int $parentId, string $name, string $template = 'blank'): DriveNode
+    {
+        $tpl = self::TEMPLATES[$template] ?? null;
+        if ($tpl === null) {
+            throw new DriveException('Unknown project template.', 422);
+        }
+        return DB::transaction(function () use ($uid, $parentId, $name, $tpl) {
+            $folder = $this->createFolder($uid, $parentId, $name, 'project');
+            $slug = Str::slug($folder->name) ?: 'project';
+            foreach ($tpl as $fname => $body) {
+                $this->createTextFile($uid, (int) $folder->id, $fname, str_replace(['{name}', '{slug}'], [$folder->name, $slug], $body));
+            }
+            return $folder;
+        });
+    }
+
+    // ---- zip -----------------------------------------------------------------------------------------
+
+    /** مسار محلي لملف (لو الـ disk مش local بينسخه لـ temp وبيضيفه لـ $temps للتنضيف). */
+    private function materialize(DriveNode $n, array &$temps): string
+    {
+        $disk = $this->disk();
+        if (config('filesystems.disks.' . config('drive.disk') . '.driver') === 'local' && method_exists($disk, 'path')) {
+            $p = $disk->path((string) $n->storage_path);
+            if (is_file($p)) {
+                return $p;
+            }
+            throw new DriveException('A file is missing from storage.', 404);
+        }
+        $s = $disk->readStream((string) $n->storage_path);
+        if (!$s) {
+            throw new DriveException('A file is missing from storage.', 404);
+        }
+        $tmp = tempnam(sys_get_temp_dir(), 'drm');
+        $out = fopen($tmp, 'wb');
+        stream_copy_to_stream($s, $out);
+        fclose($out);
+        fclose($s);
+        $temps[] = $tmp;
+        return $tmp;
+    }
+
+    /**
+     * يبني zip مؤقت من عناصر (ملفات/مجلدات) — المجلد المفرد بيتضغط محتواه تحت اسمه.
+     * @return array{0:string,1:string} [مسار الـ zip المؤقت، اسم مقترح]
+     */
+    public function buildZip(int $uid, array $ids, bool $folderContentsAtRoot = false): array
+    {
+        $nodes = array_map(fn ($id) => $this->find($uid, $id), $this->cleanIds($ids));
+        $maxEntries = (int) config('drive.max_zip_entries');
+        $maxBytes = $this->maxZipBytes();
+
+        $entries = []; // [zipPath => node|null(dir)]
+        $total = 0;
+        $walk = function (DriveNode $n, string $prefix) use (&$walk, &$entries, &$total, $uid, $maxEntries, $maxBytes) {
+            $path = $prefix . $n->name;
+            if ($n->isFolder()) {
+                $entries[$path . '/'] = null;
+                foreach ($this->q($uid)->whereNull('deleted_at')->where('parent_id', $n->id)->orderBy('name')->get() as $c) {
+                    $walk($c, $path . '/');
+                }
+                return;
+            }
+            $total += (int) $n->size_bytes;
+            $entries[$path] = $n;
+            if (count($entries) > $maxEntries) {
+                throw new DriveException('Too many items to compress.', 422);
+            }
+            if ($total > $maxBytes) {
+                throw new DriveException('The selection is too large to compress.', 413);
+            }
+        };
+        if ($folderContentsAtRoot && count($nodes) === 1 && $nodes[0]->isFolder()) {
+            foreach ($this->q($uid)->whereNull('deleted_at')->where('parent_id', $nodes[0]->id)->orderBy('name')->get() as $c) {
+                $walk($c, '');
+            }
+        } else {
+            foreach ($nodes as $n) {
+                $walk($n, '');
+            }
+        }
+
+        $tmpZip = tempnam(sys_get_temp_dir(), 'drz') . '.zip';
+        $temps = [];
+        $zip = new ZipArchive();
+        if ($zip->open($tmpZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            throw new DriveException('Could not create the archive.', 500);
+        }
+        try {
+            foreach ($entries as $path => $n) {
+                if ($n === null) {
+                    $zip->addEmptyDir(rtrim($path, '/'));
+                } else {
+                    $zip->addFile($this->materialize($n, $temps), $path);
+                    $zip->setCompressionName($path, ZipArchive::CM_DEFLATE);
+                }
+            }
+            if (!$zip->close()) {
+                throw new DriveException('Could not create the archive.', 500);
+            }
+        } catch (\Throwable $e) {
+            @unlink($tmpZip);
+            throw $e;
+        } finally {
+            // ZipArchive بيقرا الملفات وقت close() — فمسح الـ temps بعده بس.
+            foreach ($temps as $t) {
+                @unlink($t);
+            }
+        }
+        $label = count($nodes) === 1 ? $nodes[0]->name : 'Archive';
+        return [$tmpZip, $label . '.zip'];
+    }
+
+    /** "ضغط" داخل جهازي: ينشئ ملف zip جديد في $parentId. */
+    public function zipInto(int $uid, array $ids, ?int $parentId, ?string $name = null): DriveNode
+    {
+        $parent = $this->folderOrRoot($uid, $parentId);
+        [$tmp, $suggest] = $this->buildZip($uid, $ids);
+        try {
+            $final = $name !== null && trim($name) !== '' ? $this->validName($name) : $suggest;
+            if (!str_ends_with(strtolower($final), '.zip')) {
+                $final .= '.zip';
+            }
+            $final = $this->freeName($uid, $parent?->id, $final);
+            return $this->putLocalFile($uid, $parent?->id, $final, $tmp, 'application/zip');
+        } finally {
+            @unlink($tmp);
+        }
+    }
+
+    /** فك zip داخل مجلد جديد باسم الأرشيف (زي "Extract to name/"). */
+    public function unzip(int $uid, int $id, ?int $parentId = null): DriveNode
+    {
+        $n = $this->find($uid, $id);
+        if ($n->isFolder() || strtolower((string) pathinfo($n->name, PATHINFO_EXTENSION)) !== 'zip') {
+            throw new DriveException('This is not a ZIP file.', 422);
+        }
+        $parentId ??= $n->parent_id !== null ? (int) $n->parent_id : null;
+        $parent = $this->folderOrRoot($uid, $parentId);
+
+        $temps = [];
+        $local = $this->materialize($n, $temps);
+        $zip = new ZipArchive();
+        if ($zip->open($local) !== true) {
+            foreach ($temps as $t) {
+                @unlink($t);
+            }
+            throw new DriveException('The ZIP file is corrupted.', 422);
+        }
+        $written = [];
+        try {
+            $entries = DriveArchive::scan($zip, (int) config('drive.max_zip_entries'), $this->maxZipBytes());
+            $folderName = preg_replace('/\.zip$/i', '', $n->name) ?: 'Extracted';
+            return DB::transaction(function () use ($uid, $parent, $folderName, $zip, $entries, &$written) {
+                $rootFolder = $this->createFolder($uid, $parent?->id, $folderName);
+                $this->extractEntries($uid, (int) $rootFolder->id, $zip, $entries, $written);
+                return $rootFolder;
+            });
+        } catch (\Throwable $e) {
+            foreach ($written as $sp) {
+                $this->disk()->delete($sp);
+            }
+            throw $e;
+        } finally {
+            $zip->close();
+            foreach ($temps as $t) {
+                @unlink($t);
+            }
+        }
+    }
+
+    /** يكتب عناصر الـ zip تحت $baseId (ملفات جديدة بس — بيدمج المجلدات). */
+    private function extractEntries(int $uid, int $baseId, ZipArchive $zip, array $entries, array &$written): void
+    {
+        $budget = $this->maxZipBytes();
+        usort($entries, fn ($a, $b) => count($a['segments']) <=> count($b['segments']));
+        foreach ($entries as $e) {
+            if ($e['dir']) {
+                $this->ensureFolderPath($uid, $baseId, $e['segments']);
+                continue;
+            }
+            $segs = $e['segments'];
+            $fname = array_pop($segs);
+            $dir = $segs ? $this->ensureFolderPath($uid, $baseId, $segs) : $baseId;
+            $tmp = tempnam(sys_get_temp_dir(), 'dre');
+            try {
+                $size = DriveArchive::copyEntry($zip, (int) $e['index'], $tmp, $budget);
+                $budget -= $size;
+                $name = $this->freeName($uid, $dir, $fname);
+                $node = $this->putLocalFile($uid, $dir, $name, $tmp);
+                $written[] = (string) $node->storage_path;
+            } finally {
+                @unlink($tmp);
+            }
+        }
+    }
+
+    /**
+     * حفظ من محرر الـ ZIP/Workbench: الـ zip (محتوى المجلد في الجذر) بيتزامن مع المجلد —
+     * ملفات اتغيّرت بتتستبدل، جديدة بتتضاف، واللي اتشال من الـ zip بيروح السلة (قابل للاسترجاع).
+     * @return array{added:int,updated:int,removed:int}
+     */
+    public function syncFolderFromZip(int $uid, int $folderId, UploadedFile $upload): array
+    {
+        if (!$upload->isValid()) {
+            throw new DriveException('The upload failed. Please try again.', 422);
+        }
+        $folder = $this->find($uid, $folderId);
+        if (!$folder->isFolder()) {
+            throw new DriveException('The destination is not a folder.', 422);
+        }
+        $zip = new ZipArchive();
+        if ($zip->open($upload->getRealPath()) !== true) {
+            throw new DriveException('The ZIP file is corrupted.', 422);
+        }
+        $written = [];
+        $oldBlobs = [];
+        $stats = ['added' => 0, 'updated' => 0, 'removed' => 0];
+        try {
+            $entries = DriveArchive::scan($zip, (int) config('drive.max_zip_entries'), $this->maxZipBytes());
+
+            // الموجود حاليًا: relpath => node
+            $existing = [];
+            $walk = function (int $parent, string $prefix) use (&$walk, &$existing, $uid) {
+                foreach ($this->q($uid)->whereNull('deleted_at')->where('parent_id', $parent)->get() as $c) {
+                    $existing[$prefix . $c->name] = $c;
+                    if ($c->isFolder()) {
+                        $walk((int) $c->id, $prefix . $c->name . '/');
+                    }
+                }
+            };
+            $walk($folderId, '');
+
+            DB::transaction(function () use ($uid, $folderId, $zip, $entries, &$existing, &$written, &$oldBlobs, &$stats) {
+                usort($entries, fn ($a, $b) => count($a['segments']) <=> count($b['segments']));
+                $keep = [];
+                $budget = $this->maxZipBytes();
+                foreach ($entries as $e) {
+                    $rel = implode('/', $e['segments']);
+                    for ($i = 1; $i < count($e['segments']); $i++) {
+                        $keep[implode('/', array_slice($e['segments'], 0, $i))] = true;
+                    }
+                    $keep[$rel] = true;
+                    if ($e['dir']) {
+                        $this->ensureFolderPath($uid, $folderId, $e['segments']);
+                        continue;
+                    }
+                    $segs = $e['segments'];
+                    $fname = array_pop($segs);
+                    $dir = $segs ? $this->ensureFolderPath($uid, $folderId, $segs) : $folderId;
+                    $tmp = tempnam(sys_get_temp_dir(), 'dsy');
+                    try {
+                        $size = DriveArchive::copyEntry($zip, (int) $e['index'], $tmp, $budget);
+                        $budget -= $size;
+                        $cur = $existing[$rel] ?? null;
+                        if ($cur && !$cur->isFolder()) {
+                            if ((int) $cur->size_bytes === $size && $cur->sha1 && $cur->sha1 === sha1_file($tmp)) {
+                                continue; // ما اتغيّرش
+                            }
+                            $old = $cur->storage_path;
+                            $delta = $size - (int) $cur->size_bytes;
+                            if ($delta > 0) {
+                                $this->assertQuota($uid, $delta);
+                            }
+                            $sp = $this->writeBlob($uid, $tmp);
+                            $written[] = $sp;
+                            $cur->forceFill(['storage_path' => $sp, 'size_bytes' => $size, 'sha1' => sha1_file($tmp) ?: null,
+                                'mime_type' => $this->detectMime($tmp, $cur->name)])->save();
+                            if ($old) {
+                                $oldBlobs[] = $old;
+                            }
+                            $stats['updated']++;
+                        } else {
+                            $name = $cur ? $this->freeName($uid, $dir, $fname) : $fname;
+                            $node = $this->putLocalFile($uid, $dir, $name, $tmp);
+                            $written[] = (string) $node->storage_path;
+                            $stats['added']++;
+                        }
+                    } finally {
+                        @unlink($tmp);
+                    }
+                }
+                // اللي اتشال من الـ zip => السلة (الجذور بس؛ الأحفاد بتتبعها)
+                $gone = [];
+                foreach ($existing as $rel => $node) {
+                    if (isset($keep[$rel])) {
+                        continue;
+                    }
+                    $parentRel = str_contains($rel, '/') ? substr($rel, 0, (int) strrpos($rel, '/')) : '';
+                    if ($parentRel !== '' && !isset($keep[$parentRel])) {
+                        continue;
+                    }
+                    $gone[] = (int) $node->id;
+                }
+                if ($gone) {
+                    $this->trash($uid, $gone);
+                    $stats['removed'] = count($gone);
+                }
+            });
+        } catch (\Throwable $e) {
+            foreach ($written as $sp) {
+                $this->disk()->delete($sp);
+            }
+            throw $e;
+        } finally {
+            $zip->close();
+        }
+        foreach ($oldBlobs as $sp) {
+            $this->disk()->delete($sp);
+        }
+        $this->q($uid)->where('id', $folderId)->update(['updated_at' => now()]);
+        return $stats;
+    }
+}
