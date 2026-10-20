@@ -32,6 +32,11 @@ use Illuminate\Http\Request;
  *   POST   /drive/zip                 {ids,parent_id,name}
  *   POST   /drive/trash | /restore | /purge   {ids}
  *   GET    /drive/trash   |  DELETE /drive/trash (تفريغ)
+ *   GET    /drive/config              إعدادات الواجهة: direct_upload + بيانات Google/Microsoft للنسخ الاحتياطي
+ *   GET    /drive/manifest            كل الملفات/المجلدات (metadata) للنسخ الاحتياطي التزايدي
+ *   POST   /drive/upload/init|complete          رفع مباشر لـ S3/R2 (رابط PUT موقّع ثم تأكيد)
+ *   POST   /drive/nodes/{id}/replace/init|complete   حفظ مباشر فوق ملف موجود
+ *   GET    /drive/nodes/{id}/download-url       رابط تنزيل موقّع مباشر
  */
 class DriveApiController extends Controller
 {
@@ -213,6 +218,71 @@ class DriveApiController extends Controller
             $name = $request->input('name');
             return $this->apiSuccess($this->drive->replaceFromUpload($uid, (int) $id, $file, is_string($name) ? $name : null)->toRowArray(), 'File saved.');
         });
+    }
+
+
+    // -- cloud: direct transfer + backup support --------------------------------------------------------
+
+    public function config(Request $request)
+    {
+        return $this->guard($request, function () {
+            $g = (array) preg_split('/\s*,\s*/', trim((string) config('services.google.client_ids')), -1, PREG_SPLIT_NO_EMPTY);
+            $msId = (string) config('services.microsoft.client_id');
+            return $this->apiSuccess([
+                'direct_upload' => $this->drive->directEnabled(),
+                'max_file_mb'   => (int) config('drive.max_file_mb'),
+                'cloud'         => [
+                    'google'    => ['enabled' => $g !== [], 'client_id' => $g[0] ?? null],
+                    'microsoft' => ['enabled' => $msId !== '', 'client_id' => $msId ?: null, 'authority' => (string) config('services.microsoft.authority')],
+                ],
+            ], 'OK');
+        });
+    }
+
+    public function manifest(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess(['items' => $this->drive->manifest($uid)], 'OK'));
+    }
+
+    public function uploadInit(Request $request)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $v = $request->validate([
+                'name' => 'required|string|max:255', 'size' => 'required|integer|min:0', 'mime' => 'nullable|string|max:150',
+                'parent_id' => 'nullable|integer', 'path' => 'nullable|string|max:1000',
+            ]);
+            $r = $this->drive->initDirectUpload($uid, $this->pid($request), (string) $v['name'], (int) $v['size'], $v['mime'] ?? null, $v['path'] ?? null);
+            return $this->apiSuccess($r, 'OK');
+        });
+    }
+
+    public function uploadComplete(Request $request)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $v = $request->validate(['token' => 'required|string|max:4000']);
+            return $this->apiSuccess($this->drive->completeDirectUpload($uid, $v['token'])->toRowArray(), 'File uploaded.', 201);
+        });
+    }
+
+    public function replaceInit(Request $request, $id)
+    {
+        return $this->guard($request, function ($uid) use ($request, $id) {
+            $v = $request->validate(['size' => 'required|integer|min:0', 'mime' => 'nullable|string|max:150']);
+            return $this->apiSuccess($this->drive->initDirectReplace($uid, (int) $id, (int) $v['size'], $v['mime'] ?? null), 'OK');
+        });
+    }
+
+    public function replaceComplete(Request $request, $id)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $v = $request->validate(['token' => 'required|string|max:4000', 'name' => 'nullable|string|max:255', 'sha1' => 'nullable|string|max:40']);
+            return $this->apiSuccess($this->drive->completeDirectReplace($uid, $v['token'], $v['name'] ?? null, $v['sha1'] ?? null)->toRowArray(), 'File saved.');
+        });
+    }
+
+    public function downloadUrl(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->directDownloadUrl($uid, (int) $id, $request->boolean('download')), 'OK'));
     }
 
     // -- organise ---------------------------------------------------------------------------------------

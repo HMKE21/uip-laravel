@@ -10,6 +10,7 @@
         "ext-gd": "*",
         "ext-zip": "*",
         "laravel/framework": "^13.17",
+        "league/flysystem-aws-s3-v3": "^3.0",
         "laravel/reverb": "^1.11",
         "laravel/tinker": "^3.0",
         "mpdf/mpdf": "^8.2"

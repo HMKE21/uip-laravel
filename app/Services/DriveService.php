@@ -7,6 +7,7 @@ use App\Support\DriveArchive;
 use App\Support\DriveException;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -442,6 +443,214 @@ class DriveService
             $n->refresh();
         }
         return $n;
+    }
+
+
+    // ---- direct-to-bucket transfer (S3 / Cloudflare R2) ----------------------------------------------
+    // المتصفح بيرفع/بينزّل مباشرة من الـ bucket بروابط موقّعة قصيرة العمر؛ Laravel بيحفظ الـ metadata بس.
+    // مفيش جدول جديد: الـ init بيرجّع token مشفّر (uid + المسار + الاسم + الحجم + الانتهاء) والـ complete بيتحقق منه.
+
+    public function directEnabled(): bool
+    {
+        return (bool) config('drive.direct')
+            && (string) config('filesystems.disks.' . config('drive.disk') . '.driver') === 's3'
+            && (string) config('filesystems.disks.' . config('drive.disk') . '.bucket') !== '';
+    }
+
+    private function assertDirect(): void
+    {
+        if (!$this->directEnabled()) {
+            throw new DriveException('Direct upload is not enabled.', 404);
+        }
+    }
+
+    private function directTtl(): \DateTimeInterface
+    {
+        return now()->addMinutes((int) config('drive.direct_ttl_min'));
+    }
+
+    private function sealPending(array $p): string
+    {
+        $p['exp'] = now()->addMinutes((int) config('drive.direct_ttl_min') + 30)->getTimestamp();
+        return Crypt::encryptString(json_encode($p));
+    }
+
+    private function openPending(int $uid, string $token, string $kind): array
+    {
+        try {
+            $p = json_decode(Crypt::decryptString($token), true);
+        } catch (\Throwable $e) {
+            throw new DriveException('The upload session is invalid.', 422);
+        }
+        if (!is_array($p) || ($p['uid'] ?? null) !== $uid || ($p['kind'] ?? '') !== $kind || (int) ($p['exp'] ?? 0) < time()) {
+            throw new DriveException('The upload session expired. Please try again.', 422);
+        }
+        return $p;
+    }
+
+    private function signedPut(string $sp, ?string $mime): array
+    {
+        $opts = $mime ? ['ContentType' => $mime] : [];
+        $r = $this->disk()->temporaryUploadUrl($sp, $this->directTtl(), $opts);
+        return ['url' => $r['url'], 'headers' => (object) ($r['headers'] ?? [])];
+    }
+
+    /** يحجز مكان لملف جديد ويرجّع رابط PUT موقّع. */
+    public function initDirectUpload(int $uid, ?int $parentId, string $name, int $size, ?string $mime, ?string $relativePath = null): array
+    {
+        $this->assertDirect();
+        $parent = $this->folderOrRoot($uid, $parentId);
+        $dirSegs = [];
+        $name = DriveArchive::cleanName($name);
+        if ($relativePath !== null && $relativePath !== '') {
+            $segs = DriveArchive::segments($relativePath);
+            if ($segs === null || $segs === []) {
+                throw new DriveException('Invalid file path.', 422);
+            }
+            $name = array_pop($segs);
+            $dirSegs = $segs;
+        }
+        if ($name === '') {
+            throw new DriveException('Invalid file name.', 422);
+        }
+        $this->assertQuota($uid, max(0, $size));
+        $this->assertNodeBudget($uid);
+        $sp = "u{$uid}/" . Str::uuid()->toString();
+        $mime = $mime ? substr(preg_replace('/[^\x20-\x7E]/', '', $mime), 0, 120) : null;
+        return [
+            'put'   => $this->signedPut($sp, $mime),
+            'token' => $this->sealPending(['kind' => 'new', 'uid' => $uid, 'sp' => $sp, 'parent' => $parent?->id, 'dirs' => $dirSegs, 'name' => $name, 'size' => $size, 'mime' => $mime]),
+        ];
+    }
+
+    /** بعد ما المتصفح يخلّص الرفع: يتحقق إن الملف موجود فعلًا بالحجم/الحصة ويسجّل الـ node. */
+    public function completeDirectUpload(int $uid, string $token): DriveNode
+    {
+        $this->assertDirect();
+        $p = $this->openPending($uid, $token, 'new');
+        $sp = (string) $p['sp'];
+        if ($again = $this->q($uid)->where('storage_path', $sp)->first()) { // retry آمن
+            return $again;
+        }
+        $disk = $this->disk();
+        if (!$disk->exists($sp)) {
+            throw new DriveException('The file did not reach storage. Please try again.', 422);
+        }
+        $size = (int) $disk->size($sp);
+        try {
+            $this->assertQuota($uid, $size);
+            $this->assertNodeBudget($uid);
+            return DB::transaction(function () use ($uid, $p, $sp, $size) {
+                $parent = $p['parent'] !== null ? $this->folderOrRoot($uid, (int) $p['parent']) : null;
+                $target = $p['dirs'] ? $this->ensureFolderPath($uid, $parent?->id, (array) $p['dirs']) : $parent?->id;
+                $name = $this->freeName($uid, $target, (string) $p['name']);
+                return DriveNode::create([
+                    'user_id' => $uid, 'parent_id' => $target, 'type' => 'file', 'name' => $name,
+                    'mime_type' => $p['mime'] ?: $this->detectMime($name, $name), 'size_bytes' => $size,
+                    'storage_path' => $sp, 'sha1' => null,
+                ]);
+            });
+        } catch (\Throwable $e) {
+            $disk->delete($sp);
+            throw $e;
+        }
+    }
+
+    /** حفظ فوق ملف موجود (محررات): نفس الفكرة. */
+    public function initDirectReplace(int $uid, int $id, int $size, ?string $mime): array
+    {
+        $this->assertDirect();
+        $n = $this->find($uid, $id);
+        if ($n->isFolder()) {
+            throw new DriveException('A folder has no content.', 422);
+        }
+        $delta = $size - (int) $n->size_bytes;
+        $this->assertQuota($uid, max(0, $delta));
+        if ($size > $this->maxFileBytes()) {
+            throw new DriveException('The file is larger than the maximum allowed size (' . (int) config('drive.max_file_mb') . ' MB).', 413);
+        }
+        $sp = "u{$uid}/" . Str::uuid()->toString();
+        $mime = $mime ? substr(preg_replace('/[^\x20-\x7E]/', '', $mime), 0, 120) : ($n->mime_type ?: null);
+        return [
+            'put'   => $this->signedPut($sp, $mime),
+            'token' => $this->sealPending(['kind' => 'replace', 'uid' => $uid, 'sp' => $sp, 'node' => (int) $n->id, 'size' => $size, 'mime' => $mime]),
+        ];
+    }
+
+    public function completeDirectReplace(int $uid, string $token, ?string $newName = null, ?string $sha1 = null): DriveNode
+    {
+        $this->assertDirect();
+        $p = $this->openPending($uid, $token, 'replace');
+        $sp = (string) $p['sp'];
+        $n = $this->find($uid, (int) $p['node']);
+        if ($n->storage_path === $sp) { // retry: already committed
+            return $n;
+        }
+        $disk = $this->disk();
+        if (!$disk->exists($sp)) {
+            throw new DriveException('The file did not reach storage. Please try again.', 422);
+        }
+        $size = (int) $disk->size($sp);
+        $committed = false; // بعد الحفظ في الـ DB البلوب الجديد مش يتيم
+        try {
+            $delta = $size - (int) $n->size_bytes;
+            if ($delta > 0) {
+                $this->assertQuota($uid, $delta);
+            }
+            if ($size > $this->maxFileBytes()) {
+                throw new DriveException('The file is larger than the maximum allowed size.', 413);
+            }
+            $old = $n->storage_path;
+            $n->forceFill([
+                'storage_path' => $sp, 'size_bytes' => $size,
+                'sha1' => $sha1 && preg_match('/^[a-f0-9]{40}$/i', $sha1) ? strtolower($sha1) : null,
+                'mime_type' => $p['mime'] ?: $n->mime_type,
+            ])->save();
+            $committed = true;
+            if ($old) {
+                $disk->delete($old);
+            }
+        } finally {
+            if (!$committed) {
+                $disk->delete($sp);
+            }
+        }
+        if ($newName !== null && $newName !== '' && DriveArchive::cleanName($newName) !== $n->name) {
+            $this->rename($uid, (int) $n->id, $newName);
+            $n->refresh();
+        }
+        return $n;
+    }
+
+    /** رابط تنزيل/عرض موقّع مباشر من الـ bucket. */
+    public function directDownloadUrl(int $uid, int $id, bool $download = false): array
+    {
+        $this->assertDirect();
+        $n = $this->find($uid, $id);
+        if ($n->isFolder() || !$n->storage_path) {
+            throw new DriveException('Item not found.', 404);
+        }
+        $name = (string) $n->name;
+        $ascii = preg_replace('/[^\x20-\x7E]/', '_', str_replace(['"', '\\'], '_', $name));
+        $dispo = ($download ? 'attachment' : 'inline') . '; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name);
+        $url = $this->disk()->temporaryUrl((string) $n->storage_path, $this->directTtl(), [
+            'ResponseContentType'        => $download ? 'application/octet-stream' : ($n->mime_type ?: 'application/octet-stream'),
+            'ResponseContentDisposition' => $dispo,
+        ]);
+        $etag = '"' . substr(sha1($n->id . '|' . ($n->sha1 ?: '') . '|' . (int) $n->size_bytes . '|' . (string) $n->updated_at), 0, 32) . '"';
+        return ['url' => $url, 'etag' => $etag, 'size_bytes' => (int) $n->size_bytes, 'expires_in' => (int) config('drive.direct_ttl_min') * 60];
+    }
+
+    /** قائمة كل الملفات والمجلدات الحية (من غير سلة) بالـ metadata بس — محرك النسخ الاحتياطي بيقارن بيها ويرفع الجديد/المتغير. */
+    public function manifest(int $uid): array
+    {
+        return $this->q($uid)->whereNull('deleted_at')->orderBy('id')
+            ->get(['id', 'parent_id', 'type', 'name', 'size_bytes', 'sha1', 'updated_at'])
+            ->map(fn (DriveNode $n) => [
+                'id' => (int) $n->id, 'parent_id' => $n->parent_id !== null ? (int) $n->parent_id : null, 'type' => $n->type,
+                'name' => $n->name, 'size_bytes' => $n->isFolder() ? 0 : (int) $n->size_bytes, 'sha1' => $n->sha1,
+                'updated_at' => optional($n->updated_at)->toIso8601String(),
+            ])->all();
     }
 
     // ---- rename / move / copy ------------------------------------------------------------------------

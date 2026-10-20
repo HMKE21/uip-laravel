@@ -243,6 +243,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/search', [DriveApiController::class, 'search']);
         Route::get('/usage', [DriveApiController::class, 'usage']);
         Route::get('/templates', [DriveApiController::class, 'templates']);
+        Route::get('/config', [DriveApiController::class, 'config']);
+        Route::get('/manifest', [DriveApiController::class, 'manifest'])->middleware('throttle:60,1');
+        Route::post('/upload/init', [DriveApiController::class, 'uploadInit'])->middleware('throttle:240,1');
+        Route::post('/upload/complete', [DriveApiController::class, 'uploadComplete'])->middleware('throttle:240,1');
         Route::post('/folders', [DriveApiController::class, 'createFolder'])->middleware('throttle:120,1');
         Route::post('/files', [DriveApiController::class, 'createFile'])->middleware('throttle:120,1');
         Route::post('/projects', [DriveApiController::class, 'createProject'])->middleware('throttle:30,1');
@@ -258,6 +262,9 @@ Route::prefix('v1')->group(function () {
         Route::get('/nodes/{id}/content', [DriveApiController::class, 'content']);
         Route::put('/nodes/{id}/content', [DriveApiController::class, 'saveContent'])->middleware('throttle:120,1');
         Route::post('/nodes/{id}/replace', [DriveApiController::class, 'replace'])->middleware('throttle:60,1');
+        Route::post('/nodes/{id}/replace/init', [DriveApiController::class, 'replaceInit'])->middleware('throttle:120,1');
+        Route::post('/nodes/{id}/replace/complete', [DriveApiController::class, 'replaceComplete'])->middleware('throttle:120,1');
+        Route::get('/nodes/{id}/download-url', [DriveApiController::class, 'downloadUrl'])->middleware('throttle:240,1');
         Route::patch('/nodes/{id}', [DriveApiController::class, 'rename']);
         Route::get('/nodes/{id}/archive', [DriveApiController::class, 'archive'])->middleware('throttle:20,1');
         Route::post('/nodes/{id}/unzip', [DriveApiController::class, 'unzip'])->middleware('throttle:20,1');

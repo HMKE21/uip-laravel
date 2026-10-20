@@ -34,6 +34,13 @@ return [
         'client_ids' => env('GOOGLE_CLIENT_IDS', env('GOOGLE_CLIENT_ID', '')),
     ],
 
+    // Microsoft (OneDrive backup من جوه "جهازي"). سجّل SPA app في Entra ID (Azure) وحط Redirect URI = https://<front-domain>/ms-auth.html
+    // الصلاحيات: Files.ReadWrite.AppFolder + User.Read. MS_AUTHORITY: .../common (حسابات شخصية + جامعة) أو .../<tenant-id>.
+    'microsoft' => [
+        'client_id' => env('MS_CLIENT_ID', ''),
+        'authority' => env('MS_AUTHORITY', 'https://login.microsoftonline.com/common'),
+    ],
+
     // Connect GitHub (OAuth App). أنشئ OAuth App من GitHub → Settings → Developer settings،
     // وخلي Authorization callback URL = GITHUB_OAUTH_REDIRECT بالظبط.
     'github' => [
