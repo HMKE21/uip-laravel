@@ -69,7 +69,35 @@ class UserSessionService
         if ($request && $this->hasDeviceColumn()) {
             $row['device_hash'] = hash('sha256', AuthCookies::deviceId($request, true));
         }
+        // "جهاز جديد" = بصمة المتصفح دي عمرها ما ظهرت على الحساب قبل كده (لازم يكون فيه سجل سابق، عشان أول دخول مايتحسبش).
+        $newDevice = false;
+        try {
+            if (!empty($row['device_hash'])) {
+                $hist = DB::table('user_sessions')->where('user_id', $userId);
+                $newDevice = (clone $hist)->exists() && !(clone $hist)->where('device_hash', $row['device_hash'])->exists();
+            }
+        } catch (\Throwable $e) {
+            $newDevice = false;
+        }
         $id = (int) DB::table('user_sessions')->insertGetId($row);
+
+        if ($newDevice) {
+            try {
+                if (!empty(app(DesktopSecurityService::class)->get($userId)['alertNewDevice'])) {
+                    $what = trim(($row['device_label'] ?? 'Unknown device') . ($location ? ' — ' . $location : ''));
+                    app(NotificationService::class)->notify(
+                        $userId,
+                        'security_new_device',
+                        'New device signed in to your account / دخول من جهاز جديد',
+                        $what . '. If this was not you, open Settings > Security & devices on your desktop and sign it out. / لو مش أنت، افتح الإعدادات > الأمان والأجهزة وسجّل خروجه.',
+                        null,
+                        'high'
+                    );
+                }
+            } catch (\Throwable $e) {
+                Log::warning('New-device notification failed: ' . $e->getMessage());
+            }
+        }
 
         try {
             $email = (string) DB::table('users')->where('id', $userId)->value('email');
@@ -111,6 +139,18 @@ class UserSessionService
     public function liveSeconds(): int
     {
         return max(30, (int) \App\Support\PlatformPolicy::value('session_live_seconds'));
+    }
+
+    /**
+     * حد الأجهزة الفعلي = الأشد بين سياسة المنصة (حسب الدور) واختيار صاحب الحساب في إعدادات الأمان.
+     * 0 = مفيش حد. صاحب الحساب يقدر يشدّد بس، مش يفتح أكتر من اللي الأدمن سامح بيه.
+     */
+    public function effectiveDeviceLimit(int $userId, ?string $role = null): int
+    {
+        $platform = \App\Support\PlatformPolicy::deviceLimitFor($role ?? app(RoleService::class)->primaryRoleFor($userId));
+        $own = (int) app(DesktopSecurityService::class)->cached($userId)['maxDevices'];
+
+        return DesktopSecurityService::stricter($platform, $own);
     }
 
     /**
@@ -179,7 +219,7 @@ class UserSessionService
             $others[] = $d;
         }
 
-        $limit = \App\Support\PlatformPolicy::deviceLimitFor($role ?? app(RoleService::class)->primaryRoleFor($userId));
+        $limit = $this->effectiveDeviceLimit($userId, $role);
         if ($limit < 1) {
             return $ended;
         }
@@ -202,10 +242,14 @@ class UserSessionService
      */
     public function loginBlock(int $userId, string $locale, ?string $role = null): ?array
     {
-        if (\App\Support\PlatformPolicy::deviceMode() !== 'block') {
+        $mine = app(DesktopSecurityService::class)->cached($userId);
+        // "منع الدخول الجديد": بقرار الأدمن (كل الحسابات) أو بقرار صاحب الحساب نفسه (من إعدادات الأمان).
+        $blocks = \App\Support\PlatformPolicy::deviceMode() === 'block'
+            || ($mine['deviceOverflow'] === 'block' && (int) $mine['maxDevices'] > 0);
+        if (!$blocks) {
             return null;
         }
-        $limit = \App\Support\PlatformPolicy::deviceLimitFor($role ?? app(RoleService::class)->primaryRoleFor($userId));
+        $limit = $this->effectiveDeviceLimit($userId, $role);
         if ($limit < 1) {
             return null;
         }
@@ -320,6 +364,11 @@ class UserSessionService
             return false;
         }
         $limit = app(SessionPolicyService::class)->idleTimeoutSeconds();
+        // خروج تلقائي اختاره صاحب الحساب (إعدادات الأمان): الأشد يكسب، وبيشتغل حتى مع "دخول دائم" بتاع المنصة.
+        if (!empty($row->user_id)) {
+            $own = (int) app(DesktopSecurityService::class)->cached((int) $row->user_id)['autoLogoutMinutes'] * 60;
+            $limit = DesktopSecurityService::stricter($limit, $own);
+        }
         if ($limit <= 0) {
             return false;
         }
@@ -333,7 +382,7 @@ class UserSessionService
         if (!$sessionId) {
             return true;
         }
-        $row = DB::table('user_sessions')->where('id', $sessionId)->first(['is_active', 'expires_at', 'last_activity_at']);
+        $row = DB::table('user_sessions')->where('id', $sessionId)->first(['user_id', 'is_active', 'expires_at', 'last_activity_at']);
         if (!$row) {
             return false;
         }
