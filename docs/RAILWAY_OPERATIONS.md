@@ -97,7 +97,7 @@ find /data/uploads -type f \( -iname '*.php*' -o -iname '*.phtml' -o -iname '*.p
 لازم تشتغل 3 حاجات على Railway:
 
 1. **مزوّد بريد حقيقي**: متغيرات `MAIL_MAILER` (smtp/brevo…) وبياناته، أو من Admin > Settings > Mail. من غيره الإيميلات بتفضل pending (بتتأجّل 15 دقيقة وتتجرب تاني) وبعد 24 ساعة بتتعلّم `expired` من غير ما تتبعت.
-2. **`FRONTEND_URL`** (مثال `https://uip-v1.vercel.app`): بيتبني منه لينك الزرار جوه الإيميل. من غيره الإيميل بيوصل من غير زرار.
+2. **`FRONTEND_URL`** (مثال `https://uip-nub.vercel.app`): بيتبني منه لينك الزرار جوه الإيميل. من غيره الإيميل بيوصل من غير زرار.
 3. **الـ scheduler شغّال**: Railway مفيهوش cron افتراضي. أضف service تاني من نفس الريبو بأمر التشغيل `php artisan schedule:work` (أو cron بيشغّل `php artisan schedule:run` كل دقيقة). بيشغّل:
    - `notifications:send-emails` كل دقيقة (إيميلات فورية + ملخصات).
    - `projects:send-deadline-reminders` كل ساعة (تذكير 7/3/1 يوم، مرة واحدة لكل مستخدم لكل نافذة).
