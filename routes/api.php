@@ -1599,6 +1599,9 @@ Route::prefix('v1')->group(function () {
     Route::prefix('desktop')->middleware('uip.auth')->group(function () {
         Route::get('/settings', [DesktopSettingsApiController::class, 'show'])->middleware('throttle:120,1');
         Route::put('/settings', [DesktopSettingsApiController::class, 'update'])->middleware('throttle:120,1');
+        // الملاحظات اللاصقة والويدجت — DesktopWidgetsApiController
+        Route::get('/widgets', [\App\Http\Controllers\Api\DesktopWidgetsApiController::class, 'show'])->middleware('throttle:120,1');
+        Route::put('/widgets', [\App\Http\Controllers\Api\DesktopWidgetsApiController::class, 'update'])->middleware('throttle:120,1');
         Route::get('/wallpaper', [DesktopSettingsApiController::class, 'wallpaper'])->middleware('throttle:60,1');
         Route::put('/wallpaper', [DesktopSettingsApiController::class, 'saveWallpaper'])->middleware('throttle:20,1');
         Route::post('/lock/set', [DesktopSettingsApiController::class, 'lockSet'])->middleware('throttle:20,1');
