@@ -112,6 +112,7 @@ use App\Http\Controllers\Api\DashboardsApiController;
 use App\Http\Controllers\Api\ProjectsApiController;
 use App\Http\Controllers\Api\SandboxApiController;
 use App\Http\Controllers\Api\DriveApiController;
+use App\Http\Controllers\Api\DriveShareApiController;
 use App\Http\Controllers\Api\GithubConnectionApiController;
 use App\Http\Controllers\Api\GoogleDriveConnectionApiController;
 use App\Http\Controllers\Api\AdminApprovalsApiController;
@@ -261,6 +262,12 @@ Route::prefix('v1')->group(function () {
         Route::post('/purge', [DriveApiController::class, 'purge']);
         Route::get('/trash', [DriveApiController::class, 'trashList']);
         Route::delete('/trash', [DriveApiController::class, 'emptyTrash']);
+        // مشاركة برابط (راجع DriveShareApiController)
+        Route::get('/shares', [DriveShareApiController::class, 'index']);
+        Route::get('/nodes/{id}/shares', [DriveShareApiController::class, 'forNode'])->where('id', '[0-9]+');
+        Route::post('/nodes/{id}/shares', [DriveShareApiController::class, 'create'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::patch('/shares/{id}', [DriveShareApiController::class, 'update'])->where('id', '[0-9]+');
+        Route::delete('/shares/{id}', [DriveShareApiController::class, 'revoke'])->where('id', '[0-9]+');
         Route::get('/nodes/{id}/content', [DriveApiController::class, 'content']);
         Route::put('/nodes/{id}/content', [DriveApiController::class, 'saveContent'])->middleware('throttle:120,1');
         Route::post('/nodes/{id}/replace', [DriveApiController::class, 'replace'])->middleware('throttle:60,1');
@@ -1834,6 +1841,12 @@ Route::prefix('v1')->group(function () {
         Route::get('/visits', [PublicApiController::class, 'visits'])->middleware('throttle:120,1');
         Route::post('/visits', [PublicApiController::class, 'recordVisit'])->middleware('throttle:20,1');
         Route::get('/verify-certificate', [PublicApiController::class, 'verifyCertificate']);
+        // رابط مشاركة ملف/مجلد من "جهازي" — من غير تسجيل دخول؛ الصلاحية = معرفة الـ token (راجع DriveShareService).
+        Route::prefix('drive-share/{token}')->where(['token' => '[A-Za-z0-9]{8,64}'])->middleware('throttle:120,1')->group(function () {
+            Route::get('/', [DriveShareApiController::class, 'show']);
+            Route::get('/file', [DriveShareApiController::class, 'file']);
+            Route::get('/zip', [DriveShareApiController::class, 'zip'])->middleware('throttle:20,1');
+        });
         Route::get('/projects', [PublicApiController::class, 'projects']);
         Route::get('/projects/{slug}', [PublicApiController::class, 'projectShow']);
         // تواصل مع فريق المشروع — الوحيد في المجموعة دي اللي محتاج تسجيل دخول.
