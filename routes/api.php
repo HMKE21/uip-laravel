@@ -391,6 +391,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/request-changes', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'requestChanges']);
         Route::post('/{id}/grade', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'saveGrade']);
         Route::post('/{id}/grade/reopen', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'reopenGrade']);
+        Route::patch('/{id}/ai-mode', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'setAiMode']);
         Route::get('/{id}/discussion', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'discussion']);
         Route::post('/{id}/discussion', [\App\Http\Controllers\Api\AcademicStaffProjectsApiController::class, 'postNote']);
     });

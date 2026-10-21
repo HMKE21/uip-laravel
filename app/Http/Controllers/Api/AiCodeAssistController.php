@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
  * محمي في routes/api.php بـ uip.auth + uip.exam_lock + uip.can:ai.code_assist:
  *  - uip.exam_lock: الطالب في امتحان شغّال ما يقدرش يستخدمه خالص (على السيرفر).
  *  - ai.code_assist: صلاحية مستقلة يتحكم فيها الأدمن من /admin/roles.
+ *  - project_id (اختياري في كل الطلبات): وضع الـ AI اللي الدكتور المشرف ضابطه على المشروع (off | tutor | assistant) بيغلب الإعدادات العامة.
  *
  * الـ streaming بنفس صيغة المساعد العام: `data: {json}\n\n` (fetch + ReadableStream في الفرونت).
  * أخطاء ما قبل الستريم (صلاحية/حجم/rate limit) بترجع JSON عادي بـ apiError وكود HTTP مناسب.
@@ -23,9 +24,10 @@ class AiCodeAssistController extends Controller
     }
 
     /** GET /api/v1/ai-code/status — الفرونت يعرض الزرار على أساسه. */
-    public function status()
+    public function status(Request $request)
     {
-        return $this->apiSuccess($this->assist->status());
+        // ?project_id=<uuid>: وضع الـ AI اللي الدكتور ضابطه على المشروع (لو الطالب شغّال جوه مشروع)
+        return $this->apiSuccess($this->assist->status((int) $request->attributes->get('uip_user_id'), $request->query('project_id')));
     }
 
     /**
@@ -38,8 +40,9 @@ class AiCodeAssistController extends Controller
         $userId = (int) $request->attributes->get('uip_user_id');
 
         try {
-            $input = $this->assist->normalizeInput($request->only(['code', 'error', 'language', 'filename', 'line', 'mode', 'locale']));
-            $this->assist->assertCanServe($userId);
+            $forced = $this->assist->projectMode($userId, $request->input('project_id'));
+            $input = $this->assist->normalizeInput($request->only(['code', 'error', 'language', 'filename', 'line', 'mode', 'locale']), $forced);
+            $this->assist->assertCanServe($userId, $forced);
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
         }
@@ -59,8 +62,9 @@ class AiCodeAssistController extends Controller
         $userId = (int) $request->attributes->get('uip_user_id');
 
         try {
-            $input = $this->assist->normalizeAssistInput($request->only(['code', 'action', 'sel_from', 'sel_to', 'target', 'language', 'filename', 'mode', 'locale']));
-            $this->assist->assertCanServe($userId);
+            $forced = $this->assist->projectMode($userId, $request->input('project_id'));
+            $input = $this->assist->normalizeAssistInput($request->only(['code', 'action', 'sel_from', 'sel_to', 'target', 'language', 'filename', 'mode', 'locale']), $forced);
+            $this->assist->assertCanServe($userId, $forced);
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
         }
@@ -80,8 +84,9 @@ class AiCodeAssistController extends Controller
         $userId = (int) $request->attributes->get('uip_user_id');
 
         try {
-            $input = $this->assist->normalizeChatInput($request->only(['messages', 'active_path', 'files', 'tree', 'sel_from', 'sel_to', 'error', 'mode', 'locale']));
-            $this->assist->assertCanServe($userId);
+            $forced = $this->assist->projectMode($userId, $request->input('project_id'));
+            $input = $this->assist->normalizeChatInput($request->only(['messages', 'active_path', 'files', 'tree', 'sel_from', 'sel_to', 'error', 'mode', 'locale']), $forced);
+            $this->assist->assertCanServe($userId, $forced);
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
         }
@@ -98,8 +103,9 @@ class AiCodeAssistController extends Controller
         $userId = (int) $request->attributes->get('uip_user_id');
 
         try {
-            $input = $this->assist->normalizeCompleteInput($request->only(['prefix', 'suffix', 'language', 'filename']));
-            $this->assist->assertCanComplete($userId);
+            $forced = $this->assist->projectMode($userId, $request->input('project_id'));
+            $input = $this->assist->normalizeCompleteInput($request->only(['prefix', 'suffix', 'language', 'filename']), $forced);
+            $this->assist->assertCanComplete($userId, $forced);
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
         }
@@ -140,6 +146,6 @@ class AiCodeAssistController extends Controller
     private function httpStatus(\RuntimeException $e): int
     {
         $code = (int) $e->getCode();
-        return in_array($code, [413, 422, 429, 503], true) ? $code : 422;
+        return in_array($code, [403, 413, 422, 429, 503], true) ? $code : 422;
     }
 }

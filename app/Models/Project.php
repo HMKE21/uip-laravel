@@ -28,7 +28,7 @@ class Project extends Model
         'uuid', 'slug', 'owner_id', 'university_id', 'title_ar', 'title_en', 'summary',
         'description', 'category', 'category_id', 'tags', 'keywords', 'supervisor_name', 'cover_image_path',
         'repository_url', 'demo_url', 'visibility', 'status', 'views_count', 'likes_count', 'published_at', 'approved_at', 'review_round',
-        'sdgs', 'technologies', 'budget', 'timeline_start', 'timeline_end',
+        'sdgs', 'technologies', 'budget', 'timeline_start', 'timeline_end', 'ai_code_mode',
     ];
 
     protected $casts = [

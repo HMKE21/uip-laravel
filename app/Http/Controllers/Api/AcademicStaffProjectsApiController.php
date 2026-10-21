@@ -10,8 +10,10 @@ use App\Repositories\ProjectDiscussionRepository;
 use App\Repositories\ProjectLinkRepository;
 use App\Repositories\ProjectTeamMemberRepository;
 use App\Services\AcademicStaffProjectService;
+use App\Services\AiCodeAssistService;
 use App\Services\ProjectNotifier;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * /api/v1/academic-staff/projects* — student projects linked to the logged-in doctor / TA.
@@ -88,7 +90,43 @@ class AcademicStaffProjectsApiController extends Controller
             'decide_blocked' => !$official ? 'advisory_role'
                 : ($project->status === 'submitted' && $flow['awaiting'] !== \App\Support\ApprovalFlow::SUPERVISOR ? 'not_your_turn' : null),
             'requires_ai_ack' => $this->svc->requiresAck((string) $project->uuid),
+            // وضع مساعد الكود (AI) اللي الدكتور ضابطه على المشروع: null | off | tutor | assistant (الضبط للمشرف الرسمي بس)
+            'ai_code_mode' => $project->ai_code_mode ?? null,
+            'can_set_ai_mode' => $official,
         ], 'Project retrieved successfully.');
+    }
+
+    /**
+     * PATCH /api/v1/academic-staff/projects/{id}/ai-mode {mode: null|'inherit'|'off'|'tutor'|'assistant'}
+     * الدكتور المشرف (ربط رسمي) بيحدد وضع مساعد الكود لطلبة المشروع: inherit = إعدادات الأدمن العامة، off = مقفول،
+     * tutor = شرح وتلميح بس، assistant = حلول وتعديلات. المعيد (استشاري) مبيغيّرش.
+     */
+    public function setAiMode(Request $request, string $id)
+    {
+        [$err, $staff, $name] = $this->ctx($request);
+        if ($err) {
+            return $err;
+        }
+        [$project, $link] = $this->svc->scopedProject($staff, $name, $id);
+        if (!$project) {
+            return $this->apiError('Project not found.', null, 404);
+        }
+        if (!$this->svc->isOfficial($link)) {
+            return $this->apiError('Only the supervising doctor can change the AI mode of this project.', null, 403);
+        }
+
+        $raw = $request->input('mode');
+        $mode = is_string($raw) ? strtolower(trim($raw)) : null;
+        if ($mode === '' || $mode === 'inherit') {
+            $mode = null;
+        }
+        if ($mode !== null && !in_array($mode, AiCodeAssistService::PROJECT_MODES, true)) {
+            return $this->apiError('Validation failed.', ['mode' => 'Must be inherit, off, tutor or assistant.'], 422);
+        }
+
+        DB::table('projects')->where('id', $project->id)->update(['ai_code_mode' => $mode]);
+
+        return $this->apiSuccess(['ai_code_mode' => $mode], 'AI mode updated.');
     }
 
     /** GET /api/v1/academic-staff/projects/{id}/discussion — ملاحظات المراجعة والنقاش مع الطالب/الفريق. */

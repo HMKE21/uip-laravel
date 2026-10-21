@@ -36,6 +36,9 @@ class AiCodeAssistService
 
     public const MODES = ['tutor', 'assistant'];
 
+    /** القيم اللي الدكتور يقدر يحطها على المشروع (null = من غير تخصيص: إعدادات الأدمن العامة). */
+    public const PROJECT_MODES = ['off', 'tutor', 'assistant'];
+
     private AIClient $client;
 
     public function __construct(
@@ -75,17 +78,26 @@ class AiCodeAssistService
         ];
     }
 
-    /** للفرونت: يعرض زرار "اشرح الخطأ" ولا لأ، وإيه الأوضاع المتاحة. */
-    public function status(): array
+    /**
+     * للفرونت: يعرض زرار "اشرح الخطأ" ولا لأ، وإيه الأوضاع المتاحة.
+     * لو الطلب جاي من مشروع الدكتور ضابط له وضع (project_id)، الوضع ده بيغلب إعدادات الأدمن العامة:
+     * off = كل مزايا الـ AI مقفولة للمشروع، tutor / assistant = الوضع ده بس (من غير تبديل).
+     */
+    public function status(int $userId = 0, ?string $projectUuid = null): array
     {
         $cfg = $this->config();
-        $available = $this->client->isConfigured() && $cfg['enabled'];
+        $forced = $this->projectMode($userId, $projectUuid);
+        $available = $this->client->isConfigured() && $cfg['enabled'] && $forced !== 'off';
+
+        $mode = in_array($forced, self::MODES, true) ? $forced : $cfg['default_mode'];
+        $switch = $forced === null ? $cfg['allow_mode_switch'] : false;
 
         return [
             'available'         => $available,
-            'default_mode'      => $cfg['default_mode'],
-            'allow_mode_switch' => $cfg['allow_mode_switch'],
-            'modes'             => $cfg['allow_mode_switch'] ? self::MODES : [$cfg['default_mode']],
+            'default_mode'      => $mode,
+            'allow_mode_switch' => $switch,
+            'modes'             => $switch ? self::MODES : [$mode],
+            'project_mode'      => $forced, // null | off | tutor | assistant — الفرونت يوضّح للطالب إن الدكتور هو اللي ضابطه
             'actions'           => CodeAssistActions::ACTIONS,
             'autocomplete'      => ['available' => $available && $cfg['complete_enabled']],
             'chat'              => ['available' => $available && $cfg['chat_enabled']],
@@ -96,13 +108,63 @@ class AiCodeAssistService
         ];
     }
 
+    // -- Per-project mode (set by the supervising doctor) --------------------------------------------------------
+
+    /**
+     * وضع الـ AI اللي الدكتور ضابطه على المشروع (null = مفيش تخصيص). بيتطبّق بس لو المستخدم صاحب المشروع أو عضو
+     * مقبول في فريقه — عشان uuid مشروع حد تاني ما يأثرش عليه. أي مشكلة في القراءة (مثلًا الـ migration لسه ماتشغلتش) = null.
+     */
+    public function projectMode(int $userId, ?string $projectUuid): ?string
+    {
+        $uuid = is_string($projectUuid) ? trim($projectUuid) : '';
+        if ($userId <= 0 || $uuid === '' || strlen($uuid) > 64) {
+            return null;
+        }
+        try {
+            $q = DB::table('projects')->whereNull('deleted_at');
+            ctype_digit($uuid) ? $q->where('id', (int) $uuid) : $q->where('uuid', $uuid); // the app passes the uuid; a numeric id is accepted too
+            $row = $q->first(['id', 'owner_id', 'ai_code_mode']);
+            if (!$row || !in_array($row->ai_code_mode, self::PROJECT_MODES, true)) {
+                return null;
+            }
+            $member = (int) $row->owner_id === $userId
+                || DB::table('project_team_members')->where('project_id', $row->id)->where('user_id', $userId)->where('status', 'accepted')->exists();
+
+            return $member ? (string) $row->ai_code_mode : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** @throws \RuntimeException 403 لو الدكتور قفل الـ AI على المشروع. */
+    private function assertProjectAllows(?string $forcedMode): void
+    {
+        if ($forcedMode === 'off') {
+            throw new \RuntimeException('The AI assistant is turned off for this project by your supervisor.', 403);
+        }
+    }
+
+    /** الوضع الفعلي: وضع المشروع (لو الدكتور ضابطه) > اختيار الطالب (لو الأدمن سامح بالتبديل) > الافتراضي. */
+    private function resolveMode(string $requested, array $cfg, ?string $forcedMode): string
+    {
+        if (in_array($forcedMode, self::MODES, true)) {
+            return $forcedMode;
+        }
+        if (!$cfg['allow_mode_switch'] || !in_array($requested, self::MODES, true)) {
+            return $cfg['default_mode'];
+        }
+
+        return $requested;
+    }
+
     // -- Guards (بيرموا RuntimeException بكود HTTP) ---------------------------------
 
     /**
      * @throws \RuntimeException الكود = HTTP status المناسب (503 / 429)
      */
-    public function assertCanServe(int $userId): void
+    public function assertCanServe(int $userId, ?string $forcedMode = null): void
     {
+        $this->assertProjectAllows($forcedMode);
         $cfg = $this->config();
         if (!$cfg['enabled'] || !$this->client->isConfigured()) {
             throw new \RuntimeException('AI code assistant is not available right now.', 503);
@@ -128,7 +190,7 @@ class AiCodeAssistService
      * @return array{code:string,error:string,language:string,filename:string,line:?int,mode:string,locale:string}
      * @throws \RuntimeException الكود 422 (مدخلات ناقصة) أو 413 (أكبر من الحد)
      */
-    public function normalizeInput(array $input): array
+    public function normalizeInput(array $input, ?string $forcedMode = null): array
     {
         $cfg = $this->config();
 
@@ -150,10 +212,7 @@ class AiCodeAssistService
             $error = '…' . mb_substr($error, -$cfg['max_error_chars']);
         }
 
-        $mode = (string) ($input['mode'] ?? '');
-        if (!$cfg['allow_mode_switch'] || !in_array($mode, self::MODES, true)) {
-            $mode = $cfg['default_mode'];
-        }
+        $mode = $this->resolveMode((string) ($input['mode'] ?? ''), $cfg, $forcedMode);
 
         $locale = in_array($input['locale'] ?? null, ['ar', 'en'], true) ? $input['locale'] : 'ar';
         $line = isset($input['line']) && is_numeric($input['line']) && (int) $input['line'] > 0 ? (int) $input['line'] : null;
@@ -231,7 +290,7 @@ class AiCodeAssistService
      * @return array{code:string,action:string,sel:?array{from:int,to:int,text:string},target:string,language:string,filename:string,mode:string,locale:string}
      * @throws \RuntimeException 422 (مدخلات ناقصة/أمر مجهول) أو 413 (أكبر من الحد)
      */
-    public function normalizeAssistInput(array $input): array
+    public function normalizeAssistInput(array $input, ?string $forcedMode = null): array
     {
         $cfg = $this->config();
 
@@ -252,10 +311,7 @@ class AiCodeAssistService
             throw new \RuntimeException('Choose the language to convert to.', 422);
         }
 
-        $mode = (string) ($input['mode'] ?? '');
-        if (!$cfg['allow_mode_switch'] || !in_array($mode, self::MODES, true)) {
-            $mode = $cfg['default_mode'];
-        }
+        $mode = $this->resolveMode((string) ($input['mode'] ?? ''), $cfg, $forcedMode);
         $locale = in_array($input['locale'] ?? null, ['ar', 'en'], true) ? $input['locale'] : 'ar';
 
         return [
@@ -349,7 +405,7 @@ class AiCodeAssistService
      * @return array{messages:array,active:string,files:array<string,array{content:string,truncated:bool}>,tree:array,sel:?array,error:string,mode:string,locale:string}
      * @throws \RuntimeException 422 (مفيش سؤال) أو 503 (الشات مقفول)
      */
-    public function normalizeChatInput(array $input): array
+    public function normalizeChatInput(array $input, ?string $forcedMode = null): array
     {
         $cfg = $this->config();
         if (!$cfg['chat_enabled']) {
@@ -374,10 +430,7 @@ class AiCodeAssistService
             $error = '…' . mb_substr($error, -$cfg['max_error_chars']);
         }
 
-        $mode = (string) ($input['mode'] ?? '');
-        if (!$cfg['allow_mode_switch'] || !in_array($mode, self::MODES, true)) {
-            $mode = $cfg['default_mode'];
-        }
+        $mode = $this->resolveMode((string) ($input['mode'] ?? ''), $cfg, $forcedMode);
         $locale = in_array($input['locale'] ?? null, ['ar', 'en'], true) ? $input['locale'] : 'ar';
 
         return [
@@ -448,7 +501,7 @@ class AiCodeAssistService
      * @return array{prefix:string,suffix:string,language:string,filename:string}
      * @throws \RuntimeException 422 لو مفيش كود قبل المؤشر
      */
-    public function normalizeCompleteInput(array $input): array
+    public function normalizeCompleteInput(array $input, ?string $forcedMode = null): array
     {
         $prefix = is_string($input['prefix'] ?? null) ? CodeEditBlocks::normalize($input['prefix']) : '';
         $suffix = is_string($input['suffix'] ?? null) ? CodeEditBlocks::normalize($input['suffix']) : '';
@@ -462,6 +515,7 @@ class AiCodeAssistService
             'suffix'   => $suffix,
             'language' => $this->cleanLabel($input['language'] ?? '', 30),
             'filename' => $this->cleanLabel($input['filename'] ?? '', 200),
+            'mode'     => $this->resolveMode('', $this->config(), $forcedMode),
         ];
     }
 
@@ -470,8 +524,9 @@ class AiCodeAssistService
      *
      * @throws \RuntimeException 503 (مقفول/مش متظبط) أو 429 (عدّى الحد في الدقيقة)
      */
-    public function assertCanComplete(int $userId): void
+    public function assertCanComplete(int $userId, ?string $forcedMode = null): void
     {
+        $this->assertProjectAllows($forcedMode);
         $cfg = $this->config();
         if (!$cfg['enabled'] || !$cfg['complete_enabled'] || !$this->client->isConfigured()) {
             throw new \RuntimeException('AI autocomplete is not available right now.', 503);
@@ -493,7 +548,7 @@ class AiCodeAssistService
     public function complete(int $userId, array $in): string
     {
         $cfg = $this->config();
-        $mode = $cfg['default_mode'];
+        $mode = $in['mode'] ?? $cfg['default_mode'];
         $started = microtime(true);
 
         $meta = [];
