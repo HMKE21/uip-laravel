@@ -1918,6 +1918,7 @@ Route::prefix('v1')->group(function () {
     Route::prefix('ai-code')->middleware(['uip.auth', 'uip.exam_lock', 'uip.can:ai.code_assist'])->group(function () {
         Route::get('/status', [AiCodeAssistController::class, 'status']);
         Route::post('/fix', [AiCodeAssistController::class, 'fix']);
+        Route::post('/assist', [AiCodeAssistController::class, 'assist']);
     });
 
     // بند 14 (Admin Settings) — كان الوحيد من كل بورتالات Settings من غير

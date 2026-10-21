@@ -44,7 +44,34 @@ class AiCodeAssistController extends Controller
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
         }
 
-        return response()->stream(function () use ($userId, $input) {
+        return $this->sse(fn (callable $send) => $this->assist->fix($userId, $input, $send));
+    }
+
+    /**
+     * POST /api/v1/ai-code/assist — أوامر قائمة الكليك يمين.
+     * body: action (explain|fix|improve|comment|convert|test), code, sel_from?, sel_to?, target? (للتحويل),
+     *       language?, filename?, mode? ('tutor'|'assistant'), locale? ('ar'|'en')
+     *
+     * نفس أحداث الستريم: start → token* → [edits] → done، أو error في أي لحظة.
+     */
+    public function assist(Request $request)
+    {
+        $userId = (int) $request->attributes->get('uip_user_id');
+
+        try {
+            $input = $this->assist->normalizeAssistInput($request->only(['code', 'action', 'sel_from', 'sel_to', 'target', 'language', 'filename', 'mode', 'locale']));
+            $this->assist->assertCanServe($userId);
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
+        }
+
+        return $this->sse(fn (callable $send) => $this->assist->assist($userId, $input, $send));
+    }
+
+    /** SSE response: `data: {json}\n\n` per event; any exception becomes an `error` event. */
+    private function sse(callable $work)
+    {
+        return response()->stream(function () use ($work) {
             // يقفل أي output buffering ممكن يمنع الـ flush لحظة بلحظة (زي AiAssistantController).
             while (ob_get_level() > 0) {
                 ob_end_flush();
@@ -55,7 +82,7 @@ class AiCodeAssistController extends Controller
             };
 
             try {
-                $this->assist->fix($userId, $input, $send);
+                $work($send);
             } catch (\Throwable $e) {
                 $send(['type' => 'error', 'message' => $e->getMessage()]);
             }

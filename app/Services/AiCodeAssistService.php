@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
+use App\Services\Ai\CodeAssistActions;
 use App\Services\Ai\CodeEditBlocks;
+use App\Services\Ai\EditBlockStreamFilter;
 use App\Services\Concerns\ConfiguresAIClient;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -74,6 +76,7 @@ class AiCodeAssistService
             'default_mode'      => $cfg['default_mode'],
             'allow_mode_switch' => $cfg['allow_mode_switch'],
             'modes'             => $cfg['allow_mode_switch'] ? self::MODES : [$cfg['default_mode']],
+            'actions'           => CodeAssistActions::ACTIONS,
             'limits'            => [
                 'max_code_chars'  => $cfg['max_code_chars'],
                 'max_error_chars' => $cfg['max_error_chars'],
@@ -178,53 +181,7 @@ class AiCodeAssistService
         ];
 
         // بنحجب بلوكات SEARCH/REPLACE من الستريم (الطالب يشوفها كـ diff بعد التحقق مش كنص خام).
-        $filter = new class($emit) {
-            private string $pending = '';
-            private bool $blocked = false;
-            public function __construct(private $emit) {}
-
-            public function push(string $delta): void
-            {
-                if ($this->blocked) {
-                    return;
-                }
-                $this->pending .= str_replace("\r", '', $delta);
-                $nl = strrpos($this->pending, "\n");
-                $ready = '';
-                if ($nl !== false) {
-                    $ready = substr($this->pending, 0, $nl + 1);
-                    $this->pending = substr($this->pending, $nl + 1);
-                }
-                // الجزء الناقص من السطر الأخير: لو بيبدأ بـ "<" ممكن يبقى بداية علامة بلوك — نستنى.
-                if ($this->pending !== '' && $this->pending[0] !== '<') {
-                    $ready .= $this->pending;
-                    $this->pending = '';
-                }
-                $this->emitSafe($ready);
-            }
-
-            public function finish(): void
-            {
-                if (!$this->blocked && $this->pending !== '' && !str_starts_with($this->pending, '<<<<<<<')) {
-                    ($this->emit)(['type' => 'token', 'delta' => $this->pending]);
-                }
-                $this->pending = '';
-            }
-
-            private function emitSafe(string $text): void
-            {
-                if ($text === '') {
-                    return;
-                }
-                if (preg_match('/^<{7} SEARCH/m', $text, $m, PREG_OFFSET_CAPTURE)) {
-                    $this->blocked = true;
-                    $text = rtrim(substr($text, 0, $m[0][1]));
-                }
-                if ($text !== '') {
-                    ($this->emit)(['type' => 'token', 'delta' => $text]);
-                }
-            }
-        };
+        $filter = new EditBlockStreamFilter($emit);
 
         try {
             $raw = $this->client->streamChat(
@@ -251,6 +208,124 @@ class AiCodeAssistService
             $this->logCall($userId, $started, true, $e->getMessage());
             throw $e;
         }
+    }
+
+    // -- Right-click menu actions (explain / fix / improve / comment / convert / test) ---------------------------
+
+    /**
+     * بينضّف ويتحقق من مدخلات أمر قائمة الكليك يمين.
+     *
+     * @param array<string,mixed> $input code, action, sel_from?, sel_to?, target?, language?, filename?, mode?, locale?
+     * @return array{code:string,action:string,sel:?array{from:int,to:int,text:string},target:string,language:string,filename:string,mode:string,locale:string}
+     * @throws \RuntimeException 422 (مدخلات ناقصة/أمر مجهول) أو 413 (أكبر من الحد)
+     */
+    public function normalizeAssistInput(array $input): array
+    {
+        $cfg = $this->config();
+
+        $code = is_string($input['code'] ?? null) ? CodeEditBlocks::normalize($input['code']) : '';
+        if (trim($code) === '') {
+            throw new \RuntimeException('The code to analyse is required.', 422);
+        }
+        if (mb_strlen($code) > $cfg['max_code_chars']) {
+            throw new \RuntimeException("The file is too large for the code assistant (max {$cfg['max_code_chars']} characters).", 413);
+        }
+
+        $action = (string) ($input['action'] ?? '');
+        if (!in_array($action, CodeAssistActions::ACTIONS, true)) {
+            throw new \RuntimeException('Unknown action.', 422);
+        }
+        $target = CodeAssistActions::cleanTarget($input['target'] ?? '');
+        if ($action === 'convert' && $target === '') {
+            throw new \RuntimeException('Choose the language to convert to.', 422);
+        }
+
+        $mode = (string) ($input['mode'] ?? '');
+        if (!$cfg['allow_mode_switch'] || !in_array($mode, self::MODES, true)) {
+            $mode = $cfg['default_mode'];
+        }
+        $locale = in_array($input['locale'] ?? null, ['ar', 'en'], true) ? $input['locale'] : 'ar';
+
+        return [
+            'code'     => $code,
+            'action'   => $action,
+            'sel'      => CodeAssistActions::selection($code, $input['sel_from'] ?? null, $input['sel_to'] ?? null),
+            'target'   => $target,
+            'language' => $this->cleanLabel($input['language'] ?? '', 30),
+            'filename' => $this->cleanLabel($input['filename'] ?? '', 200),
+            'mode'     => $mode,
+            'locale'   => $locale,
+        ];
+    }
+
+    /**
+     * نفس بروتوكول الستريم بتاع fix() (start → token* → [edits] → done | error) بس لأمر من القائمة.
+     * التعديلات بترجع بس لو الأمر والوضع بيسمحوا (CodeAssistActions::allowsEdits) وجوه السطور المحددة بس.
+     *
+     * @param array<string,mixed> $in ناتج normalizeAssistInput()
+     * @throws \Throwable بعد ما يسجّل الخطأ في ai_usage_logs
+     */
+    public function assist(int $userId, array $in, callable $emit): string
+    {
+        $cfg = $this->config();
+        $started = microtime(true);
+        $emit(['type' => 'start', 'mode' => $in['mode'], 'action' => $in['action']]);
+
+        $messages = [
+            ['role' => 'system', 'content' => CodeAssistActions::systemPrompt($in['action'], $in['mode'], $in['locale'], $in['target'], $cfg['system_prompt_extra'])],
+            ['role' => 'user', 'content' => $this->assistUserPrompt($in)],
+        ];
+
+        $filter = new EditBlockStreamFilter($emit);
+
+        try {
+            // الأوامر اللي بترجّع كود كامل (convert/test) محتاجة توكنز أكتر من شرح قصير
+            $maxTokens = in_array($in['action'], ['convert', 'test'], true) ? max($cfg['max_tokens'], 2500) : $cfg['max_tokens'];
+            $raw = $this->client->streamChat($messages, $cfg['temperature'], $maxTokens, fn (string $delta) => $filter->push($delta));
+            $filter->finish();
+
+            $explanation = CodeEditBlocks::visibleText($raw);
+            $edits = [];
+            if (CodeAssistActions::allowsEdits($in['action'], $in['mode'])) {
+                $edits = CodeAssistActions::filterEdits(CodeEditBlocks::parse($raw, $in['code']), $in['sel']);
+                if ($edits) {
+                    $emit(['type' => 'edits', 'edits' => $edits]);
+                }
+            }
+
+            $emit(['type' => 'done', 'content' => $explanation, 'mode' => $in['mode'], 'action' => $in['action'], 'edits_count' => count($edits)]);
+            $this->logCall($userId, $started, false, null);
+            return $explanation;
+        } catch (\Throwable $e) {
+            $this->logCall($userId, $started, true, $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /** @param array<string,mixed> $in */
+    private function assistUserPrompt(array $in): string
+    {
+        $meta = [];
+        if ($in['filename'] !== '') {
+            $meta[] = 'File: ' . $in['filename'];
+        }
+        if ($in['language'] !== '') {
+            $meta[] = 'Language: ' . $in['language'];
+        }
+        if ($in['action'] === 'convert') {
+            $meta[] = 'Convert to: ' . $in['target'];
+        }
+        $sel = $in['sel'];
+        $meta[] = $sel
+            ? "Selected lines: {$sel['from']}-{$sel['to']}"
+            : 'No selection: the request applies to the whole file.';
+
+        $out = implode("\n", $meta) . "\n\n"
+            . "<student_code>\n" . $this->numbered($in['code']) . "\n</student_code>\n";
+        if ($sel) {
+            $out .= "\n<selected_code>\n" . $sel['text'] . "\n</selected_code>\n";
+        }
+        return $out . "\nWhen you write SEARCH blocks, copy the code WITHOUT the line-number prefix shown in <student_code>.";
     }
 
     // -- Prompts -------------------------------------------------------------
