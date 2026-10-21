@@ -5,6 +5,8 @@ namespace App\Services;
 use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Ai\CodeAssistActions;
+use App\Services\Ai\CodeChat;
+use App\Services\Ai\CodeChatEdits;
 use App\Services\Ai\CodeCompletion;
 use App\Services\Ai\CodeEditBlocks;
 use App\Services\Ai\EditBlockStreamFilter;
@@ -65,6 +67,9 @@ class AiCodeAssistService
             'max_error_chars'   => (int) ($cfg['max_error_chars'] ?? 6000),
             'max_tokens'        => (int) ($cfg['max_tokens'] ?? 1500),
             'complete_enabled'  => $get('autocomplete_enabled', '1') !== '0',
+            'chat_enabled'      => $get('chat_enabled', '1') !== '0',
+            'chat_max_tokens'   => max(300, min(6000, (int) ($cfg['chat_max_tokens'] ?? 2000))),
+            'chat_max_context_chars' => max(10000, (int) ($cfg['chat_max_context_chars'] ?? 80000)),
             'complete_rate_limit_per_min' => max(1, (int) $get('complete_rate_limit_per_min', (string) ($cfg['complete_rate_limit_per_min'] ?? 40))),
             'complete_max_tokens' => max(16, min(300, (int) ($cfg['complete_max_tokens'] ?? 96))),
         ];
@@ -83,6 +88,7 @@ class AiCodeAssistService
             'modes'             => $cfg['allow_mode_switch'] ? self::MODES : [$cfg['default_mode']],
             'actions'           => CodeAssistActions::ACTIONS,
             'autocomplete'      => ['available' => $available && $cfg['complete_enabled']],
+            'chat'              => ['available' => $available && $cfg['chat_enabled']],
             'limits'            => [
                 'max_code_chars'  => $cfg['max_code_chars'],
                 'max_error_chars' => $cfg['max_error_chars'],
@@ -332,6 +338,107 @@ class AiCodeAssistService
             $out .= "\n<selected_code>\n" . $sel['text'] . "\n</selected_code>\n";
         }
         return $out . "\nWhen you write SEARCH blocks, copy the code WITHOUT the line-number prefix shown in <student_code>.";
+    }
+
+    // -- Side-panel chat (multi-file context + multi-file edits) ------------------------------------------------
+
+    /**
+     * بينضّف ويتحقق من مدخلات الشات.
+     *
+     * @param array<string,mixed> $input messages[], active_path?, files[{path,content}], tree[], sel_from?, sel_to?, error?, mode?, locale?
+     * @return array{messages:array,active:string,files:array<string,array{content:string,truncated:bool}>,tree:array,sel:?array,error:string,mode:string,locale:string}
+     * @throws \RuntimeException 422 (مفيش سؤال) أو 503 (الشات مقفول)
+     */
+    public function normalizeChatInput(array $input): array
+    {
+        $cfg = $this->config();
+        if (!$cfg['chat_enabled']) {
+            throw new \RuntimeException('The AI chat is not available right now.', 503);
+        }
+
+        $messages = CodeChat::cleanMessages($input['messages'] ?? []);
+        $active = CodeChatEdits::safePath($input['active_path'] ?? null) ?? '';
+        $files = CodeChat::cleanFiles($input['files'] ?? [], $active, $cfg['max_code_chars'], $cfg['chat_max_context_chars']);
+        if ($active !== '' && !isset($files[$active])) {
+            $active = '';
+        }
+        $tree = CodeChat::cleanTree($input['tree'] ?? []);
+
+        $sel = null;
+        if ($active !== '') {
+            $sel = CodeAssistActions::selection($files[$active]['content'], $input['sel_from'] ?? null, $input['sel_to'] ?? null);
+        }
+
+        $error = is_string($input['error'] ?? null) ? $this->cleanTerminalOutput($input['error']) : '';
+        if (mb_strlen($error) > $cfg['max_error_chars']) {
+            $error = '…' . mb_substr($error, -$cfg['max_error_chars']);
+        }
+
+        $mode = (string) ($input['mode'] ?? '');
+        if (!$cfg['allow_mode_switch'] || !in_array($mode, self::MODES, true)) {
+            $mode = $cfg['default_mode'];
+        }
+        $locale = in_array($input['locale'] ?? null, ['ar', 'en'], true) ? $input['locale'] : 'ar';
+
+        return [
+            'messages' => $messages,
+            'active'   => $active,
+            'files'    => $files,
+            'tree'     => $tree,
+            'sel'      => $sel,
+            'error'    => $error,
+            'mode'     => $mode,
+            'locale'   => $locale,
+        ];
+    }
+
+    /**
+     * نفس بروتوكول الستريم (start → token* → [edits] → done | error). التعديلات (وضع assistant بس) متعددة الملفات
+     * وكل واحد اتأكد إنه بيطابق ملف اتبعت للموديل، أو ملف جديد مش موجود في المشروع.
+     *
+     * @param array<string,mixed> $in ناتج normalizeChatInput()
+     * @throws \Throwable بعد ما يسجّل الخطأ في ai_usage_logs
+     */
+    public function chat(int $userId, array $in, callable $emit): string
+    {
+        $cfg = $this->config();
+        $started = microtime(true);
+        $emit(['type' => 'start', 'mode' => $in['mode']]);
+
+        $history = $in['messages'];
+        $last = array_pop($history);
+        $messages = [['role' => 'system', 'content' => CodeChat::systemPrompt($in['mode'], $in['locale'], $cfg['system_prompt_extra'])]];
+        foreach ($history as $m) {
+            $messages[] = $m;
+        }
+        $messages[] = [
+            'role'    => 'user',
+            'content' => CodeChat::userContent($last['content'], $in['files'], $in['active'], $in['tree'], $in['sel'], $in['error']),
+        ];
+
+        $filter = new EditBlockStreamFilter($emit);
+
+        try {
+            $raw = $this->client->streamChat($messages, $cfg['temperature'], $cfg['chat_max_tokens'], fn (string $delta) => $filter->push($delta));
+            $filter->finish();
+
+            $explanation = CodeEditBlocks::visibleText($raw);
+            $edits = [];
+            if ($in['mode'] === 'assistant') {
+                $contents = array_map(fn ($f) => $f['content'], $in['files']);
+                $edits = CodeChatEdits::parse($raw, $contents, $in['tree']);
+                if ($edits) {
+                    $emit(['type' => 'edits', 'edits' => $edits]);
+                }
+            }
+
+            $emit(['type' => 'done', 'content' => $explanation, 'mode' => $in['mode'], 'edits_count' => count($edits)]);
+            $this->logCall($userId, $started, false, null);
+            return $explanation;
+        } catch (\Throwable $e) {
+            $this->logCall($userId, $started, true, $e->getMessage());
+            throw $e;
+        }
     }
 
     // -- Autocomplete (ghost text) ------------------------------------------------------------------------------

@@ -1919,6 +1919,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/status', [AiCodeAssistController::class, 'status']);
         Route::post('/fix', [AiCodeAssistController::class, 'fix']);
         Route::post('/assist', [AiCodeAssistController::class, 'assist']);
+        Route::post('/chat', [AiCodeAssistController::class, 'chat']);
         Route::post('/complete', [AiCodeAssistController::class, 'complete']);
     });
 

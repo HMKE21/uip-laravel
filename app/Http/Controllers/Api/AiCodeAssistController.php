@@ -69,6 +69,27 @@ class AiCodeAssistController extends Controller
     }
 
     /**
+     * POST /api/v1/ai-code/chat — شات اللوحة الجانبية.
+     * body: messages[{role,content}], active_path?, files[{path,content}], tree[]?, sel_from?, sel_to?, error?, mode?, locale?
+     *
+     * نفس أحداث الستريم: start → token* → [edits] → done، أو error في أي لحظة. التعديلات متعددة الملفات:
+     * { path, kind: 'edit'|'create', search, replace, start_line, end_line }.
+     */
+    public function chat(Request $request)
+    {
+        $userId = (int) $request->attributes->get('uip_user_id');
+
+        try {
+            $input = $this->assist->normalizeChatInput($request->only(['messages', 'active_path', 'files', 'tree', 'sel_from', 'sel_to', 'error', 'mode', 'locale']));
+            $this->assist->assertCanServe($userId);
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
+        }
+
+        return $this->sse(fn (callable $send) => $this->assist->chat($userId, $input, $send));
+    }
+
+    /**
      * POST /api/v1/ai-code/complete — الإكمال التلقائي (ghost text). body: prefix, suffix?, language?, filename?
      * رد عادي (مش ستريم): { completion: "…" } — '' لو مفيش اقتراح. أي فشل من المزوّد = 503 بسيط (الفرونت بيتجاهله).
      */

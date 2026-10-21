@@ -34,7 +34,7 @@ return [
 
     // مساعد الكود داخل محرر MyPC (App\Services\AiCodeAssistService). الأدمن يقدر يلبس فوق
     // enabled / default_mode / allow_mode_switch / rate_limit_per_min / temperature / system_prompt_extra
-    // + autocomplete_enabled / complete_rate_limit_per_min (الإكمال التلقائي)
+    // + autocomplete_enabled / complete_rate_limit_per_min (الإكمال التلقائي) + chat_enabled (شات اللوحة الجانبية)
     // من جدول settings (مفاتيح ai_code_*) من غير تعديل كود.
     'code' => [
         'max_code_chars'     => (int) env('AI_CODE_MAX_CODE_CHARS', 30000),
@@ -43,6 +43,8 @@ return [
         'rate_limit_per_min' => (int) env('AI_CODE_RATE_LIMIT_PER_MIN', 10),
         'complete_rate_limit_per_min' => (int) env('AI_CODE_COMPLETE_RATE_LIMIT_PER_MIN', 40), // الإكمال التلقائي
         'complete_max_tokens' => (int) env('AI_CODE_COMPLETE_MAX_TOKENS', 96),
+        'chat_max_tokens'    => (int) env('AI_CODE_CHAT_MAX_TOKENS', 2000),          // شات اللوحة الجانبية
+        'chat_max_context_chars' => (int) env('AI_CODE_CHAT_MAX_CONTEXT_CHARS', 80000), // إجمالي الملفات في طلب واحد
         'default_mode'       => env('AI_CODE_DEFAULT_MODE', 'tutor'), // tutor | assistant
     ],
 
