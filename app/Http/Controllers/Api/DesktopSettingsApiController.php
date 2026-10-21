@@ -172,7 +172,7 @@ class DesktopSettingsApiController extends Controller
             'updatedAt' => 'required|numeric|min:0',
             'prefs'     => 'nullable|array',
             'icons'     => 'nullable|array',
-            'mode'      => 'nullable|string|in:light,dark',
+            'mode'      => 'nullable|string|in:light,classic,dark',
             'locale'    => 'nullable|string|in:ar,en',
         ]);
         $row = $this->row($uid);
