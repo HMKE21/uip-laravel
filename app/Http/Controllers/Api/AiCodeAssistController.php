@@ -68,6 +68,28 @@ class AiCodeAssistController extends Controller
         return $this->sse(fn (callable $send) => $this->assist->assist($userId, $input, $send));
     }
 
+    /**
+     * POST /api/v1/ai-code/complete — الإكمال التلقائي (ghost text). body: prefix, suffix?, language?, filename?
+     * رد عادي (مش ستريم): { completion: "…" } — '' لو مفيش اقتراح. أي فشل من المزوّد = 503 بسيط (الفرونت بيتجاهله).
+     */
+    public function complete(Request $request)
+    {
+        $userId = (int) $request->attributes->get('uip_user_id');
+
+        try {
+            $input = $this->assist->normalizeCompleteInput($request->only(['prefix', 'suffix', 'language', 'filename']));
+            $this->assist->assertCanComplete($userId);
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
+        }
+
+        try {
+            return $this->apiSuccess(['completion' => $this->assist->complete($userId, $input)]);
+        } catch (\Throwable $e) {
+            return $this->apiError('AI autocomplete is not available right now.', null, 503);
+        }
+    }
+
     /** SSE response: `data: {json}\n\n` per event; any exception becomes an `error` event. */
     private function sse(callable $work)
     {

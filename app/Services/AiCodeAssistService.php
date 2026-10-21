@@ -5,9 +5,11 @@ namespace App\Services;
 use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Ai\CodeAssistActions;
+use App\Services\Ai\CodeCompletion;
 use App\Services\Ai\CodeEditBlocks;
 use App\Services\Ai\EditBlockStreamFilter;
 use App\Services\Concerns\ConfiguresAIClient;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -62,6 +64,9 @@ class AiCodeAssistService
             'max_code_chars'    => (int) ($cfg['max_code_chars'] ?? 30000),
             'max_error_chars'   => (int) ($cfg['max_error_chars'] ?? 6000),
             'max_tokens'        => (int) ($cfg['max_tokens'] ?? 1500),
+            'complete_enabled'  => $get('autocomplete_enabled', '1') !== '0',
+            'complete_rate_limit_per_min' => max(1, (int) $get('complete_rate_limit_per_min', (string) ($cfg['complete_rate_limit_per_min'] ?? 40))),
+            'complete_max_tokens' => max(16, min(300, (int) ($cfg['complete_max_tokens'] ?? 96))),
         ];
     }
 
@@ -77,6 +82,7 @@ class AiCodeAssistService
             'allow_mode_switch' => $cfg['allow_mode_switch'],
             'modes'             => $cfg['allow_mode_switch'] ? self::MODES : [$cfg['default_mode']],
             'actions'           => CodeAssistActions::ACTIONS,
+            'autocomplete'      => ['available' => $available && $cfg['complete_enabled']],
             'limits'            => [
                 'max_code_chars'  => $cfg['max_code_chars'],
                 'max_error_chars' => $cfg['max_error_chars'],
@@ -328,6 +334,92 @@ class AiCodeAssistService
         return $out . "\nWhen you write SEARCH blocks, copy the code WITHOUT the line-number prefix shown in <student_code>.";
     }
 
+    // -- Autocomplete (ghost text) ------------------------------------------------------------------------------
+
+    /**
+     * @param array<string,mixed> $input prefix (الكود قبل المؤشر), suffix (بعده)?, language?, filename?
+     * @return array{prefix:string,suffix:string,language:string,filename:string}
+     * @throws \RuntimeException 422 لو مفيش كود قبل المؤشر
+     */
+    public function normalizeCompleteInput(array $input): array
+    {
+        $prefix = is_string($input['prefix'] ?? null) ? CodeEditBlocks::normalize($input['prefix']) : '';
+        $suffix = is_string($input['suffix'] ?? null) ? CodeEditBlocks::normalize($input['suffix']) : '';
+        if (trim($prefix) === '') {
+            throw new \RuntimeException('Nothing to complete.', 422);
+        }
+        [$prefix, $suffix] = CodeCompletion::clip($prefix, $suffix);
+
+        return [
+            'prefix'   => $prefix,
+            'suffix'   => $suffix,
+            'language' => $this->cleanLabel($input['language'] ?? '', 30),
+            'filename' => $this->cleanLabel($input['filename'] ?? '', 200),
+        ];
+    }
+
+    /**
+     * rate limit بالـ Cache (مش DB): الإكمال بيتنادى كتير والمفروض ما يكتبش صف في الداتابيز لكل طلب قبل الفحص.
+     *
+     * @throws \RuntimeException 503 (مقفول/مش متظبط) أو 429 (عدّى الحد في الدقيقة)
+     */
+    public function assertCanComplete(int $userId): void
+    {
+        $cfg = $this->config();
+        if (!$cfg['enabled'] || !$cfg['complete_enabled'] || !$this->client->isConfigured()) {
+            throw new \RuntimeException('AI autocomplete is not available right now.', 503);
+        }
+        $key = 'ai_code_complete:' . $userId . ':' . now()->format('YmdHi');
+        Cache::add($key, 0, 90);
+        if ((int) Cache::increment($key) > $cfg['complete_rate_limit_per_min']) {
+            throw new \RuntimeException('Too many autocomplete requests. Please wait a moment.', 429);
+        }
+    }
+
+    /**
+     * بيرجّع النص اللي يتحط عند المؤشر ('' = مفيش اقتراح). الوضع بيجي من إعدادات الأدمن (default_mode):
+     * tutor = سطر/جملة قصيرة بس، assistant = بلوك صغير.
+     *
+     * @param array<string,mixed> $in ناتج normalizeCompleteInput()
+     * @throws \Throwable لو المزوّد فشل (بعد ما يسجّل الخطأ)
+     */
+    public function complete(int $userId, array $in): string
+    {
+        $cfg = $this->config();
+        $mode = $cfg['default_mode'];
+        $started = microtime(true);
+
+        $meta = [];
+        if ($in['filename'] !== '') {
+            $meta[] = 'File: ' . $in['filename'];
+        }
+        if ($in['language'] !== '') {
+            $meta[] = 'Language: ' . $in['language'];
+        }
+        $messages = [
+            ['role' => 'system', 'content' => CodeCompletion::systemPrompt($mode)],
+            ['role' => 'user', 'content' => ($meta ? implode("\n", $meta) . "\n\n" : '') . "<code>\n" . $in['prefix'] . '<cursor>' . $in['suffix'] . "\n</code>"],
+        ];
+
+        try {
+            $this->client->setTimeout(10);
+            try {
+                $raw = $this->client->chat($messages, 0.1, $cfg['complete_max_tokens'])['text'];
+            } catch (\RuntimeException $e) {
+                if (!str_contains($e->getMessage(), 'empty completion')) {
+                    throw $e;
+                }
+                $raw = ''; // "مفيش حاجة تتضاف" إجابة صالحة للإكمال
+            }
+            $text = CodeCompletion::clean($raw, $in['prefix'], $in['suffix'], CodeCompletion::maxLines($mode));
+            $this->logCall($userId, $started, false, null, 'code_complete');
+            return $text;
+        } catch (\Throwable $e) {
+            $this->logCall($userId, $started, true, $e->getMessage(), 'code_complete');
+            throw $e;
+        }
+    }
+
     // -- Prompts -------------------------------------------------------------
 
     private function systemPrompt(string $mode, string $locale, string $extra): string
@@ -434,7 +526,7 @@ TXT;
         return mb_substr(trim($value), 0, $max);
     }
 
-    private function logCall(int $userId, float $started, bool $wasError, ?string $errorMessage): void
+    private function logCall(int $userId, float $started, bool $wasError, ?string $errorMessage, string $portal = 'code'): void
     {
         try {
             $logging = $this->settings->get('ai_assistant_logging_enabled', 'global', null, '1') === '1';
@@ -445,7 +537,7 @@ TXT;
             DB::table('ai_usage_logs')->insert([
                 'user_id'           => $userId,
                 'conversation_id'   => null,
-                'portal'            => 'code',
+                'portal'            => $portal,
                 'model'             => (string) ($model !== '' && $model !== null ? $model : config('ai.model', '')),
                 'prompt_tokens'     => 0,
                 'completion_tokens' => 0,
