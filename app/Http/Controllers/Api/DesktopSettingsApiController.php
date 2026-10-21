@@ -193,6 +193,16 @@ class DesktopSettingsApiController extends Controller
             $prefs[$k] = in_array($v, $allowed, true) ? $v : $def;
         }
         $prefs['brightness'] = max(40, min(100, (int) ($in['brightness'] ?? 100)));
+        // icons the person removed from the desktop / Dock (restorable from Settings): short keys only, so they follow the account to every device
+        foreach (['hiddenIcons', 'hiddenDock'] as $hk) {
+            $list = [];
+            foreach (array_slice((array) ($in[$hk] ?? []), 0, 32) as $v) {
+                if (is_string($v) && preg_match('/^[a-z]{1,16}(:[a-z]{1,16})?$/', $v)) {
+                    $list[] = $v;
+                }
+            }
+            $prefs[$hk] = array_values(array_unique($list));
+        }
         if ($prefs['wallpaper'] === 'custom' && empty($row->wallpaper)) {
             $prefs['wallpaper'] = 'aurora'; // مفيش صورة مرفوعة لسه
         }
