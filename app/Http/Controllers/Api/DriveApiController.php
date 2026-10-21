@@ -232,7 +232,7 @@ class DriveApiController extends Controller
                 'direct_upload' => $this->drive->directEnabled(),
                 'max_file_mb'   => (int) config('drive.max_file_mb'),
                 'cloud'         => [
-                    'google'    => ['enabled' => $g !== [], 'client_id' => $g[0] ?? null],
+                    'google'    => ['enabled' => $g !== [], 'client_id' => $g[0] ?? null, 'server_flow' => app(\App\Services\GoogleDriveOAuthService::class)->isConfigured()],
                     'microsoft' => ['enabled' => $msId !== '', 'client_id' => $msId ?: null, 'authority' => (string) config('services.microsoft.authority')],
                 ],
             ], 'OK');

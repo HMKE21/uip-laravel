@@ -112,6 +112,7 @@ use App\Http\Controllers\Api\ProjectsApiController;
 use App\Http\Controllers\Api\SandboxApiController;
 use App\Http\Controllers\Api\DriveApiController;
 use App\Http\Controllers\Api\GithubConnectionApiController;
+use App\Http\Controllers\Api\GoogleDriveConnectionApiController;
 use App\Http\Controllers\Api\AdminApprovalsApiController;
 use App\Http\Controllers\Api\AdminFeaturedProjectsApiController;
 use App\Http\Controllers\Api\SupervisorProjectsApiController;
@@ -2084,5 +2085,18 @@ Route::prefix('v1/github')->group(function () {
         Route::post('/link', [GithubConnectionApiController::class, 'linkToProject'])->middleware('uip.can:project.edit_own');
         Route::post('/create-project', [GithubConnectionApiController::class, 'createProject'])->middleware('uip.can:project.create');
         Route::delete('/connection', [GithubConnectionApiController::class, 'disconnect']);
+    });
+});
+
+// Google Drive backup link (OAuth code flow + refresh token) — the callback is public on purpose (Google redirects the
+// pop-up without an Authorization header; identity comes from the cached state).
+Route::prefix('v1/cloud/google')->group(function () {
+    Route::get('/callback', [GoogleDriveConnectionApiController::class, 'callback']);
+
+    Route::middleware('uip.auth')->group(function () {
+        Route::get('/status', [GoogleDriveConnectionApiController::class, 'status']);
+        Route::post('/connect', [GoogleDriveConnectionApiController::class, 'connect']);
+        Route::get('/token', [GoogleDriveConnectionApiController::class, 'token'])->middleware('throttle:60,1');
+        Route::delete('/connection', [GoogleDriveConnectionApiController::class, 'disconnect']);
     });
 });

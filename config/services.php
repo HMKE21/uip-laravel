@@ -32,6 +32,10 @@ return [
     // مع بعض). ممكن تحط أكتر من ID مفصولين بفاصلة.
     'google' => [
         'client_ids' => env('GOOGLE_CLIENT_IDS', env('GOOGLE_CLIENT_ID', '')),
+        // Drive backup that stays connected (server-side OAuth + refresh token). Secret of the SAME Web client, and
+        // GOOGLE_DRIVE_REDIRECT = https://<api-domain>/api/v1/cloud/google/callback (add it to the client's Authorized redirect URIs).
+        'client_secret'  => env('GOOGLE_CLIENT_SECRET', ''),
+        'drive_redirect' => env('GOOGLE_DRIVE_REDIRECT', ''),
     ],
 
     // Microsoft (OneDrive backup من جوه "جهازي"). سجّل SPA app في Entra ID (Azure) وحط Redirect URI = https://<front-domain>/ms-auth.html

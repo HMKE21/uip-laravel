@@ -20,6 +20,13 @@ class UipSecurityHeadersMiddleware
             $response->headers->set($name, $value);
         }
 
+        // Google Drive pop-up callback: a tiny page that must run one inline script (postMessage to the opener) and must keep
+        // window.opener, so it gets a narrower CSP and no same-origin COOP. Nothing user-controlled is printed (values are JSON-escaped).
+        if ($request->is('api/v1/cloud/google/callback')) {
+            $response->headers->set('Cross-Origin-Opener-Policy', 'unsafe-none');
+            $response->headers->set('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+        }
+
         return $response;
     }
 }
