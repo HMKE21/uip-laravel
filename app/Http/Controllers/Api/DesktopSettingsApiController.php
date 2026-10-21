@@ -212,7 +212,16 @@ class DesktopSettingsApiController extends Controller
             if (count($icons) >= self::MAX_ICONS) {
                 break;
             }
-            if (is_string($k) && strlen($k) <= 64 && is_array($p) && isset($p['c'], $p['r']) && is_numeric($p['c']) && is_numeric($p['r'])) {
+            if (!is_string($k) || strlen($k) > 64 || !is_array($p)) {
+                continue;
+            }
+            if (isset($p['x'], $p['y']) && is_numeric($p['x']) && is_numeric($p['y'])) { // free position, in pixels
+                $x = (int) round((float) $p['x']);
+                $y = (int) round((float) $p['y']);
+                if ($x >= 0 && $y >= 0 && $x < 20000 && $y < 20000) {
+                    $icons[$k] = ['x' => $x, 'y' => $y];
+                }
+            } elseif (isset($p['c'], $p['r']) && is_numeric($p['c']) && is_numeric($p['r'])) { // old grid cell
                 $c = (int) $p['c'];
                 $r = (int) $p['r'];
                 if ($c >= 0 && $r >= 0 && $c < 1000 && $r < 1000) {
