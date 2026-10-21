@@ -32,6 +32,17 @@ return [
         'max_chunk_seconds' => (int) env('AI_TRANSCRIBE_CHUNK_SECONDS', 240),
     ],
 
+    // مساعد الكود داخل محرر MyPC (App\Services\AiCodeAssistService). الأدمن يقدر يلبس فوق
+    // enabled / default_mode / allow_mode_switch / rate_limit_per_min / temperature / system_prompt_extra
+    // من جدول settings (مفاتيح ai_code_*) من غير تعديل كود.
+    'code' => [
+        'max_code_chars'     => (int) env('AI_CODE_MAX_CODE_CHARS', 30000),
+        'max_error_chars'    => (int) env('AI_CODE_MAX_ERROR_CHARS', 6000),
+        'max_tokens'         => (int) env('AI_CODE_MAX_TOKENS', 1500),
+        'rate_limit_per_min' => (int) env('AI_CODE_RATE_LIMIT_PER_MIN', 10),
+        'default_mode'       => env('AI_CODE_DEFAULT_MODE', 'tutor'), // tutor | assistant
+    ],
+
     // مفتاح على مستوى الميزة: حتى لو enabled فوق = true، تخصيص الإيميلات
     // فاضل مقفول لحد ما ده يتفعّل صراحة.
     'email_personalization_enabled' => (bool) env('AI_EMAIL_PERSONALIZATION_ENABLED', false),

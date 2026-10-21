@@ -74,6 +74,7 @@ use App\Http\Controllers\Api\AccountPrivacyApiController;
 use App\Http\Controllers\Api\DesktopSettingsApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
+use App\Http\Controllers\Api\AiCodeAssistController;
 use App\Http\Controllers\Api\AiAssistantSettingsController;
 use App\Http\Controllers\Api\FaqIntentController;
 use App\Http\Controllers\Api\SecurityDashboardApiController;
@@ -1910,6 +1911,13 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/search', [AiAssistantController::class, 'search']);
         });
+    });
+
+    // مساعد الكود داخل محرر MyPC (ZipWorkbench) — شرح/تصليح الأخطاء. نفس حماية الـ AI Assistant:
+    // uip.exam_lock يقفله أثناء الامتحان، وصلاحية مستقلة ai.code_assist يتحكم فيها الأدمن من /admin/roles.
+    Route::prefix('ai-code')->middleware(['uip.auth', 'uip.exam_lock', 'uip.can:ai.code_assist'])->group(function () {
+        Route::get('/status', [AiCodeAssistController::class, 'status']);
+        Route::post('/fix', [AiCodeAssistController::class, 'fix']);
     });
 
     // بند 14 (Admin Settings) — كان الوحيد من كل بورتالات Settings من غير

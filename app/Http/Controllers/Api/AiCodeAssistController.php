@@ -1,0 +1,75 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Services\AiCodeAssistService;
+use Illuminate\Http\Request;
+
+/**
+ * مساعد الكود داخل محرر MyPC — /api/v1/ai-code/*
+ *
+ * محمي في routes/api.php بـ uip.auth + uip.exam_lock + uip.can:ai.code_assist:
+ *  - uip.exam_lock: الطالب في امتحان شغّال ما يقدرش يستخدمه خالص (على السيرفر).
+ *  - ai.code_assist: صلاحية مستقلة يتحكم فيها الأدمن من /admin/roles.
+ *
+ * الـ streaming بنفس صيغة المساعد العام: `data: {json}\n\n` (fetch + ReadableStream في الفرونت).
+ * أخطاء ما قبل الستريم (صلاحية/حجم/rate limit) بترجع JSON عادي بـ apiError وكود HTTP مناسب.
+ */
+class AiCodeAssistController extends Controller
+{
+    public function __construct(private AiCodeAssistService $assist)
+    {
+    }
+
+    /** GET /api/v1/ai-code/status — الفرونت يعرض الزرار على أساسه. */
+    public function status()
+    {
+        return $this->apiSuccess($this->assist->status());
+    }
+
+    /**
+     * POST /api/v1/ai-code/fix — body: code, error, language?, filename?, line?, mode? ('tutor'|'assistant'), locale? ('ar'|'en')
+     *
+     * أحداث الستريم: start → token* → [edits] → done، أو error في أي لحظة.
+     */
+    public function fix(Request $request)
+    {
+        $userId = (int) $request->attributes->get('uip_user_id');
+
+        try {
+            $input = $this->assist->normalizeInput($request->only(['code', 'error', 'language', 'filename', 'line', 'mode', 'locale']));
+            $this->assist->assertCanServe($userId);
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
+        }
+
+        return response()->stream(function () use ($userId, $input) {
+            // يقفل أي output buffering ممكن يمنع الـ flush لحظة بلحظة (زي AiAssistantController).
+            while (ob_get_level() > 0) {
+                ob_end_flush();
+            }
+            $send = function (array $payload): void {
+                echo 'data: ' . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) . "\n\n";
+                @flush();
+            };
+
+            try {
+                $this->assist->fix($userId, $input, $send);
+            } catch (\Throwable $e) {
+                $send(['type' => 'error', 'message' => $e->getMessage()]);
+            }
+        }, 200, [
+            'Content-Type'      => 'text/event-stream; charset=UTF-8',
+            'Cache-Control'     => 'no-cache',
+            'X-Accel-Buffering' => 'no',
+            'Connection'        => 'keep-alive',
+        ]);
+    }
+
+    private function httpStatus(\RuntimeException $e): int
+    {
+        $code = (int) $e->getCode();
+        return in_array($code, [413, 422, 429, 503], true) ? $code : 422;
+    }
+}
