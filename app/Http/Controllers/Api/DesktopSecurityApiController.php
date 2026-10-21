@@ -147,7 +147,7 @@ class DesktopSecurityApiController extends Controller
             ->where('user_id', $uid)
             ->orderByDesc('created_at')
             ->limit($limit)
-            ->get(['id', 'device_label', 'location_label', 'ip_address', 'is_active', 'created_at', 'revoked_at', 'revoke_reason', 'user_agent'])
+            ->get(['id', 'device_label', 'location_label', 'ip_address', 'is_active', 'created_at', 'last_activity_at', 'revoked_at', 'revoke_reason', 'user_agent'])
             ->map(fn ($r) => [
                 'id'             => (int) $r->id,
                 'device_label'   => $r->device_label,
@@ -156,6 +156,8 @@ class DesktopSecurityApiController extends Controller
                 'ip_address'     => $r->ip_address,
                 'active'         => (bool) $r->is_active,
                 'signed_in_at'   => $r->created_at,
+                'last_activity_at' => $r->last_activity_at,
+                'user_agent'     => $r->user_agent ? mb_substr((string) $r->user_agent, 0, 300) : null,
                 'ended_at'       => $r->revoked_at,
                 'end_reason'     => $r->revoke_reason,
             ])->all();
