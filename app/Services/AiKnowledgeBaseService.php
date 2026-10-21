@@ -16,7 +16,7 @@ class AiKnowledgeBaseService
     {
         return <<<TXT
         ABOUT UIP
-        UIP (University Innovation Platform) is a web platform (Arabic/English, RTL/LTR, light/dark theme)
+        UIP (Ultimate Intelligent Platform) is a web platform (Arabic/English, RTL/LTR, light/dark theme)
         that connects Students and Universities around graduation projects. Around them sit faculty
         accounts, academic staff, supervisors, and three internal operating portals: Platform Admin,
         Cybersecurity, and Data Analysis. It was founded in 2026.
@@ -173,7 +173,7 @@ class AiKnowledgeBaseService
                 . 'forecasting/trend reasoning over the data you are given, and dashboard summary writing.',
         ];
 
-        return $map[$portal] ?? 'You are helping a user of the University Innovation Platform. Answer helpfully '
+        return $map[$portal] ?? 'You are helping a user of the Ultimate Intelligent Platform (UIP). Answer helpfully '
             . 'and precisely based on the context and data you have been given; if a future portal is not covered '
             . 'by a specific persona yet, fall back to general, accurate platform assistance.';
     }

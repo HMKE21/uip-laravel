@@ -508,7 +508,7 @@ class GithubCodeReviewService
     /** @return array{0:string,1:string} [system, user] prompts لـ completeJson() */
     private function buildAnalysisPrompt(array $files): array
     {
-        $system = 'You are a senior software engineer performing a real code review for a university innovation platform. '
+        $system = 'You are a senior software engineer performing a real code review for the Ultimate Intelligent Platform (UIP), a university projects platform. '
             . 'You will be given the actual contents of real source files from a student project repository. '
             . 'Judge the ACTUAL code shown — do not invent findings about files you were not given. '
             . 'Score the codebase 0-100 on each of six independent dimensions: '

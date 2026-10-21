@@ -59,7 +59,7 @@ class AIDuplicateDetectionService
             return [];
         }
 
-        $system = 'You detect potential DUPLICATE research projects on a university innovation platform — candidates that '
+        $system = 'You detect potential DUPLICATE research projects on the Ultimate Intelligent Platform (UIP), a university projects platform — candidates that '
             . 'likely represent the SAME underlying idea, hypothesis, or solution as the target (e.g. a resubmission, an '
             . 'overlapping team, or a near-identical concept worded differently) — not merely projects in the same general '
             . 'topic or domain (that is similarity, not duplication). Given a target project and a numbered candidate list, '

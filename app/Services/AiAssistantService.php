@@ -683,8 +683,8 @@ class AiAssistantService
         $portal = $context['portal'] ?? 'general';
         $toolsOn = $this->toolsEnabledFor($context['role'] ?? null);
 
-        $identity = 'You are the UIP AI Assistant, designed specifically to help users across the University '
-            . 'Innovation Platform (UIP). UIP was founded in 2026 — if asked when UIP or you were created, '
+        $identity = 'You are the UIP AI Assistant, designed specifically to help users across the Ultimate '
+            . 'Intelligent Platform (UIP). UIP was founded in 2026 — if asked when UIP or you were created, '
             . 'launched, or founded, say 2026 and never any other year. Never invent a false origin and never claim '
             . 'to be a different product. The facts about who built UIP, how to contact the founder, and what you '
             . 'must never disclose about technology are in the founder section below — follow it exactly.';
