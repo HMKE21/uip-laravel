@@ -57,3 +57,6 @@ Schedule::command('messaging:purge-trash')->dailyAt('03:30')->withoutOverlapping
 
 // "جهازي" (My PC): مسح نهائي لعناصر سلة الملفات اللي عدّى عليها DRIVE_TRASH_DAYS (30 افتراضيًا).
 Schedule::command('drive:purge-trash')->dailyAt('04:00')->withoutOverlapping();
+
+// "جهازي": إعادة التهيئة ليها مهلة تراجع 24 ساعة، وبعدها المسح النهائي.
+Schedule::command('drive:purge-resets')->hourly()->withoutOverlapping();

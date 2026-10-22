@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\DesktopResetService;
 use App\Services\DriveService;
 use App\Services\MailService;
 use App\Services\OtpService;
@@ -26,7 +27,9 @@ use Illuminate\Support\Facades\Log;
  *  POST lock/disable        إلغاء باسورد القفل
  *  POST lock/otp            "نسيت الباسورد": رمز 6 أرقام على إيميل الحساب
  *  POST lock/reset          الرمز + باسورد جديد
- *  POST reset               إعادة تهيئة الجهاز: مسح كل الملفات + الإعدادات + الويدجت + باسورد القفل (محتاج confirm=RESET وباسورد الحساب)
+ *  GET  reset               حالة إعادة التهيئة: {pending, expires_at, seconds_left, exam_active}
+ *  POST reset               إعادة تهيئة الجهاز (محتاج confirm=RESET وباسورد الحساب): الملفات للسلة 24 ساعة + الإعدادات/الويدجت/باسورد القفل بتتمسح، وفيه تراجع
+ *  POST reset/undo          تراجع عن إعادة التهيئة (جوه الـ 24 ساعة)
  *
  * الباسورد بيتخزن bcrypt بس، وكل المحاولات الغلط محكومة بـ OtpGuard (نفس حماية رموز OTP): 5 غلطات => حظر 10 دقايق.
  * ملاحظة: ده قفل لواجهة سطح المكتب (خصوصية على نفس الجهاز) — مش بديل لتسجيل الخروج.
@@ -37,7 +40,7 @@ class DesktopSettingsApiController extends Controller
     private const MAX_WALLPAPER_CHARS = 4_000_000;
     private const MAX_ICONS = 600;
 
-    public function __construct(private OtpService $otp, private MailService $mail, private DriveService $drive)
+    public function __construct(private OtpService $otp, private MailService $mail, private DriveService $drive, private DesktopResetService $resets)
     {
     }
 
@@ -290,10 +293,19 @@ class DesktopSettingsApiController extends Controller
 
     // -- factory reset ----------------------------------------------------------------------------------
 
+    /** GET reset — حالة المهلة + هل فيه امتحان شغّال (الواجهة بتقفل المسح وقتها). */
+    public function resetStatus(Request $request): JsonResponse
+    {
+        $uid = $this->uid($request);
+
+        return $this->apiSuccess($this->resets->status($uid) + ['exam_active' => $this->resets->examActive($uid)], 'Reset status retrieved successfully.');
+    }
+
     /**
-     * "إعادة تهيئة الجهاز": بيمسح نهائيًا كل ملفات "جهازي" (والسلة والنسخ القديمة وروابط المشاركة) + إعدادات سطح المكتب + الويدجت
-     * + صورة الخلفية + باسورد القفل. مفيش رجوع. الحساب والجلسات بيفضلوا زي ما هم.
+     * "إعادة تهيئة الجهاز": كل ملفات "جهازي" بتتنقل للسلة وتتمسح نهائيًا بعد 24 ساعة (لحد وقتها: تراجع)، وإعدادات سطح المكتب
+     * والويدجت والخلفية وباسورد القفل بترجع للافتراضي (اللقطة محفوظة للتراجع). الحساب والجلسات بيفضلوا زي ما هم.
      * الحماية: لازم confirm=RESET + باسورد الحساب (حساب Google بدون باسورد: الجلسة كفاية)، والغلط بيتحسب في OtpGuard.
+     * ممنوعة أثناء امتحان شغّال (409).
      */
     public function reset(Request $request): JsonResponse
     {
@@ -306,6 +318,9 @@ class DesktopSettingsApiController extends Controller
         if ((string) $request->input('confirm', '') !== 'RESET') {
             return $this->apiError($ar ? 'لازم تأكّد إعادة التهيئة.' : 'Please confirm the reset.', ['confirm' => ['required']], 422);
         }
+        if ($this->resets->examActive($uid)) {
+            return $this->apiError($ar ? 'فيه امتحان شغّال دلوقتي. سلّم الامتحان الأول وبعدها أعد التهيئة.' : 'An exam is in progress. Submit it first, then reset.', ['exam' => ['active']], 409);
+        }
         if ($b = $this->blocked($uid, $ar)) {
             return $b;
         }
@@ -315,26 +330,32 @@ class DesktopSettingsApiController extends Controller
         OtpGuard::recordSuccess($this->lockScope($uid));
 
         try {
-            $removed = $this->drive->resetAll($uid);
+            $removed = $this->resets->reset($uid);
         } catch (\Throwable $e) {
             Log::error('desktop reset failed', ['uid' => $uid, 'error' => $e->getMessage()]);
 
-            return $this->apiError($ar ? 'حصلت مشكلة أثناء المسح. حاول تاني.' : 'Something went wrong while erasing. Please try again.', null, 500);
-        }
-
-        $now = (int) (microtime(true) * 1000);
-        // updated_ms = الآن: أي جهاز تاني لسه عنده إعدادات قديمة بياخد النسخة الفاضية بدل ما يرفعها تاني
-        DB::table('desktop_settings')->where('user_id', $uid)->update([
-            'prefs' => null, 'icons' => null, 'mode' => null, 'wallpaper' => null, 'wp_hash' => null,
-            'lock_hash' => null, 'lock_changed_at' => now(), 'updated_ms' => $now, 'updated_at' => now(),
-        ]);
-        if (\Illuminate\Support\Facades\Schema::hasTable('desktop_widgets')) {
-            DB::table('desktop_widgets')->where('user_id', $uid)->update(['items' => null, 'updated_ms' => $now, 'updated_at' => now()]);
+            return $this->apiError($ar ? 'حصلت مشكلة أثناء إعادة التهيئة. حاول تاني.' : 'Something went wrong while resetting. Please try again.', null, 500);
         }
         $this->otp->forget(self::OTP_PURPOSE, $uid);
         Log::info('desktop reset', ['uid' => $uid, 'removed' => $removed]);
 
-        return $this->apiSuccess(['removed' => $removed], 'Your PC was reset.');
+        return $this->apiSuccess($this->resets->status($uid) + ['removed' => $removed], 'Your PC was reset.');
+    }
+
+    /** POST reset/undo — رجّع الملفات والإعدادات (جوه الـ 24 ساعة بس). */
+    public function resetUndo(Request $request): JsonResponse
+    {
+        $uid = $this->uid($request);
+        try {
+            $restored = $this->resets->undo($uid);
+        } catch (\App\Support\DriveException $e) {
+            $c = $e->getCode();
+
+            return $this->apiError($e->getMessage(), null, $c >= 400 && $c < 600 ? $c : 422);
+        }
+        Log::info('desktop reset undone', ['uid' => $uid, 'restored' => $restored]);
+
+        return $this->apiSuccess(['restored' => $restored], 'Your PC was restored.');
     }
 
     // -- lock password ----------------------------------------------------------------------------------

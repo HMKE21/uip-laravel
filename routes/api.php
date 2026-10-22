@@ -264,6 +264,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/move', [DriveApiController::class, 'move']);
         Route::post('/copy', [DriveApiController::class, 'copy'])->middleware('throttle:30,1');
         Route::post('/zip', [DriveApiController::class, 'zip'])->middleware('throttle:20,1');
+        Route::get('/archive-all', [DriveApiController::class, 'archiveAll'])->middleware('throttle:3,1');
         Route::post('/trash', [DriveApiController::class, 'trash']);
         Route::post('/restore', [DriveApiController::class, 'restore']);
         Route::post('/purge', [DriveApiController::class, 'purge']);
@@ -1621,7 +1622,9 @@ Route::prefix('v1')->group(function () {
         Route::post('/lock/disable', [DesktopSettingsApiController::class, 'lockDisable'])->middleware('throttle:20,1');
         Route::post('/lock/otp', [DesktopSettingsApiController::class, 'lockOtp'])->middleware('throttle:10,1');
         Route::post('/lock/reset', [DesktopSettingsApiController::class, 'lockReset'])->middleware('throttle:20,1');
+        Route::get('/reset', [DesktopSettingsApiController::class, 'resetStatus'])->middleware('throttle:60,1');
         Route::post('/reset', [DesktopSettingsApiController::class, 'reset'])->middleware('throttle:5,1');
+        Route::post('/reset/undo', [DesktopSettingsApiController::class, 'resetUndo'])->middleware('throttle:10,1');
         // الأمان والأجهزة (حد الأجهزة، قفل/خروج عن بُعد، القفل التلقائي، السكون، الخروج بعد الخمول) — DesktopSecurityApiController
         Route::prefix('security')->group(function () {
             Route::get('/', [\App\Http\Controllers\Api\DesktopSecurityApiController::class, 'show'])->middleware('throttle:60,1');

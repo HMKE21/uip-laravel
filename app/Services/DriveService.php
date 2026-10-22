@@ -1155,24 +1155,32 @@ class DriveService
     }
 
     /**
-     * إعادة تهيئة "جهازي": بيمسح نهائيًا كل حاجة عند المستخدم (ملفات + مجلدات + السلة + النسخ القديمة + روابط المشاركة).
-     * مفيش رجوع منه. الحساب نفسه ما بيتأثرش.
-     * @return int عدد العناصر الجذرية اللي اتمسحت
+     * إعادة تهيئة "جهازي" (الخطوة الأولى): كل العناصر الجذرية بتتنقل للسلة (مش بتتمسح) عشان يبقى فيه تراجع.
+     * المسح النهائي بعدها في finalizeReset(). @return int[] ids الجذور اللي اتنقلت
      */
-    public function resetAll(int $uid): int
+    public function softResetAll(int $uid): array
     {
         $roots = $this->q($uid)->whereNull('deleted_at')->whereNull('parent_id')->pluck('id')->map(fn ($i) => (int) $i)->all();
-        $n = 0;
-        if ($roots) {
-            $n += $this->trash($uid, $roots);
+        foreach (array_chunk($roots, 400) as $chunk) {
+            $this->trash($uid, $chunk);
         }
-        $n += $this->emptyTrash($uid);
-        // أي نسخ قديمة فاضلة + روابط المشاركة + الفهرس النصي (لو فضل منها حاجة)
-        $this->clearAllVersions($uid);
-        if (\Illuminate\Support\Facades\Schema::hasTable('drive_shares')) {
-            DB::table('drive_shares')->where('user_id', $uid)->delete();
+        return $roots;
+    }
+
+    /** المسح النهائي لجذور إعادة تهيئة: الملفات + النسخ القديمة + الفهرس النصي + روابط المشاركة بتاعتها. */
+    public function finalizeReset(int $uid, array $roots): int
+    {
+        $roots = array_values(array_filter(array_map('intval', $roots), fn ($i) => $i > 0));
+        if (!$roots) {
+            return 0;
         }
-        return $n;
+        $nodeIds = $this->q($uid)->whereIn('trash_root_id', $roots)->pluck('id')->all();
+        foreach (array_chunk($nodeIds, 500) as $chunk) {
+            if (\Illuminate\Support\Facades\Schema::hasTable('drive_shares')) {
+                DB::table('drive_shares')->where('user_id', $uid)->whereIn('node_id', $chunk)->delete();
+            }
+        }
+        return $this->purgeRoots($uid, $roots);
     }
 
     /** أمر drive:purge-trash — بيمسح كل اللي عدّى trash_days، لكل المستخدمين. */

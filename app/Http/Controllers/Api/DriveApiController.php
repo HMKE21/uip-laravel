@@ -429,6 +429,27 @@ class DriveApiController extends Controller
         ])->deleteFileAfterSend(true);
     }
 
+    /** كل ملفات "جهازي" في ZIP واحد (نسخة احتياطية قبل إعادة التهيئة). لو أكبر من الحد بيرجّع 413 برسالة واضحة. */
+    public function archiveAll(Request $request)
+    {
+        if (!$this->roleAllowed($request)) {
+            return $this->apiError('My PC is not available for your account type.', null, 403);
+        }
+        $uid = (int) $request->attributes->get('uip_user_id');
+        try {
+            $ids = \App\Models\DriveNode::query()->where('user_id', $uid)->whereNull('deleted_at')->whereNull('parent_id')->pluck('id')->map(fn ($i) => (int) $i)->all();
+            if (!$ids) {
+                return $this->apiError('There are no files to download.', null, 404);
+            }
+            [$tmp] = $this->drive->buildZip($uid, $ids);
+        } catch (DriveException $e) {
+            return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 422);
+        }
+        return response()->download($tmp, 'UIP-PC-backup.zip', [
+            'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',
+        ])->deleteFileAfterSend(true);
+    }
+
     public function sync(Request $request, $id)
     {
         return $this->guard($request, function ($uid) use ($request, $id) {
