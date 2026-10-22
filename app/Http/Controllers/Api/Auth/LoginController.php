@@ -114,6 +114,14 @@ class LoginController extends Controller
 
         $user = User::where('email', $data['email'])->first();
 
+        // الإيميل الجامعي: لو مفيش حساب بالعنوان ده كإيميل أساسي، نجرّبه كعنوان جامعي لطالب (الأولوية دايماً للإيميل الأساسي).
+        if (!$user && \Illuminate\Support\Facades\Schema::hasColumn('students', 'university_email')) {
+            $uid = \Illuminate\Support\Facades\DB::table('students')->where('university_email', strtolower(trim($data['email'])))->value('user_id');
+            if ($uid) {
+                $user = User::find($uid);
+            }
+        }
+
         // Account Lockout policy — يتفحص قبل كلمة السر بالظبط زي القديم،
         // عشان مستخدم مقفول ياخد نفس الرسالة أيًا كان اللي كتبه.
         if ($user) {
