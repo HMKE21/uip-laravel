@@ -15,6 +15,8 @@ use Illuminate\Http\Request;
  *   GET    /drive?parent_id=          محتوى مجلد (الجذر لو فاضي) + breadcrumb + الحصة
  *   GET    /drive/tree                كل المجلدات (الشجرة الجانبية)
  *   GET    /drive/search?q=
+ *   GET    /drive/storage             مراقب التخزين: تصنيف + أكبر الملفات/المجلدات + السلة + النسخ القديمة + المكرر
+ *   DELETE /drive/versions            مسح كل النسخ القديمة (سجل الإصدارات) لتحرير مساحة
  *   GET    /drive/resolve?ids=1,2,3   بيانات عناصر بالـ id (اختصارات سطح المكتب) + gone = اللي اتمسح نهائيًا
  *   GET    /drive/search-content?q=   بحث جوّه محتوى الملفات النصية (مطابقات + رقم السطر)
  *   GET    /drive/usage
@@ -92,6 +94,19 @@ class DriveApiController extends Controller
     public function tree(Request $request)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->tree($uid), 'Folder tree retrieved successfully.'));
+    }
+
+    public function storage(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->storageReport($uid), 'OK'));
+    }
+
+    public function clearVersions(Request $request)
+    {
+        return $this->guard($request, function ($uid) {
+            $freed = $this->drive->clearAllVersions($uid);
+            return $this->apiSuccess(['freed_bytes' => $freed, 'freed_human' => \App\Models\DriveNode::humanSize($freed)], 'Old versions deleted.');
+        });
     }
 
     public function resolve(Request $request)

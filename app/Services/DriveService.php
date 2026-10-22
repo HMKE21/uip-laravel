@@ -842,6 +842,154 @@ class DriveService
         return ['items' => $items, 'gone' => array_values(array_diff($ids, $rows->pluck('id')->map(fn ($i) => (int) $i)->all()))];
     }
 
+    // ---- storage monitor -----------------------------------------------------------------------------
+
+    private const CATEGORIES = [
+        'images'    => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'heic', 'tif', 'tiff', 'ico'],
+        'video'     => ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv', 'flv'],
+        'audio'     => ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma'],
+        'documents' => ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'txt', 'md', 'csv', 'epub'],
+        'code'      => ['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'rb', 'go', 'rs', 'kt', 'swift', 'html', 'htm', 'css', 'scss', 'json', 'xml', 'yml', 'yaml', 'sql', 'sh', 'vue', 'ipynb'],
+        'archives'  => ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'iso'],
+    ];
+
+    private function categoryOf(string $name): string
+    {
+        $ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+        foreach (self::CATEGORIES as $cat => $exts) {
+            if (in_array($ext, $exts, true)) {
+                return $cat;
+            }
+        }
+        return 'other';
+    }
+
+    /**
+     * "إيه اللي واخد المساحة": حصة + تصنيف الملفات + أكبر الملفات والمجلدات + السلة + النسخ القديمة + الملفات المكررة (نفس الـ sha1).
+     * بيقرا كل عناصر المستخدم مرة واحدة (سقف DRIVE_MAX_NODES) ويحسب في الذاكرة.
+     */
+    public function storageReport(int $uid): array
+    {
+        $rows = $this->q($uid)->get(['id', 'parent_id', 'type', 'name', 'size_bytes', 'sha1', 'deleted_at', 'updated_at']);
+        $byId = [];
+        foreach ($rows as $n) {
+            $byId[(int) $n->id] = $n;
+        }
+        $pathOf = function (?int $pid) use (&$byId): string {
+            $parts = [];
+            $g = 0;
+            while ($pid !== null && isset($byId[$pid]) && $g++ < 64) {
+                array_unshift($parts, $byId[$pid]->name);
+                $pid = $byId[$pid]->parent_id !== null ? (int) $byId[$pid]->parent_id : null;
+            }
+            return implode('/', $parts);
+        };
+
+        $cats = [];
+        $folderSize = [];
+        $files = [];
+        $bySha = [];
+        $trashBytes = 0;
+        $trashCount = 0;
+        $liveBytes = 0;
+        foreach ($rows as $n) {
+            if ($n->type !== 'file') {
+                continue;
+            }
+            $size = (int) $n->size_bytes;
+            if ($n->deleted_at !== null) {
+                $trashBytes += $size;
+                $trashCount++;
+                continue;
+            }
+            $liveBytes += $size;
+            $cat = $this->categoryOf((string) $n->name);
+            $cats[$cat] ??= ['key' => $cat, 'bytes' => 0, 'count' => 0];
+            $cats[$cat]['bytes'] += $size;
+            $cats[$cat]['count']++;
+            $files[] = [$size, $n, $cat];
+            if ($size > 0 && $n->sha1) {
+                $bySha[$n->sha1][] = $n;
+            }
+            $pid = $n->parent_id !== null ? (int) $n->parent_id : null;
+            $g = 0;
+            while ($pid !== null && isset($byId[$pid]) && $g++ < 64) {
+                $folderSize[$pid] = ($folderSize[$pid] ?? 0) + $size;
+                $pid = $byId[$pid]->parent_id !== null ? (int) $byId[$pid]->parent_id : null;
+            }
+        }
+
+        usort($files, fn ($a, $b) => $b[0] <=> $a[0]);
+        $largest = [];
+        foreach (array_slice($files, 0, 40) as [$size, $n, $cat]) {
+            if ($size <= 0) {
+                break;
+            }
+            $largest[] = [
+                'id' => (int) $n->id, 'name' => $n->name, 'size_bytes' => $size, 'size_human' => DriveNode::humanSize($size), 'category' => $cat,
+                'parent_id' => $n->parent_id !== null ? (int) $n->parent_id : null, 'path' => $pathOf($n->parent_id !== null ? (int) $n->parent_id : null),
+                'updated_at' => $n->updated_at,
+            ];
+        }
+
+        arsort($folderSize);
+        $folders = [];
+        foreach (array_slice($folderSize, 0, 10, true) as $fid => $size) {
+            $f = $byId[$fid] ?? null;
+            if (!$f || $f->deleted_at !== null || $size <= 0) {
+                continue;
+            }
+            $folders[] = [
+                'id' => (int) $fid, 'name' => $f->name, 'size_bytes' => (int) $size, 'size_human' => DriveNode::humanSize((int) $size),
+                'path' => $pathOf($f->parent_id !== null ? (int) $f->parent_id : null),
+            ];
+        }
+
+        $dups = [];
+        foreach ($bySha as $sha => $list) {
+            if (count($list) < 2) {
+                continue;
+            }
+            usort($list, fn ($a, $b) => (int) $a->id <=> (int) $b->id); // الأقدم الأول = اللي بنحتفظ بيه
+            $size = (int) $list[0]->size_bytes;
+            $dups[] = [
+                'size_bytes' => $size, 'size_human' => DriveNode::humanSize($size), 'count' => count($list), 'wasted_bytes' => $size * (count($list) - 1),
+                'files' => array_map(fn ($n) => [
+                    'id' => (int) $n->id, 'name' => $n->name, 'path' => $pathOf($n->parent_id !== null ? (int) $n->parent_id : null), 'updated_at' => $n->updated_at,
+                ], array_slice($list, 0, 20)),
+            ];
+        }
+        usort($dups, fn ($a, $b) => $b['wasted_bytes'] <=> $a['wasted_bytes']);
+        $dups = array_slice($dups, 0, 15);
+        $wasted = array_sum(array_column($dups, 'wasted_bytes'));
+
+        $ver = DriveNodeVersion::query()->where('user_id', $uid)->selectRaw('COALESCE(SUM(size_bytes),0) as b, COUNT(*) as c')->first();
+        $cats = array_values($cats);
+        usort($cats, fn ($a, $b) => $b['bytes'] <=> $a['bytes']);
+
+        return [
+            'usage'      => $this->usage($uid),
+            'live_bytes' => $liveBytes,
+            'categories' => $cats,
+            'largest'    => $largest,
+            'folders'    => $folders,
+            'trash'      => ['bytes' => $trashBytes, 'count' => $trashCount, 'human' => DriveNode::humanSize($trashBytes)],
+            'versions'   => ['bytes' => (int) ($ver->b ?? 0), 'count' => (int) ($ver->c ?? 0), 'human' => DriveNode::humanSize((int) ($ver->b ?? 0))],
+            'duplicates' => ['groups' => $dups, 'wasted_bytes' => (int) $wasted, 'wasted_human' => DriveNode::humanSize((int) $wasted)],
+        ];
+    }
+
+    /** يمسح كل النسخ القديمة (سجل الإصدارات) لكل ملفات المستخدم. @return int البايتات اللي اتحرّرت */
+    public function clearAllVersions(int $uid): int
+    {
+        $freed = 0;
+        DriveNodeVersion::query()->where('user_id', $uid)->orderBy('id')->chunkById(200, function ($rows) use (&$freed) {
+            $freed += (int) $rows->sum('size_bytes');
+            $this->dropVersionRows($rows);
+        });
+        return $freed;
+    }
+
     // ---- recycle bin ---------------------------------------------------------------------------------
 
     public function trash(int $uid, array $ids): int
