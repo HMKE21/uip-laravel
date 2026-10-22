@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\DriveContentSearchService;
 use App\Services\DriveService;
 use App\Support\DriveException;
 use Illuminate\Http\Request;
@@ -14,6 +15,7 @@ use Illuminate\Http\Request;
  *   GET    /drive?parent_id=          محتوى مجلد (الجذر لو فاضي) + breadcrumb + الحصة
  *   GET    /drive/tree                كل المجلدات (الشجرة الجانبية)
  *   GET    /drive/search?q=
+ *   GET    /drive/search-content?q=   بحث جوّه محتوى الملفات النصية (مطابقات + رقم السطر)
  *   GET    /drive/usage
  *   GET    /drive/templates           قوالب المشاريع
  *   POST   /drive/folders             {parent_id,name}  أو {parent_id,path:"a/b/c"} => mkdir -p
@@ -89,6 +91,11 @@ class DriveApiController extends Controller
     public function tree(Request $request)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->tree($uid), 'Folder tree retrieved successfully.'));
+    }
+
+    public function searchContent(Request $request, DriveContentSearchService $content)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($content->search($uid, (string) $request->query('q', '')), 'Content search results.'));
     }
 
     public function search(Request $request)

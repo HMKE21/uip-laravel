@@ -26,6 +26,7 @@ return [
     'max_depth'        => (int) env('DRIVE_MAX_DEPTH', 32),
     'max_text_edit_kb' => (int) env('DRIVE_MAX_TEXT_KB', 2048),
     'trash_days'       => (int) env('DRIVE_TRASH_DAYS', 30),
+    'index_max_kb'     => max(8, (int) env('DRIVE_INDEX_MAX_KB', 256)), // أكبر ملف نصي بيتفهرس للبحث في المحتوى
     'max_versions'     => max(0, (int) env('DRIVE_MAX_VERSIONS', 20)),
     'version_max_mb'   => max(1, (int) env('DRIVE_VERSION_MAX_MB', 25)),
     'versions_mb'      => max(1, (int) env('DRIVE_VERSIONS_MB', 300)),

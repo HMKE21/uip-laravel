@@ -882,6 +882,9 @@ class DriveService
             if ($fileIds) { // their old versions go with them
                 $this->dropVersionRows(DriveNodeVersion::query()->where('user_id', $uid)->whereIn('node_id', $fileIds)->get());
             }
+            if ($fileIds) { // والفهرس النصي بتاعهم (البحث في المحتوى)
+                DB::table('drive_node_text')->whereIn('node_id', $fileIds)->delete();
+            }
             $this->q($uid)->whereIn('trash_root_id', $chunk)->delete();
             $freed += count($chunk);
         }
