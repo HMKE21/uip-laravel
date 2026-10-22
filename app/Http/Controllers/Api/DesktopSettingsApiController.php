@@ -198,6 +198,11 @@ class DesktopSettingsApiController extends Controller
             $prefs[$k] = in_array($v, $allowed, true) ? $v : $def;
         }
         $prefs['brightness'] = max(40, min(100, (int) ($in['brightness'] ?? 100)));
+        // accessibility: text size, reduced motion, high contrast (they follow the account to every device)
+        $fs = (string) ($in['fontScale'] ?? 'm');
+        $prefs['fontScale'] = in_array($fs, ['m', 'l', 'xl'], true) ? $fs : 'm';
+        $prefs['reduceMotion'] = filter_var($in['reduceMotion'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $prefs['highContrast'] = filter_var($in['highContrast'] ?? false, FILTER_VALIDATE_BOOLEAN);
         // icons the person removed from the desktop / Dock (restorable from Settings): short keys only, so they follow the account to every device
         foreach (['hiddenIcons', 'hiddenDock'] as $hk) {
             $list = [];
