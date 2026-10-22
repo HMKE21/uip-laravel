@@ -44,6 +44,7 @@ use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
+use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
 use App\Http\Controllers\Api\StudentSettingsApiController;
 use App\Http\Controllers\Api\AcademicStaffSettingsApiController;
@@ -1170,6 +1171,21 @@ Route::prefix('v1')->group(function () {
         Route::delete('/{id}', [StudentsApiController::class, 'delete']);
         Route::post('/{id}/resend', [StudentsApiController::class, 'resend']);
         Route::patch('/{id}/password', [StudentsApiController::class, 'setPassword'])->where('id', '[0-9]+');
+    });
+
+    // الحضور والغياب (QR متغيّر + جيوفنس الكلية / مكان المدرّس). مديرو المادة يفتحوا ويديروا، والطالب يسجّل ويشوف نسبته.
+    Route::prefix('attendance')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::post('/check-in', [CourseAttendanceApiController::class, 'checkIn'])->middleware('throttle:20,1');
+        Route::get('/my', [CourseAttendanceApiController::class, 'mine']);
+        Route::get('/locations', [CourseAttendanceApiController::class, 'locations']);
+        Route::put('/locations/{facultyId}', [CourseAttendanceApiController::class, 'setLocation'])->where('facultyId', '[0-9]+');
+        Route::get('/courses/{id}/windows', [CourseAttendanceApiController::class, 'windows'])->where('id', '[0-9]+');
+        Route::post('/courses/{id}/windows', [CourseAttendanceApiController::class, 'open'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+        Route::get('/courses/{id}/report', [CourseAttendanceApiController::class, 'report'])->where('id', '[0-9]+');
+        Route::get('/windows/{wid}', [CourseAttendanceApiController::class, 'show'])->where('wid', '[0-9]+');
+        Route::get('/windows/{wid}/qr', [CourseAttendanceApiController::class, 'qr'])->where('wid', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/windows/{wid}/close', [CourseAttendanceApiController::class, 'close'])->where('wid', '[0-9]+');
+        Route::put('/windows/{wid}/students/{sid}', [CourseAttendanceApiController::class, 'mark'])->where(['wid' => '[0-9]+', 'sid' => '[0-9]+']);
     });
 
     // Courses (المواد): university / faculty / doctor manage them, students enrol, doctors see the roster.
