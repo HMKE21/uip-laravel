@@ -53,6 +53,18 @@ class UipTrustedClientIpMiddleware
             }
         }
 
+        // ثغرة IP spoofing: TRUSTED_PROXIES='*' معناها إن Symfony بياخد أول (أقصى شمال) قيمة في X-Forwarded-For،
+        // وده المهاجم هو اللي بيكتبه. فأي حد يقدر يبعت X-Forwarded-For: <أي IP عشوائي> ويتخطى rate limit الدخول
+        // وعدّاد المحاولات الفاشلة وسياسات IP/Country. لو الطلب ماجاش بتوقيع صالح من Vercel، بنسيب بس آخر قيمة
+        // (اللي أضافها الـ edge بتاع Railway بنفسه) ونمسح اللي قبلها اللي جاي من العميل.
+        $signedOk = isset($valid) && $valid === true;
+        if (!$signedOk && filter_var(env('TRUST_ONLY_LAST_XFF', true), FILTER_VALIDATE_BOOLEAN)) {
+            $xff = array_values(array_filter(array_map('trim', explode(',', (string) $request->headers->get('X-Forwarded-For', '')))));
+            if (count($xff) > 1) {
+                $request->headers->set('X-Forwarded-For', end($xff));
+            }
+        }
+
         // الـ headers الداخلية دي ماتوصلش لأي كود تاني.
         foreach (self::HEADERS as $h) {
             $request->headers->remove($h);
