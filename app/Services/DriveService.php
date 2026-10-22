@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\DriveNode;
+use App\Models\DriveNodeVersion;
 use App\Support\DriveArchive;
 use App\Support\DriveException;
 use Illuminate\Contracts\Filesystem\Filesystem;
@@ -393,18 +394,27 @@ class DriveService
             throw new DriveException('The file is larger than the maximum allowed size.', 413);
         }
         $old = $n->storage_path;
+        $was = $this->versionAttrs($n);
+        $newSha = sha1_file($newLocal) ?: null;
         $sp = $this->writeBlob($uid, $newLocal);
+        $kept = false;
         try {
-            $n->forceFill([
-                'storage_path' => $sp, 'size_bytes' => $size, 'sha1' => sha1_file($newLocal) ?: null,
-                'mime_type' => $mime ?: $this->detectMime($newLocal, $n->name),
-            ])->save();
+            DB::transaction(function () use ($uid, $n, $sp, $size, $newSha, $newLocal, $mime, $was, &$kept) {
+                $n->forceFill([
+                    'storage_path' => $sp, 'size_bytes' => $size, 'sha1' => $newSha,
+                    'mime_type' => $mime ?: $this->detectMime($newLocal, $n->name),
+                ])->save();
+                $kept = $this->keepVersion($uid, (int) $n->id, $was, $newSha, 'save');
+            });
         } catch (\Throwable $e) {
             $this->disk()->delete($sp);
             throw $e;
         }
-        if ($old) {
+        if ($old && !$kept) {
             $this->disk()->delete($old);
+        }
+        if ($kept) {
+            $this->pruneVersions($uid, (int) $n->id);
         }
         return $n;
     }
@@ -601,14 +611,22 @@ class DriveService
                 throw new DriveException('The file is larger than the maximum allowed size.', 413);
             }
             $old = $n->storage_path;
-            $n->forceFill([
-                'storage_path' => $sp, 'size_bytes' => $size,
-                'sha1' => $sha1 && preg_match('/^[a-f0-9]{40}$/i', $sha1) ? strtolower($sha1) : null,
-                'mime_type' => $p['mime'] ?: $n->mime_type,
-            ])->save();
+            $was = $this->versionAttrs($n);
+            $newSha = $sha1 && preg_match('/^[a-f0-9]{40}$/i', $sha1) ? strtolower($sha1) : null;
+            $kept = false;
+            DB::transaction(function () use ($uid, $n, $sp, $size, $newSha, $p, $was, &$kept) {
+                $n->forceFill([
+                    'storage_path' => $sp, 'size_bytes' => $size, 'sha1' => $newSha,
+                    'mime_type' => $p['mime'] ?: $n->mime_type,
+                ])->save();
+                $kept = $this->keepVersion($uid, (int) $n->id, $was, $newSha, 'save');
+            });
             $committed = true;
-            if ($old) {
+            if ($old && !$kept) {
                 $disk->delete($old);
+            }
+            if ($kept) {
+                $this->pruneVersions($uid, (int) $n->id);
             }
         } finally {
             if (!$committed) {
@@ -860,6 +878,10 @@ class DriveService
                     $this->disk()->delete($r->storage_path);
                 }
             }
+            $fileIds = $rows->where('type', 'file')->pluck('id')->all();
+            if ($fileIds) { // their old versions go with them
+                $this->dropVersionRows(DriveNodeVersion::query()->where('user_id', $uid)->whereIn('node_id', $fileIds)->get());
+            }
             $this->q($uid)->whereIn('trash_root_id', $chunk)->delete();
             $freed += count($chunk);
         }
@@ -896,6 +918,173 @@ class DriveService
                 }
             });
         return $n;
+    }
+
+    // ---- version history -----------------------------------------------------------------------------
+    // لما ملف بيتحفظ فوق نفسه، النسخة القديمة (الـ blob) بتفضل على الـ disk وبتتسجّل في drive_node_versions بدل ما تتمسح.
+    // السقف: DRIVE_MAX_VERSIONS لكل ملف، و DRIVE_VERSIONS_MB لكل طالب (الأقدم بيتمسح)، وملفات أكبر من DRIVE_VERSION_MAX_MB مالهاش سجل.
+
+    /** @return array{storage_path:?string,size_bytes:int,sha1:?string,mime_type:?string,name:string} */
+    private function versionAttrs(DriveNode $n): array
+    {
+        return [
+            'storage_path' => $n->storage_path, 'size_bytes' => (int) $n->size_bytes, 'sha1' => $n->sha1,
+            'mime_type' => $n->mime_type, 'name' => (string) $n->name,
+        ];
+    }
+
+    /**
+     * يسجّل الـ blob القديم كنسخة. true = اتحفظ (الكولر ما يمسحوش من الـ disk). false = مفيش داعي (محتوى مطابق / كبير / السجل مقفول).
+     * لازم يتنده جوّه الـ transaction بتاعة التحديث، وبعدها pruneVersions().
+     */
+    private function keepVersion(int $uid, int $nodeId, array $was, ?string $newSha1, string $reason): bool
+    {
+        if ((int) config('drive.max_versions') < 1 || empty($was['storage_path'])) {
+            return false;
+        }
+        if ((int) $was['size_bytes'] > (int) config('drive.version_max_mb') * 1048576) {
+            return false;
+        }
+        $sha = $was['sha1'] ?? null;
+        if ($sha && $newSha1 && $sha === $newSha1) {
+            return false; // نفس المحتوى: مفيش حاجة تترجّع
+        }
+        if ($sha) {
+            $last = DriveNodeVersion::query()->where('user_id', $uid)->where('node_id', $nodeId)->orderByDesc('id')->first(['sha1']);
+            if ($last && $last->sha1 === $sha) {
+                return false; // آخر نسخة محفوظة هي نفسها
+            }
+        }
+        DriveNodeVersion::create([
+            'user_id' => $uid, 'node_id' => $nodeId, 'name' => $was['name'], 'mime_type' => $was['mime_type'],
+            'size_bytes' => (int) $was['size_bytes'], 'storage_path' => $was['storage_path'], 'sha1' => $sha,
+            'reason' => $reason, 'created_at' => now(),
+        ]);
+        return true;
+    }
+
+    private function dropVersionRows($rows): void
+    {
+        foreach ($rows as $v) {
+            try {
+                $this->disk()->delete($v->storage_path);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+        }
+        $ids = collect($rows)->pluck('id')->all();
+        if ($ids) {
+            DriveNodeVersion::query()->whereIn('id', $ids)->delete();
+        }
+    }
+
+    /** يقصّ الأقدم: أكتر من max_versions للملف، وأكتر من versions_mb للطالب كله (آخر نسخة للملف الحالي مبتتمسحش). */
+    private function pruneVersions(int $uid, int $nodeId): void
+    {
+        $max = max(1, (int) config('drive.max_versions'));
+        $extra = DriveNodeVersion::query()->where('user_id', $uid)->where('node_id', $nodeId)->orderByDesc('id')->get()->slice($max);
+        if ($extra->isNotEmpty()) {
+            $this->dropVersionRows($extra);
+        }
+        $cap = (int) config('drive.versions_mb') * 1048576;
+        $total = (int) DriveNodeVersion::query()->where('user_id', $uid)->sum('size_bytes');
+        if ($total <= $cap) {
+            return;
+        }
+        $newest = (int) DriveNodeVersion::query()->where('user_id', $uid)->where('node_id', $nodeId)->max('id');
+        $drop = [];
+        foreach (DriveNodeVersion::query()->where('user_id', $uid)->where('id', '!=', $newest)->orderBy('id')->cursor() as $v) {
+            if ($total <= $cap) {
+                break;
+            }
+            $drop[] = $v;
+            $total -= (int) $v->size_bytes;
+        }
+        $this->dropVersionRows($drop);
+    }
+
+    private function findVersion(int $uid, int $nodeId, int $versionId): DriveNodeVersion
+    {
+        $this->find($uid, $nodeId); // الملف لازم يكون ملكه وغير محذوف
+        $v = DriveNodeVersion::query()->where('user_id', $uid)->where('node_id', $nodeId)->where('id', $versionId)->first();
+        if (!$v) {
+            throw new DriveException('Version not found.', 404);
+        }
+        return $v;
+    }
+
+    /** @return array{node:array,items:array<int,array>,limit:int} الأحدث الأول */
+    public function versions(int $uid, int $nodeId): array
+    {
+        $n = $this->find($uid, $nodeId);
+        if ($n->isFolder()) {
+            throw new DriveException('A folder has no versions.', 422);
+        }
+        $rows = DriveNodeVersion::query()->where('user_id', $uid)->where('node_id', $nodeId)->orderByDesc('id')->get();
+        return [
+            'node'  => $n->toRowArray(),
+            'items' => $rows->map(fn (DriveNodeVersion $v) => $v->toRowArray())->all(),
+            'limit' => (int) config('drive.max_versions'),
+        ];
+    }
+
+    /** @return array{0:DriveNodeVersion,1:resource} */
+    public function openVersionStream(int $uid, int $nodeId, int $versionId): array
+    {
+        $v = $this->findVersion($uid, $nodeId, $versionId);
+        $s = $this->disk()->readStream($v->storage_path);
+        if (!$s) {
+            throw new DriveException('This version is missing from storage.', 404);
+        }
+        return [$v, $s];
+    }
+
+    /** يرجّع الملف لنسخة قديمة. الحالي بيتحفظ كنسخة جديدة، فالاسترجاع نفسه ممكن يتراجع عنه. */
+    public function restoreVersion(int $uid, int $nodeId, int $versionId): DriveNode
+    {
+        $v = $this->findVersion($uid, $nodeId, $versionId);
+        $n = $this->find($uid, $nodeId);
+        $delta = (int) $v->size_bytes - (int) $n->size_bytes;
+        if ($delta > 0) {
+            $this->assertQuota($uid, $delta);
+        }
+        $disk = $this->disk();
+        $sp = "u{$uid}/" . Str::uuid()->toString();
+        try {
+            if (!$disk->copy($v->storage_path, $sp)) {
+                throw new DriveException('Could not restore this version.', 500);
+            }
+        } catch (DriveException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new DriveException('This version is missing from storage.', 404);
+        }
+        $old = $n->storage_path;
+        $was = $this->versionAttrs($n);
+        $kept = false;
+        try {
+            DB::transaction(function () use ($uid, $n, $v, $sp, $was, &$kept) {
+                $n->forceFill([
+                    'storage_path' => $sp, 'size_bytes' => (int) $v->size_bytes, 'sha1' => $v->sha1,
+                    'mime_type' => $v->mime_type ?: $n->mime_type,
+                ])->save();
+                $kept = $this->keepVersion($uid, (int) $n->id, $was, $v->sha1, 'restore');
+            });
+        } catch (\Throwable $e) {
+            $disk->delete($sp);
+            throw $e;
+        }
+        if ($old && !$kept) {
+            $disk->delete($old);
+        }
+        $this->pruneVersions($uid, (int) $n->id);
+        return $n->refresh();
+    }
+
+    public function deleteVersion(int $uid, int $nodeId, int $versionId): void
+    {
+        $v = $this->findVersion($uid, $nodeId, $versionId);
+        $this->dropVersionRows([$v]);
     }
 
     // ---- projects ------------------------------------------------------------------------------------
@@ -1139,6 +1328,7 @@ class DriveService
         }
         $written = [];
         $oldBlobs = [];
+        $touched = []; // files whose previous content was kept as a version
         $stats = ['added' => 0, 'updated' => 0, 'removed' => 0];
         try {
             $entries = DriveArchive::scan($zip, (int) config('drive.max_zip_entries'), $this->maxZipBytes());
@@ -1155,7 +1345,7 @@ class DriveService
             };
             $walk($folderId, '');
 
-            DB::transaction(function () use ($uid, $folderId, $zip, $entries, &$existing, &$written, &$oldBlobs, &$stats) {
+            DB::transaction(function () use ($uid, $folderId, $zip, $entries, &$existing, &$written, &$oldBlobs, &$stats, &$touched) {
                 usort($entries, fn ($a, $b) => count($a['segments']) <=> count($b['segments']));
                 $keep = [];
                 $budget = $this->maxZipBytes();
@@ -1182,15 +1372,19 @@ class DriveService
                                 continue; // ما اتغيّرش
                             }
                             $old = $cur->storage_path;
+                            $was = $this->versionAttrs($cur);
+                            $newSha = sha1_file($tmp) ?: null;
                             $delta = $size - (int) $cur->size_bytes;
                             if ($delta > 0) {
                                 $this->assertQuota($uid, $delta);
                             }
                             $sp = $this->writeBlob($uid, $tmp);
                             $written[] = $sp;
-                            $cur->forceFill(['storage_path' => $sp, 'size_bytes' => $size, 'sha1' => sha1_file($tmp) ?: null,
+                            $cur->forceFill(['storage_path' => $sp, 'size_bytes' => $size, 'sha1' => $newSha,
                                 'mime_type' => $this->detectMime($tmp, $cur->name)])->save();
-                            if ($old) {
+                            if ($this->keepVersion($uid, (int) $cur->id, $was, $newSha, 'sync')) {
+                                $touched[] = (int) $cur->id; // the old blob stays as a version
+                            } elseif ($old) {
                                 $oldBlobs[] = $old;
                             }
                             $stats['updated']++;
@@ -1231,6 +1425,9 @@ class DriveService
         }
         foreach ($oldBlobs as $sp) {
             $this->disk()->delete($sp);
+        }
+        foreach (array_unique($touched) as $nid) {
+            $this->pruneVersions($uid, $nid);
         }
         $this->q($uid)->where('id', $folderId)->update(['updated_at' => now()]);
         return $stats;

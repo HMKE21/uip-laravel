@@ -23,6 +23,10 @@ use Illuminate\Http\Request;
  *   GET    /drive/nodes/{id}/content  محتوى الملف (?download=1 للتنزيل)
  *   PUT    /drive/nodes/{id}/content  {content}  حفظ نص
  *   POST   /drive/nodes/{id}/replace  multipart file (+name) — حفظ من محررات الصور/PDF/ZIP
+ *   GET    /drive/nodes/{id}/versions                       سجل إصدارات الملف (النسخ القديمة قبل كل حفظ)، الأحدث أول
+ *   GET    /drive/nodes/{id}/versions/{vid}/content         محتوى نسخة قديمة (?download=1 للتنزيل)
+ *   POST   /drive/nodes/{id}/versions/{vid}/restore         رجّع الملف لنسخة قديمة (الحالي بيتحفظ كنسخة)
+ *   DELETE /drive/nodes/{id}/versions/{vid}                 امسح نسخة قديمة
  *   PATCH  /drive/nodes/{id}          {name}
  *   GET    /drive/nodes/{id}/archive  تنزيل ملف/مجلد كـ ZIP (?root=1 => محتوى المجلد في جذر الـ zip)
  *   POST   /drive/nodes/{id}/unzip    {parent_id?}
@@ -220,6 +224,54 @@ class DriveApiController extends Controller
         });
     }
 
+
+    // -- version history --------------------------------------------------------------------------------
+
+    public function versions(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->versions($uid, (int) $id), 'OK'));
+    }
+
+    public function versionContent(Request $request, $id, $vid)
+    {
+        if (!$this->roleAllowed($request)) {
+            return $this->apiError('My PC is not available for your account type.', null, 403);
+        }
+        try {
+            [$v, $stream] = $this->drive->openVersionStream((int) $request->attributes->get('uip_user_id'), (int) $id, (int) $vid);
+        } catch (DriveException $e) {
+            return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 404);
+        }
+        $name = (string) $v->name;
+        $ascii = preg_replace('/[^\x20-\x7E]/', '_', str_replace(['"', '\\'], '_', $name));
+        $headers = [
+            'Content-Type'            => $v->mime_type ?: 'application/octet-stream',
+            'Content-Length'          => (string) (int) $v->size_bytes,
+            'Content-Disposition'     => ($request->boolean('download') ? 'attachment' : 'inline') . '; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name),
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src data:; media-src 'self'; style-src 'unsafe-inline'",
+            'Cache-Control'           => 'private, max-age=3600', // a version never changes
+        ];
+        return response()->stream(function () use ($stream) {
+            fpassthru($stream);
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }, 200, $headers);
+    }
+
+    public function restoreVersion(Request $request, $id, $vid)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->restoreVersion($uid, (int) $id, (int) $vid)->toRowArray(), 'Version restored.'));
+    }
+
+    public function deleteVersion(Request $request, $id, $vid)
+    {
+        return $this->guard($request, function ($uid) use ($id, $vid) {
+            $this->drive->deleteVersion($uid, (int) $id, (int) $vid);
+            return $this->apiSuccess(null, 'Version deleted.');
+        });
+    }
 
     // -- cloud: direct transfer + backup support --------------------------------------------------------
 

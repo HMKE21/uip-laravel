@@ -271,6 +271,11 @@ Route::prefix('v1')->group(function () {
         Route::get('/nodes/{id}/content', [DriveApiController::class, 'content']);
         Route::put('/nodes/{id}/content', [DriveApiController::class, 'saveContent'])->middleware('throttle:120,1');
         Route::post('/nodes/{id}/replace', [DriveApiController::class, 'replace'])->middleware('throttle:60,1');
+        // سجل الإصدارات: النسخ القديمة لملف (قبل كل حفظ فوقه) + معاينة / استرجاع / حذف
+        Route::get('/nodes/{id}/versions', [DriveApiController::class, 'versions'])->where('id', '[0-9]+');
+        Route::get('/nodes/{id}/versions/{vid}/content', [DriveApiController::class, 'versionContent'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:240,1');
+        Route::post('/nodes/{id}/versions/{vid}/restore', [DriveApiController::class, 'restoreVersion'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:60,1');
+        Route::delete('/nodes/{id}/versions/{vid}', [DriveApiController::class, 'deleteVersion'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:60,1');
         Route::post('/nodes/{id}/replace/init', [DriveApiController::class, 'replaceInit'])->middleware('throttle:120,1');
         Route::post('/nodes/{id}/replace/complete', [DriveApiController::class, 'replaceComplete'])->middleware('throttle:120,1');
         Route::get('/nodes/{id}/download-url', [DriveApiController::class, 'downloadUrl'])->middleware('throttle:240,1');

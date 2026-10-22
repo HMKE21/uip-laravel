@@ -11,6 +11,9 @@
  *   DRIVE_DIRECT       true (افتراضي) = المتصفح يرفع/ينزّل مباشرة من/إلى الـ bucket (S3 / Cloudflare R2) بروابط موقّعة، فالسيرفر مبيشيلش الملفات.
  *                      بيشتغل تلقائيًا بس لو DRIVE_DISK بيشاور على disk من نوع s3 (غير كده كل شيء بيمشي زي الأول). شوف docs/DRIVE_CLOUD_STORAGE.md.
  *   DRIVE_DIRECT_TTL_MIN  عمر الرابط الموقّع بالدقايق.
+ *   DRIVE_MAX_VERSIONS    كام نسخة قديمة نحتفظ بيها لكل ملف (0 = سجل الإصدارات مقفول). الأقدم بيتمسح أوتوماتيك.
+ *   DRIVE_VERSION_MAX_MB  أكبر حجم ملف نحتفظ له بنسخ قديمة (الملفات الأكبر بتتستبدل من غير سجل).
+ *   DRIVE_VERSIONS_MB     سقف مساحة كل النسخ القديمة لكل طالب (مش محسوبة من الحصة؛ لما يتعدّى الأقدم بيتمسح).
  *   DRIVE_ROLES        الأدوار المسموح لها (افتراضي student؛ للتوسّع: DRIVE_ROLES=student,faculty,supervisor).
  */
 return [
@@ -23,6 +26,9 @@ return [
     'max_depth'        => (int) env('DRIVE_MAX_DEPTH', 32),
     'max_text_edit_kb' => (int) env('DRIVE_MAX_TEXT_KB', 2048),
     'trash_days'       => (int) env('DRIVE_TRASH_DAYS', 30),
+    'max_versions'     => max(0, (int) env('DRIVE_MAX_VERSIONS', 20)),
+    'version_max_mb'   => max(1, (int) env('DRIVE_VERSION_MAX_MB', 25)),
+    'versions_mb'      => max(1, (int) env('DRIVE_VERSIONS_MB', 300)),
     'direct'           => filter_var(env('DRIVE_DIRECT', true), FILTER_VALIDATE_BOOL),
     'direct_ttl_min'   => max(1, (int) env('DRIVE_DIRECT_TTL_MIN', 15)),
     'roles'            => array_values(array_filter(array_map('trim', explode(',', (string) env('DRIVE_ROLES', 'student'))))),
