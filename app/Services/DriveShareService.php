@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DriveNode;
 use App\Models\DriveShare;
+use App\Repositories\SettingRepository;
 use App\Support\DriveException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -23,7 +24,7 @@ class DriveShareService
     private const MAX_PER_USER = 300;
     private const MAX_EXPIRY_MINUTES = 525600; // 365 يوم
 
-    public function __construct(private DriveService $drive)
+    public function __construct(private DriveService $drive, private SettingRepository $settings)
     {
     }
 
@@ -214,16 +215,26 @@ class DriveShareService
                 ->map(fn (DriveNode $n) => $this->publicRow($n))->all();
         }
         $owner = null;
+        $ownerAvatar = null;
         try {
-            $owner = DB::table('users')->where('id', $s->user_id)->value('full_name');
+            $row = DB::table('users')->where('id', $s->user_id)->first(['full_name', 'avatar_path']);
+            $owner = $row->full_name ?? null;
+            $ownerAvatar = $row->avatar_path ?? null;
+            // نفس قواعد الخصوصية بتاعة باقي الصفحات العامة: لو قفل "صورتي للعامة" يظهر الحرف الأول بس.
+            if ($ownerAvatar && ($this->settings->get('profile_photo_public', 'user', (int) $s->user_id, '1') === '0'
+                || $this->settings->get('messaging_show_avatar', 'user', (int) $s->user_id, '1') === '0')) {
+                $ownerAvatar = null;
+            }
         } catch (\Throwable $e) {
             $owner = null;
+            $ownerAvatar = null;
         }
         return [
             'share' => [
                 'can_download' => (bool) $s->can_download,
                 'expires_at'   => $s->expires_at,
                 'owner_name'   => $owner ? Str::limit(trim((string) $owner), 60, '') : null,
+                'owner_avatar' => $ownerAvatar ? (string) $ownerAvatar : null,
                 'root'         => $this->publicRow($root),
             ],
             'node'       => $this->publicRow($node),
