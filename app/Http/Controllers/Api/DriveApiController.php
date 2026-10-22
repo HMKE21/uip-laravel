@@ -490,6 +490,28 @@ class DriveApiController extends Controller
         });
     }
 
+    /** POST /drive/terminal-token — token for the desktop Terminal app (one shell per user, not tied to a folder). */
+    public function terminalToken(Request $request)
+    {
+        return $this->guard($request, function ($uid) {
+            $url    = rtrim((string) config('services.sandbox.url'), '/');
+            $secret = (string) config('services.sandbox.secret');
+            if ($url === '' || strlen($secret) < 32) {
+                return $this->apiError('The sandbox is not configured on this server.', null, 503);
+            }
+            $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
+            $now = time();
+            $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+            $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
+            $body = $b64(json_encode([
+                'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $uid, 'pid' => 'terminal',
+                'iat' => $now, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(8)),
+            ]));
+            $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
+            return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
+        });
+    }
+
     // -- recycle bin ------------------------------------------------------------------------------------
 
     public function trash(Request $request)
