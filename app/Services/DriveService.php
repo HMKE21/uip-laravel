@@ -1154,6 +1154,27 @@ class DriveService
         return $this->purgeRoots($uid, $roots);
     }
 
+    /**
+     * إعادة تهيئة "جهازي": بيمسح نهائيًا كل حاجة عند المستخدم (ملفات + مجلدات + السلة + النسخ القديمة + روابط المشاركة).
+     * مفيش رجوع منه. الحساب نفسه ما بيتأثرش.
+     * @return int عدد العناصر الجذرية اللي اتمسحت
+     */
+    public function resetAll(int $uid): int
+    {
+        $roots = $this->q($uid)->whereNull('deleted_at')->whereNull('parent_id')->pluck('id')->map(fn ($i) => (int) $i)->all();
+        $n = 0;
+        if ($roots) {
+            $n += $this->trash($uid, $roots);
+        }
+        $n += $this->emptyTrash($uid);
+        // أي نسخ قديمة فاضلة + روابط المشاركة + الفهرس النصي (لو فضل منها حاجة)
+        $this->clearAllVersions($uid);
+        if (\Illuminate\Support\Facades\Schema::hasTable('drive_shares')) {
+            DB::table('drive_shares')->where('user_id', $uid)->delete();
+        }
+        return $n;
+    }
+
     /** أمر drive:purge-trash — بيمسح كل اللي عدّى trash_days، لكل المستخدمين. */
     public function purgeExpired(): int
     {

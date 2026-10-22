@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\DriveService;
 use App\Services\MailService;
 use App\Services\OtpService;
 use App\Support\OtpGuard;
@@ -25,6 +26,7 @@ use Illuminate\Support\Facades\Log;
  *  POST lock/disable        إلغاء باسورد القفل
  *  POST lock/otp            "نسيت الباسورد": رمز 6 أرقام على إيميل الحساب
  *  POST lock/reset          الرمز + باسورد جديد
+ *  POST reset               إعادة تهيئة الجهاز: مسح كل الملفات + الإعدادات + الويدجت + باسورد القفل (محتاج confirm=RESET وباسورد الحساب)
  *
  * الباسورد بيتخزن bcrypt بس، وكل المحاولات الغلط محكومة بـ OtpGuard (نفس حماية رموز OTP): 5 غلطات => حظر 10 دقايق.
  * ملاحظة: ده قفل لواجهة سطح المكتب (خصوصية على نفس الجهاز) — مش بديل لتسجيل الخروج.
@@ -35,7 +37,7 @@ class DesktopSettingsApiController extends Controller
     private const MAX_WALLPAPER_CHARS = 4_000_000;
     private const MAX_ICONS = 600;
 
-    public function __construct(private OtpService $otp, private MailService $mail)
+    public function __construct(private OtpService $otp, private MailService $mail, private DriveService $drive)
     {
     }
 
@@ -284,6 +286,55 @@ class DesktopSettingsApiController extends Controller
         }
 
         return $this->apiSuccess(['wp' => $hash], 'Wallpaper saved successfully.');
+    }
+
+    // -- factory reset ----------------------------------------------------------------------------------
+
+    /**
+     * "إعادة تهيئة الجهاز": بيمسح نهائيًا كل ملفات "جهازي" (والسلة والنسخ القديمة وروابط المشاركة) + إعدادات سطح المكتب + الويدجت
+     * + صورة الخلفية + باسورد القفل. مفيش رجوع. الحساب والجلسات بيفضلوا زي ما هم.
+     * الحماية: لازم confirm=RESET + باسورد الحساب (حساب Google بدون باسورد: الجلسة كفاية)، والغلط بيتحسب في OtpGuard.
+     */
+    public function reset(Request $request): JsonResponse
+    {
+        $uid = $this->uid($request);
+        $user = $this->user($uid);
+        $ar = $this->ar($user);
+        if (!in_array((string) $request->attributes->get('uip_role'), (array) config('drive.roles'), true)) {
+            return $this->apiError('My PC is not available for your account type.', null, 403);
+        }
+        if ((string) $request->input('confirm', '') !== 'RESET') {
+            return $this->apiError($ar ? 'لازم تأكّد إعادة التهيئة.' : 'Please confirm the reset.', ['confirm' => ['required']], 422);
+        }
+        if ($b = $this->blocked($uid, $ar)) {
+            return $b;
+        }
+        if (!$this->accountOk($user, (string) $request->input('account_password', ''))) {
+            return $this->wrong($uid, $ar, $ar ? 'باسورد الحساب غير صحيح.' : 'Your account password is incorrect.', 'account_password');
+        }
+        OtpGuard::recordSuccess($this->lockScope($uid));
+
+        try {
+            $removed = $this->drive->resetAll($uid);
+        } catch (\Throwable $e) {
+            Log::error('desktop reset failed', ['uid' => $uid, 'error' => $e->getMessage()]);
+
+            return $this->apiError($ar ? 'حصلت مشكلة أثناء المسح. حاول تاني.' : 'Something went wrong while erasing. Please try again.', null, 500);
+        }
+
+        $now = (int) (microtime(true) * 1000);
+        // updated_ms = الآن: أي جهاز تاني لسه عنده إعدادات قديمة بياخد النسخة الفاضية بدل ما يرفعها تاني
+        DB::table('desktop_settings')->where('user_id', $uid)->update([
+            'prefs' => null, 'icons' => null, 'mode' => null, 'wallpaper' => null, 'wp_hash' => null,
+            'lock_hash' => null, 'lock_changed_at' => now(), 'updated_ms' => $now, 'updated_at' => now(),
+        ]);
+        if (\Illuminate\Support\Facades\Schema::hasTable('desktop_widgets')) {
+            DB::table('desktop_widgets')->where('user_id', $uid)->update(['items' => null, 'updated_ms' => $now, 'updated_at' => now()]);
+        }
+        $this->otp->forget(self::OTP_PURPOSE, $uid);
+        Log::info('desktop reset', ['uid' => $uid, 'removed' => $removed]);
+
+        return $this->apiSuccess(['removed' => $removed], 'Your PC was reset.');
     }
 
     // -- lock password ----------------------------------------------------------------------------------

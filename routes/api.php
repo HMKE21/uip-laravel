@@ -1621,6 +1621,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/lock/disable', [DesktopSettingsApiController::class, 'lockDisable'])->middleware('throttle:20,1');
         Route::post('/lock/otp', [DesktopSettingsApiController::class, 'lockOtp'])->middleware('throttle:10,1');
         Route::post('/lock/reset', [DesktopSettingsApiController::class, 'lockReset'])->middleware('throttle:20,1');
+        Route::post('/reset', [DesktopSettingsApiController::class, 'reset'])->middleware('throttle:5,1');
         // الأمان والأجهزة (حد الأجهزة، قفل/خروج عن بُعد، القفل التلقائي، السكون، الخروج بعد الخمول) — DesktopSecurityApiController
         Route::prefix('security')->group(function () {
             Route::get('/', [\App\Http\Controllers\Api\DesktopSecurityApiController::class, 'show'])->middleware('throttle:60,1');
