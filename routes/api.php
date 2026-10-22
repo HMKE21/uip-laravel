@@ -47,6 +47,7 @@ use App\Http\Controllers\Api\CourseTimetableApiController;
 use App\Http\Controllers\Api\AdminRequestApiController;
 use App\Http\Controllers\Api\RegistrationApiController;
 use App\Http\Controllers\Api\SummerApiController;
+use App\Http\Controllers\Api\FeeApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\CourseAssignmentApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
@@ -1235,6 +1236,24 @@ Route::prefix('v1')->group(function () {
         Route::post('/courses/{id}/publish', [GradingApiController::class, 'publish'])->where($ids)->middleware('throttle:20,1');
         Route::post('/courses/{id}/unpublish', [GradingApiController::class, 'unpublish'])->where($ids)->middleware('throttle:20,1');
         Route::get('/courses/{id}/export', [GradingApiController::class, 'export'])->where($ids);
+    });
+
+    // المصاريف: بنود رسوم + إصدار + دفعات (إخطار الطالب يتأكد من الإدارة) + إيصال PDF. مفيش بوابة دفع أونلاين.
+    Route::prefix('fees')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/mine', [FeeApiController::class, 'mine']);
+        Route::post('/{id}/notice', [FeeApiController::class, 'notice'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+        Route::delete('/notices/{id}', [FeeApiController::class, 'cancelNotice'])->where('id', '[0-9]+');
+        Route::get('/payments/{id}/receipt', [FeeApiController::class, 'receipt'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::get('/items', [FeeApiController::class, 'manage']);
+        Route::post('/items', [FeeApiController::class, 'createItem'])->middleware('throttle:30,1');
+        Route::put('/items/{id}', [FeeApiController::class, 'updateItem'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::delete('/items/{id}', [FeeApiController::class, 'deleteItem'])->where('id', '[0-9]+');
+        Route::post('/items/{id}/issue', [FeeApiController::class, 'issue'])->where('id', '[0-9]+')->middleware('throttle:10,1');
+        Route::get('/ledger', [FeeApiController::class, 'ledger']);
+        Route::post('/ledger/{id}/payments', [FeeApiController::class, 'record'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/ledger/{id}/waive', [FeeApiController::class, 'waive'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::post('/payments/{id}/confirm', [FeeApiController::class, 'confirm'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/payments/{id}/reject', [FeeApiController::class, 'reject'])->where('id', '[0-9]+')->middleware('throttle:60,1');
     });
 
     // التسجيل الصيفي: فصول صيفية ومواد معروضة بسعة (جامعة/كلية) + طلبات الطلاب وقراراتها.
