@@ -44,6 +44,7 @@ use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
+use App\Http\Controllers\Api\AdminRequestApiController;
 use App\Http\Controllers\Api\RegistrationApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\CourseAssignmentApiController;
@@ -1233,6 +1234,16 @@ Route::prefix('v1')->group(function () {
         Route::post('/courses/{id}/publish', [GradingApiController::class, 'publish'])->where($ids)->middleware('throttle:20,1');
         Route::post('/courses/{id}/unpublish', [GradingApiController::class, 'unpublish'])->where($ids)->middleware('throttle:20,1');
         Route::get('/courses/{id}/export', [GradingApiController::class, 'export'])->where($ids);
+    });
+
+    // الطلبات الإدارية (شهادة قيد / بيان درجات / إفادة): طالب ← كلية ← جامعة، وبعد الاعتماد يتحمّل المستند PDF.
+    Route::prefix('admin-requests')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/', [AdminRequestApiController::class, 'index']);
+        Route::post('/', [AdminRequestApiController::class, 'store'])->middleware('throttle:20,1');
+        Route::post('/{id}/cancel', [AdminRequestApiController::class, 'cancel'])->where('id', '[0-9]+');
+        Route::post('/{id}/approve', [AdminRequestApiController::class, 'approve'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/{id}/reject', [AdminRequestApiController::class, 'reject'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::get('/{id}/document', [AdminRequestApiController::class, 'document'])->where('id', '[0-9]+')->middleware('throttle:30,1');
     });
 
     // التسجيل الأكاديمي: فترات التسجيل + سياسة الساعات/المتطلبات/التعارض + حالة الطالب والكتالوج.
