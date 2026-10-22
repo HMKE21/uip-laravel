@@ -130,6 +130,23 @@ class DriveApiController extends Controller
         return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->usage($uid), 'Usage retrieved successfully.'));
     }
 
+    public function disks(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->disks($uid), 'Disks retrieved successfully.'));
+    }
+
+    public function createDisk(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess(
+            $this->drive->createDisk($uid, (string) $request->input('name', ''))->toRowArray(), 'Disk created.', 201));
+    }
+
+    public function setDisk(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess(
+            $this->drive->setDisk($uid, (int) $id, filter_var($request->input('enabled', true), FILTER_VALIDATE_BOOLEAN))->toRowArray(), 'Updated.'));
+    }
+
     public function templates(Request $request)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess(DriveService::templateKeys(), 'Templates retrieved successfully.'));

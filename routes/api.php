@@ -249,6 +249,9 @@ Route::prefix('v1')->group(function () {
         Route::get('/resolve', [DriveApiController::class, 'resolve'])->middleware('throttle:120,1');
         Route::get('/search-content', [DriveApiController::class, 'searchContent'])->middleware('throttle:40,1');
         Route::get('/usage', [DriveApiController::class, 'usage']);
+        Route::get('/disks', [DriveApiController::class, 'disks']);
+        Route::post('/disks', [DriveApiController::class, 'createDisk'])->middleware('throttle:60,1');
+        Route::post('/nodes/{id}/disk', [DriveApiController::class, 'setDisk'])->where('id', '[0-9]+')->middleware('throttle:60,1');
         Route::get('/templates', [DriveApiController::class, 'templates']);
         Route::get('/config', [DriveApiController::class, 'config']);
         Route::get('/manifest', [DriveApiController::class, 'manifest'])->middleware('throttle:60,1');

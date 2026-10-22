@@ -716,7 +716,11 @@ class DriveService
                 $n->forceFill([
                     'parent_id' => $target?->id,
                     'name'      => $this->freeName($uid, $target?->id, $n->name, (int) $n->id),
-                ])->save();
+                ]);
+                if ($target && $n->kind === 'disk') {
+                    $n->kind = null; // a disk lives at the top level only — inside another folder it is just a folder
+                }
+                $n->save();
                 $moved[] = $n->toRowArray();
             }
             $this->depthMemo = [];
@@ -991,6 +995,72 @@ class DriveService
     }
 
     // ---- recycle bin ---------------------------------------------------------------------------------
+
+    // ---- disks ("أقراص") ---------------------------------------------------------------------------
+    // A disk is a TOP-LEVEL folder with kind = 'disk' (no schema change). It shows up as a drive card with a storage bar.
+
+    /** Disks with their used space. Sizes come from ONE query over the user's tree (bounded by drive.max_nodes). */
+    public function disks(int $uid): array
+    {
+        $rows = $this->q($uid)->whereNull('deleted_at')->get(['id', 'parent_id', 'type', 'kind', 'size_bytes']);
+        $kids = [];
+        foreach ($rows as $r) {
+            $kids[(int) ($r->parent_id ?? 0)][] = $r;
+        }
+        $quota = $this->quotaBytes();
+        $out = [];
+        foreach ($rows as $r) {
+            if ($r->parent_id !== null || $r->type !== 'folder' || $r->kind !== 'disk') {
+                continue;
+            }
+            $bytes = 0;
+            $files = 0;
+            $stack = [(int) $r->id];
+            while ($stack) {
+                $cur = array_pop($stack);
+                foreach ($kids[$cur] ?? [] as $k) {
+                    if ($k->type === 'folder') {
+                        $stack[] = (int) $k->id;
+                    } else {
+                        $bytes += (int) $k->size_bytes;
+                        $files++;
+                    }
+                }
+            }
+            $out[(int) $r->id] = ['bytes' => $bytes, 'files' => $files];
+        }
+        $names = $this->q($uid)->whereIn('id', array_keys($out) ?: [0])->orderBy('name')->get();
+        return $names->map(function (DriveNode $n) use ($out, $quota) {
+            $u = $out[(int) $n->id];
+            return $n->toRowArray() + [
+                'used_bytes'  => $u['bytes'],
+                'used_human'  => DriveNode::humanSize($u['bytes']),
+                'files_count' => $u['files'],
+                'percent'     => $quota > 0 ? round($u['bytes'] * 100 / $quota, 1) : 0, // share of the whole My PC quota
+                'quota_bytes' => $quota,
+                'quota_human' => DriveNode::humanSize($quota),
+            ];
+        })->values()->all();
+    }
+
+    public function createDisk(int $uid, string $name): DriveNode
+    {
+        return $this->createFolder($uid, null, $name, 'disk');
+    }
+
+    /** Turn a top-level folder into a disk (or back into a plain folder). Project folders keep their project behaviour. */
+    public function setDisk(int $uid, int $id, bool $on): DriveNode
+    {
+        $n = $this->find($uid, $id);
+        if (!$n->isFolder() || $n->parent_id !== null) {
+            throw new DriveException('Only a folder at the top of My PC can be a disk.', 422);
+        }
+        if ($n->kind === 'project') {
+            throw new DriveException('A project folder cannot be a disk.', 422);
+        }
+        $n->forceFill(['kind' => $on ? 'disk' : null])->save();
+        return $n;
+    }
 
     public function trash(int $uid, array $ids): int
     {
