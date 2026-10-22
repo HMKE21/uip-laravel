@@ -13,12 +13,20 @@ use Illuminate\Http\Request;
  * صاحب الملف (uip.auth + نفس أدوار "جهازي"):
  *   GET    /drive/shares                  كل روابطي الحيّة
  *   GET    /drive/nodes/{id}/shares       روابط عنصر
- *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download}
- *   PATCH  /drive/shares/{id}             {expiry?, can_download?}
- *   DELETE /drive/shares/{id}             إلغاء الرابط
+ *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download,
+ *                                          require_visitor_info (اسم+إيميل+موبايل قبل الفتح), password (اختياري)}
+ *   PATCH  /drive/shares/{id}             {expiry?, can_download?, require_visitor_info?, password?, remove_password?}
+ *   DELETE /drive/shares/{id}             إلغاء الرابط (نهائي)
+ *   GET    /drive/shares/manage           كل روابطي (شغّالة/موقوفة/منتهية/ملغية) + عدّاد الزوار — لصفحة "روابطي المشاركة"
+ *   GET    /drive/shares/{id}/activity    مين فتح الرابط: ملخص + الزوار + آخر الأحداث
+ *   DELETE /drive/shares/{id}/activity    مسح سجل الزيارات (الرابط يفضل شغال)
+ *   POST   /drive/shares/{id}/pause       إيقاف مؤقت
+ *   POST   /drive/shares/{id}/resume      استئناف
+ *   DELETE /drive/shares/{id}/forever     حذف الرابط وسجله نهائيًا
  *
  * أي حد معاه الرابط (من غير تسجيل دخول) — /public/drive-share/{token}:
- *   GET    /                              بيانات + محتوى المجلد (?node= لمجلد فرعي)
+ *   POST   /enter                        البوابة: {name,email,phone,password} -> {session}. الجلسة بتتبعت بعد كده في هيدر X-Share-Session.
+ *   GET    /                              بيانات + محتوى المجلد (?node= لمجلد فرعي) — 423 لو الرابط عليه بوابة والجلسة ناقصة
  *   GET    /file                          ملف (?node=, ?download=1 لو التنزيل مسموح)
  *   GET    /zip                           ZIP (?node=) لو التنزيل مسموح
  */
@@ -56,7 +64,13 @@ class DriveShareApiController extends Controller
     public function create(Request $request, $id)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess(
-            $this->shares->create($uid, (int) $id, $request->input('expiry') !== null ? (string) $request->input('expiry') : null, $request->boolean('can_download', true))->toRowArray(),
+            $this->shares->create(
+                $uid, (int) $id,
+                $request->input('expiry') !== null ? (string) $request->input('expiry') : null,
+                $request->boolean('can_download', true),
+                $request->boolean('require_visitor_info', false),
+                $request->filled('password') ? (string) $request->input('password') : null,
+            )->toRowArray(),
             'Share link created.', 201));
     }
 
@@ -70,6 +84,14 @@ class DriveShareApiController extends Controller
             if ($request->has('expiry')) {
                 $in['expiry'] = $request->input('expiry');
             }
+            if ($request->has('require_visitor_info')) {
+                $in['require_visitor_info'] = $request->boolean('require_visitor_info');
+            }
+            if ($request->boolean('remove_password')) {
+                $in['remove_password'] = true;
+            } elseif ($request->filled('password')) {
+                $in['password'] = (string) $request->input('password');
+            }
             return $this->apiSuccess($this->shares->update($uid, (int) $id, $in)->toRowArray(), 'Share link updated.');
         });
     }
@@ -82,7 +104,70 @@ class DriveShareApiController extends Controller
         });
     }
 
+    public function manage(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess(['items' => $this->shares->manage($uid)], 'OK'));
+    }
+
+    public function activity(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->shares->activity($uid, (int) $id), 'OK'));
+    }
+
+    public function clearActivity(Request $request, $id)
+    {
+        return $this->guard($request, function ($uid) use ($id) {
+            $this->shares->clearActivity($uid, (int) $id);
+            return $this->apiSuccess(null, 'Activity cleared.');
+        });
+    }
+
+    public function pause(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->shares->pause($uid, (int) $id, true)->toRowArray(), 'Share link paused.'));
+    }
+
+    public function resume(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->shares->pause($uid, (int) $id, false)->toRowArray(), 'Share link resumed.'));
+    }
+
+    public function forever(Request $request, $id)
+    {
+        return $this->guard($request, function ($uid) use ($id) {
+            $this->shares->forever($uid, (int) $id);
+            return $this->apiSuccess(null, 'Share link deleted.');
+        });
+    }
+
     // -- public -----------------------------------------------------------------------------------------
+
+    /** سياق الزائر: IP / User-Agent / حساب UIP (لو مسجّل دخول وuip.auth.optional اشتغلت) / session token البوابة. */
+    private function ctx(Request $r): array
+    {
+        $uid = $r->attributes->get('uip_user_id');
+        return [
+            'ip'      => $r->ip(),
+            'ua'      => (string) $r->userAgent(),
+            'user_id' => $uid ? (int) $uid : null,
+            'session' => (string) $r->header('X-Share-Session', ''),
+        ];
+    }
+
+    public function enter(Request $request, string $token)
+    {
+        try {
+            $res = $this->shares->enter($token, [
+                'name'     => $request->input('name'),
+                'email'    => $request->input('email'),
+                'phone'    => $request->input('phone'),
+                'password' => $request->input('password'),
+            ], $this->ctx($request));
+            return $this->apiSuccess($res, 'OK')->header('Cache-Control', 'no-store');
+        } catch (DriveException $e) {
+            return $this->publicError($e);
+        }
+    }
 
     private function nodeParam(Request $r): ?int
     {
@@ -93,13 +178,13 @@ class DriveShareApiController extends Controller
     private function publicError(DriveException $e)
     {
         $c = $e->getCode();
-        return $this->apiError($e->getMessage(), null, $c >= 400 && $c < 600 ? $c : 422)->header('Cache-Control', 'no-store');
+        return $this->apiError($e->getMessage(), $e->errors(), $c >= 400 && $c < 600 ? $c : 422)->header('Cache-Control', 'no-store');
     }
 
     public function show(Request $request, string $token)
     {
         try {
-            return $this->apiSuccess($this->shares->view($token, $this->nodeParam($request)), 'OK')->header('Cache-Control', 'no-store');
+            return $this->apiSuccess($this->shares->view($token, $this->nodeParam($request), $this->ctx($request)), 'OK')->header('Cache-Control', 'no-store');
         } catch (DriveException $e) {
             return $this->publicError($e);
         }
@@ -109,7 +194,7 @@ class DriveShareApiController extends Controller
     {
         $download = $request->boolean('download');
         try {
-            [$node, $stream] = $this->shares->openFile($token, $this->nodeParam($request), $download);
+            [$node, $stream] = $this->shares->openFile($token, $this->nodeParam($request), $download, $this->ctx($request));
         } catch (DriveException $e) {
             return $this->publicError($e);
         }
@@ -135,7 +220,7 @@ class DriveShareApiController extends Controller
     public function zip(Request $request, string $token)
     {
         try {
-            [$tmp, $name] = $this->shares->zipFor($token, $this->nodeParam($request));
+            [$tmp, $name] = $this->shares->zipFor($token, $this->nodeParam($request), $this->ctx($request));
         } catch (DriveException $e) {
             return $this->publicError($e);
         }

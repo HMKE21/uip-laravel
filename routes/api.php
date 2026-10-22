@@ -283,6 +283,12 @@ Route::prefix('v1')->group(function () {
         Route::delete('/trash', [DriveApiController::class, 'emptyTrash']);
         // مشاركة برابط (راجع DriveShareApiController)
         Route::get('/shares', [DriveShareApiController::class, 'index']);
+        Route::get('/shares/manage', [DriveShareApiController::class, 'manage']);
+        Route::get('/shares/{id}/activity', [DriveShareApiController::class, 'activity'])->where('id', '[0-9]+');
+        Route::delete('/shares/{id}/activity', [DriveShareApiController::class, 'clearActivity'])->where('id', '[0-9]+');
+        Route::post('/shares/{id}/pause', [DriveShareApiController::class, 'pause'])->where('id', '[0-9]+');
+        Route::post('/shares/{id}/resume', [DriveShareApiController::class, 'resume'])->where('id', '[0-9]+');
+        Route::delete('/shares/{id}/forever', [DriveShareApiController::class, 'forever'])->where('id', '[0-9]+');
         Route::get('/nodes/{id}/shares', [DriveShareApiController::class, 'forNode'])->where('id', '[0-9]+');
         Route::post('/nodes/{id}/shares', [DriveShareApiController::class, 'create'])->where('id', '[0-9]+')->middleware('throttle:60,1');
         Route::patch('/shares/{id}', [DriveShareApiController::class, 'update'])->where('id', '[0-9]+');
@@ -2023,6 +2029,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/verify-certificate', [PublicApiController::class, 'verifyCertificate']);
         // رابط مشاركة ملف/مجلد من "جهازي" — من غير تسجيل دخول؛ الصلاحية = معرفة الـ token (راجع DriveShareService).
         Route::prefix('drive-share/{token}')->where(['token' => '[A-Za-z0-9]{8,64}'])->middleware('throttle:120,1')->group(function () {
+            // البوابة (باسورد / بيانات الزائر). uip.auth.optional عشان نعرف لو الزائر مسجّل دخول في UIP (بيتسجّل مع بياناته).
+            Route::post('/enter', [DriveShareApiController::class, 'enter'])->middleware(['uip.auth.optional', 'throttle:20,1']);
             Route::get('/', [DriveShareApiController::class, 'show']);
             Route::get('/file', [DriveShareApiController::class, 'file']);
             Route::get('/zip', [DriveShareApiController::class, 'zip'])->middleware('throttle:20,1');
