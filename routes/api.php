@@ -43,6 +43,7 @@ use App\Http\Controllers\Api\StudentsApiController;
 use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
+use App\Http\Controllers\Api\CourseTimetableApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
 use App\Http\Controllers\Api\StudentSettingsApiController;
 use App\Http\Controllers\Api\AcademicStaffSettingsApiController;
@@ -1184,6 +1185,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/requests/{rid}/attachment', [CourseApiController::class, 'requestAttachment'])->where('rid', '[0-9]+');
         // محتوى المادة (محاضرات / فيديوهات / صور / ملفات / منشورات / نتائج / إعلانات امتحانات) + حفظ الطالب.
         Route::get('/materials/saved', [CourseMaterialsApiController::class, 'saved']);
+        // جدول المحاضرات (Study Time Table): الجدول الأسبوعي حسب الدور + إدارة حصص المادة.
+        Route::get('/timetable', [CourseTimetableApiController::class, 'index']);
         Route::get('/{id}', [CourseApiController::class, 'show'])->where('id', '[0-9]+');
         Route::patch('/{id}', [CourseApiController::class, 'update'])->where('id', '[0-9]+');
         Route::post('/{id}/archive', [CourseApiController::class, 'archive'])->where('id', '[0-9]+');
@@ -1194,6 +1197,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/{id}/students/candidates', [CourseApiController::class, 'candidates'])->where('id', '[0-9]+');
         Route::post('/{id}/students', [CourseApiController::class, 'addStudents'])->where('id', '[0-9]+');
         Route::delete('/{id}/students/{studentId}', [CourseApiController::class, 'removeStudent'])->where(['id' => '[0-9]+', 'studentId' => '[0-9]+']);
+        Route::get('/{id}/sessions', [CourseTimetableApiController::class, 'forCourse'])->where('id', '[0-9]+');
+        Route::post('/{id}/sessions', [CourseTimetableApiController::class, 'store'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::patch('/{id}/sessions/{sid}', [CourseTimetableApiController::class, 'update'])->where(['id' => '[0-9]+', 'sid' => '[0-9]+'])->middleware('throttle:60,1');
+        Route::delete('/{id}/sessions/{sid}', [CourseTimetableApiController::class, 'destroy'])->where(['id' => '[0-9]+', 'sid' => '[0-9]+']);
         Route::get('/{id}/materials', [CourseMaterialsApiController::class, 'index'])->where('id', '[0-9]+');
         Route::post('/{id}/materials', [CourseMaterialsApiController::class, 'store'])->where('id', '[0-9]+')->middleware('throttle:30,1');
         // التعديل بـ POST (multipart) عشان PHP مبيقراش multipart على PATCH/PUT؛ و PATCH للـ JSON.
