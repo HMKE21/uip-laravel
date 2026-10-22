@@ -984,6 +984,14 @@ Route::prefix('v1')->group(function () {
         Route::delete('/{id}', [AdminMobileApiController::class, 'destroy'])->where('id', '[0-9]+');
     });
 
+    // Admin → إعدادات الحضور والغياب: حدود الحرمان، مدة التحضير، الـ QR، الجيوفنس، ومواقع الكليات.
+    Route::prefix('admin/attendance-settings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\AdminAttendanceSettingsApiController::class, 'show']);
+        Route::put('/', [\App\Http\Controllers\Api\AdminAttendanceSettingsApiController::class, 'update'])->middleware('throttle:30,1');
+        Route::delete('/', [\App\Http\Controllers\Api\AdminAttendanceSettingsApiController::class, 'reset'])->middleware('throttle:10,1');
+        Route::put('/faculties/{id}', [\App\Http\Controllers\Api\AdminAttendanceSettingsApiController::class, 'setFaculty'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+    });
+
     // Admin → Platform Policy: حظر إيميلات/دومينات، قفل التسجيل، تشغيل/إيقاف تشفير الـ response.
     Route::prefix('admin/platform-policy')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [\App\Http\Controllers\Api\AdminPlatformPolicyApiController::class, 'show']);

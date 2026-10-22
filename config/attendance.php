@@ -21,4 +21,8 @@ return [
     'default_campus_radius_m' => (int) env('ATTENDANCE_CAMPUS_RADIUS_M', 300),
     'doctor_radius_m'         => (int) env('ATTENDANCE_DOCTOR_RADIUS_M', 150),
     'max_accuracy_m'          => (int) env('ATTENDANCE_MAX_ACCURACY_M', 100),
+
+    // مفاتيح تشغيل (الأدمن يقدر يغيّرها من بوابته).
+    'geofence_enabled'        => (bool) env('ATTENDANCE_GEOFENCE_ENABLED', true),
+    'one_device_per_student'  => (bool) env('ATTENDANCE_ONE_DEVICE', true),
 ];

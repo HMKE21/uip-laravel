@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Course;
+use App\Repositories\SettingRepository;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -22,10 +23,56 @@ class CourseAttendanceService
 {
     public const STATUSES = ['present', 'late', 'absent', 'excused'];
 
+    /**
+     * الإعدادات القابلة للتعديل من بوابة الأدمن (جدول settings، المفتاح = 'attendance_' + الاسم).
+     * القيمة الافتراضية من config/attendance.php (.env). type: int | float | bool.
+     */
+    public const SETTINGS = [
+        'max_absence_percent'     => ['type' => 'float', 'min' => 1, 'max' => 100],
+        'warn_absence_percent'    => ['type' => 'float', 'min' => 0, 'max' => 100],
+        'default_minutes'         => ['type' => 'int', 'min' => 1, 'max' => 600],
+        'max_minutes'             => ['type' => 'int', 'min' => 1, 'max' => 600],
+        'late_after_minutes'      => ['type' => 'int', 'min' => 0, 'max' => 600],
+        'qr_step_seconds'         => ['type' => 'int', 'min' => 10, 'max' => 120],
+        'default_campus_radius_m' => ['type' => 'int', 'min' => 50, 'max' => 5000],
+        'doctor_radius_m'         => ['type' => 'int', 'min' => 20, 'max' => 2000],
+        'max_accuracy_m'          => ['type' => 'int', 'min' => 10, 'max' => 500],
+        'geofence_enabled'        => ['type' => 'bool', 'min' => 0, 'max' => 1],
+        'one_device_per_student'  => ['type' => 'bool', 'min' => 0, 'max' => 1],
+    ];
+
+    private ?array $overrides = null;
+
     public function __construct(
         private CourseService $courses,
-        private NotificationService $notifications
+        private NotificationService $notifications,
+        private SettingRepository $settings
     ) {
+    }
+
+    /** القيمة الفعلية لإعداد: تعديل الأدمن لو موجود، وإلا الـ config/.env. */
+    public function setting(string $k)
+    {
+        $def = self::SETTINGS[$k] ?? null;
+        if ($this->overrides === null) {
+            $this->overrides = [];
+            try {
+                foreach ($this->settings->allFor('global') as $key => $v) {
+                    if (str_starts_with((string) $key, 'attendance_') && $v !== null && $v !== '') {
+                        $this->overrides[substr((string) $key, 11)] = $v;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // settings table unavailable: fall back to config
+            }
+        }
+        $raw = $this->overrides[$k] ?? config('attendance.' . $k, $k === 'geofence_enabled' || $k === 'one_device_per_student' ? true : null);
+        return match ($def['type'] ?? null) {
+            'int' => (int) $raw,
+            'float' => (float) $raw,
+            'bool' => filter_var($raw, FILTER_VALIDATE_BOOLEAN),
+            default => $raw,
+        };
     }
 
     // ------------------------------------------------------------------ helpers
@@ -59,7 +106,7 @@ class CourseAttendanceService
 
     private function cfg(string $k)
     {
-        return config('attendance.' . $k);
+        return $this->setting($k);
     }
 
     // ------------------------------------------------------------------ QR token
@@ -222,7 +269,7 @@ class CourseAttendanceService
 
         $hasLoc = isset($d['lat'], $d['lng']) && $d['lat'] !== null && $d['lng'] !== null;
         $campus = $this->campusFor($c, $scope);
-        if (!$hasLoc && !$campus) {
+        if ($this->cfg('geofence_enabled') && !$hasLoc && !$campus) {
             return $this->fail(
                 $l,
                 'مفيش موقع مرجعي: فعّل الموقع على جهازك عشان نربط التحضير بمكانك، أو اطلب من الكلية تحديد موقعها.',
@@ -234,7 +281,7 @@ class CourseAttendanceService
             if ($acc !== null && $acc > (int) $this->cfg('max_accuracy_m')) {
                 return $this->fail($l, 'دقة الموقع ضعيفة (' . $acc . 'م). اطلع مكان مفتوح أو فعّل GPS وحاول تاني.', 'Location accuracy is too low (' . $acc . ' m). Try again with GPS on.');
             }
-            if ($campus) {
+            if ($campus && $this->cfg('geofence_enabled')) {
                 $dist = self::distanceM((float) $d['lat'], (float) $d['lng'], $campus->lat, $campus->lng);
                 if ($dist > $campus->radius + 100) {
                     return $this->fail($l, 'مكانك الحالي بعيد عن الكلية (' . (int) $dist . 'م) — مينفعش تفتح تحضير من هنا.', 'You are too far from the campus (' . (int) $dist . ' m) to open attendance.', 403);
@@ -536,29 +583,30 @@ class CourseAttendanceService
             return $this->fail($l, 'دقة الموقع ضعيفة. فعّل GPS عالي الدقة وحاول تاني.', 'Location accuracy is too low. Turn on precise GPS and retry.', 422);
         }
 
+        $geo = (bool) $this->cfg('geofence_enabled');
         $campus = $this->campusFor($c, $scope);
         $distCampus = null;
         $distDoctor = null;
         if ($campus) {
             $distCampus = (int) round(self::distanceM($lat, $lng, $campus->lat, $campus->lng));
-            if ($distCampus - min($acc, 50) > $campus->radius) {
+            if ($geo && $distCampus - min($acc, 50) > $campus->radius) {
                 return $this->fail($l, 'انت بعيد عن الكلية (' . $distCampus . 'م). لازم تكون جوه نطاق الكلية.', 'You are too far from the campus (' . $distCampus . ' m).', 403);
             }
         }
         if ($w->lat !== null) {
             $distDoctor = (int) round(self::distanceM($lat, $lng, (float) $w->lat, (float) $w->lng));
-            if ($distDoctor - min($acc, 50) > (int) ($w->radius_m ?: $this->cfg('doctor_radius_m'))) {
+            if ($geo && $distDoctor - min($acc, 50) > (int) ($w->radius_m ?: $this->cfg('doctor_radius_m'))) {
                 return $this->fail($l, 'انت بعيد عن مكان المحاضرة (' . $distDoctor . 'م).', 'You are too far from the lecture location (' . $distDoctor . ' m).', 403);
             }
         }
-        if (!$campus && $w->lat === null) {
+        if ($geo && !$campus && $w->lat === null) {
             return $this->fail($l, 'مفيش موقع مرجعي للتحضير ده.', 'This session has no reference location.', 422);
         }
 
         // ---- جهاز واحد لطالب واحد
         $deviceId = trim((string) ($d['device_id'] ?? ''));
         $deviceHash = $deviceId !== '' ? hash('sha256', $deviceId . '|' . config('app.key')) : null;
-        if ($deviceHash && DB::table('attendance_records')->where('window_id', $w->id)->where('device_hash', $deviceHash)->where('student_id', '!=', $scope['studentId'])->exists()) {
+        if ($deviceHash && $this->cfg('one_device_per_student') && DB::table('attendance_records')->where('window_id', $w->id)->where('device_hash', $deviceHash)->where('student_id', '!=', $scope['studentId'])->exists()) {
             return $this->fail($l, 'الجهاز ده سجّل حضور لطالب تاني في نفس المحاضرة.', 'This device has already checked in another student for this session.', 403);
         }
 
