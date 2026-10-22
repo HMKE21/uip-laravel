@@ -44,6 +44,7 @@ use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
+use App\Http\Controllers\Api\RegistrationApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\CourseAssignmentApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
@@ -1232,6 +1233,18 @@ Route::prefix('v1')->group(function () {
         Route::post('/courses/{id}/publish', [GradingApiController::class, 'publish'])->where($ids)->middleware('throttle:20,1');
         Route::post('/courses/{id}/unpublish', [GradingApiController::class, 'unpublish'])->where($ids)->middleware('throttle:20,1');
         Route::get('/courses/{id}/export', [GradingApiController::class, 'export'])->where($ids);
+    });
+
+    // التسجيل الأكاديمي: فترات التسجيل + سياسة الساعات/المتطلبات/التعارض + حالة الطالب والكتالوج.
+    Route::prefix('registration')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/status', [RegistrationApiController::class, 'status']);
+        Route::get('/manage', [RegistrationApiController::class, 'manage']);
+        Route::put('/policy', [RegistrationApiController::class, 'savePolicy'])->middleware('throttle:30,1');
+        Route::post('/periods', [RegistrationApiController::class, 'createPeriod'])->middleware('throttle:30,1');
+        Route::put('/periods/{pid}', [RegistrationApiController::class, 'updatePeriod'])->where('pid', '[0-9]+')->middleware('throttle:30,1');
+        Route::delete('/periods/{pid}', [RegistrationApiController::class, 'deletePeriod'])->where('pid', '[0-9]+');
+        Route::get('/courses/{id}/prerequisites', [RegistrationApiController::class, 'prerequisites'])->where('id', '[0-9]+');
+        Route::put('/courses/{id}/prerequisites', [RegistrationApiController::class, 'savePrerequisites'])->where('id', '[0-9]+')->middleware('throttle:30,1');
     });
 
     // Courses (المواد): university / faculty / doctor manage them, students enrol, doctors see the roster.

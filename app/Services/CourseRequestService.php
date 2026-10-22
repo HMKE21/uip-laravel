@@ -22,7 +22,8 @@ class CourseRequestService
 {
     public function __construct(
         private NotificationService $notifications,
-        private FileUploadService $uploader
+        private FileUploadService $uploader,
+        private RegistrationService $registration
     ) {
     }
 
@@ -214,6 +215,11 @@ class CourseRequestService
             }
         } elseif (!$enrolled) {
             return $this->fail($l, 'أنت غير مسجّل في هذه المادة.', 'You are not enrolled in this course.', 409);
+        }
+
+        // قواعد التسجيل الأكاديمي (فترة / متطلبات / ساعات / تعارض) — موافقة الجهات على الطلب استثناء مقصود.
+        if ($denied = $this->registration->checkRequest($scope, $course, $type, $l)) {
+            return $denied;
         }
 
         if (DB::table('course_enrollment_requests')->where('course_id', $course->id)->where('student_id', $scope['studentId'])->where('status', 'pending')->exists()) {
