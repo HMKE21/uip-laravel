@@ -20,6 +20,10 @@ return [
     // set UPLOAD_AV_REQUIRED=true in production once ClamAV is provisioned
     // to fail closed instead.
     // PDF فيه JavaScript/Launch/ملفات مضمّنة بيتشغّل على نفس الأوريجن => reject (الافتراضي) | allow.
+    // محتوى المواد: سقف أكبر من الافتراضي لأن المحاضرات (pptx) والفيديوهات أكبر من 10MB. (بالـ KB)
+    // لازم يتظبط معاه upload_max_filesize / post_max_size في PHP وحدّ الرفع في الـ reverse proxy.
+    'course_materials_max_kb'       => (int) env('UPLOAD_COURSE_MATERIALS_MAX_KB', 51200),
+    'course_materials_video_max_kb' => (int) env('UPLOAD_COURSE_VIDEO_MAX_KB', 204800),
     'pdf_active_content' => env('UPLOAD_PDF_ACTIVE_CONTENT', 'reject'),
     'antivirus' => [
         'enabled'  => (bool) env('UPLOAD_AV_ENABLED', true),
@@ -112,6 +116,12 @@ return [
         ],
         // Course enrol / drop requests: the student's supporting document (medical note, form, screenshot...).
         'course_requests' => ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp', 'zip'],
+        // Course materials: التضييق per-kind بيحصل في CourseMaterialService::ALLOWED.
+        'course_materials' => [
+            'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv', 'txt', 'zip',
+            'jpg', 'jpeg', 'png', 'gif', 'webp',
+            'mp4', 'webm', 'mov',
+        ],
         'group_files' => [
             'jpg', 'jpeg', 'png', 'gif', 'webp',
             'mp4', 'webm', 'mov',
@@ -168,6 +178,7 @@ return [
         'feed'      => 'uploads/feed',
         'group_files' => 'uploads/group-files',
         'course_requests' => 'uploads/course-requests',
+        'course_materials' => 'uploads/course-materials',
         'announcements' => 'uploads/announcements',
         'meetings'  => 'uploads/meetings',
         // Round 9 (بند 18 — Recording storage). فئة منفصلة عن 'meetings'
