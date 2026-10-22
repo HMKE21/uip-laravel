@@ -49,6 +49,7 @@ use App\Http\Controllers\Api\RegistrationApiController;
 use App\Http\Controllers\Api\SummerApiController;
 use App\Http\Controllers\Api\FeeApiController;
 use App\Http\Controllers\Api\UniversityEmailApiController;
+use App\Http\Controllers\Api\AcademicCalendarApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\CourseAssignmentApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
@@ -1265,6 +1266,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/generate', [UniversityEmailApiController::class, 'generate'])->middleware('throttle:5,1');
         Route::put('/students/{id}', [UniversityEmailApiController::class, 'setLocal'])->where('id', '[0-9]+')->middleware('throttle:60,1');
         Route::get('/export', [UniversityEmailApiController::class, 'export'])->middleware('throttle:20,1');
+    });
+
+    // التقويم الأكاديمي: أحداث الجامعة/الكلية (بداية الفصل، امتحانات، إجازات...) + فترات التسجيل والفصول الصيفية للعرض.
+    Route::prefix('academic-calendar')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/', [AcademicCalendarApiController::class, 'index']);
+        Route::post('/', [AcademicCalendarApiController::class, 'store'])->middleware('throttle:60,1');
+        Route::put('/{id}', [AcademicCalendarApiController::class, 'update'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::delete('/{id}', [AcademicCalendarApiController::class, 'destroy'])->where('id', '[0-9]+')->middleware('throttle:60,1');
     });
 
     // التسجيل الصيفي: فصول صيفية ومواد معروضة بسعة (جامعة/كلية) + طلبات الطلاب وقراراتها.
