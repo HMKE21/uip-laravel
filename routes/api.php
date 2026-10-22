@@ -45,6 +45,7 @@ use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
+use App\Http\Controllers\Api\CourseAssignmentApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
 use App\Http\Controllers\Api\StudentSettingsApiController;
 use App\Http\Controllers\Api\AcademicStaffSettingsApiController;
@@ -1179,6 +1180,22 @@ Route::prefix('v1')->group(function () {
         Route::delete('/{id}', [StudentsApiController::class, 'delete']);
         Route::post('/{id}/resend', [StudentsApiController::class, 'resend']);
         Route::patch('/{id}/password', [StudentsApiController::class, 'setPassword'])->where('id', '[0-9]+');
+    });
+
+    // التكليفات والتسليمات: مديرو المادة ينزّلوا ويصحّحوا، والطالب يسلّم ويشوف درجته.
+    Route::prefix('assignments')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/my', [CourseAssignmentApiController::class, 'mine']);
+        $ids = ['id' => '[0-9]+', 'aid' => '[0-9]+', 'sid' => '[0-9]+'];
+        Route::get('/courses/{id}', [CourseAssignmentApiController::class, 'index'])->where($ids);
+        Route::post('/courses/{id}', [CourseAssignmentApiController::class, 'store'])->where($ids)->middleware('throttle:30,1');
+        Route::post('/courses/{id}/{aid}', [CourseAssignmentApiController::class, 'update'])->where($ids)->middleware('throttle:30,1');
+        Route::patch('/courses/{id}/{aid}', [CourseAssignmentApiController::class, 'update'])->where($ids);
+        Route::delete('/courses/{id}/{aid}', [CourseAssignmentApiController::class, 'destroy'])->where($ids);
+        Route::get('/courses/{id}/{aid}/file', [CourseAssignmentApiController::class, 'attachment'])->where($ids);
+        Route::post('/courses/{id}/{aid}/submit', [CourseAssignmentApiController::class, 'submit'])->where($ids)->middleware('throttle:20,1');
+        Route::get('/courses/{id}/{aid}/submissions', [CourseAssignmentApiController::class, 'submissions'])->where($ids);
+        Route::get('/courses/{id}/{aid}/submissions/{sid}/file', [CourseAssignmentApiController::class, 'submissionFile'])->where($ids);
+        Route::put('/courses/{id}/{aid}/submissions/{sid}/grade', [CourseAssignmentApiController::class, 'grade'])->where($ids)->middleware('throttle:120,1');
     });
 
     // الحضور والغياب (QR متغيّر + جيوفنس الكلية / مكان المدرّس). مديرو المادة يفتحوا ويديروا، والطالب يسجّل ويشوف نسبته.

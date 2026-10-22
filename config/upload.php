@@ -24,6 +24,8 @@ return [
     // لازم يتظبط معاه upload_max_filesize / post_max_size في PHP وحدّ الرفع في الـ reverse proxy.
     'course_materials_max_kb'       => (int) env('UPLOAD_COURSE_MATERIALS_MAX_KB', 51200),
     'course_materials_video_max_kb' => (int) env('UPLOAD_COURSE_VIDEO_MAX_KB', 204800),
+    // التكليفات: ملف المدرّس وملف تسليم الطالب (بالـ KB).
+    'course_assignments_max_kb'     => (int) env('UPLOAD_COURSE_ASSIGNMENTS_MAX_KB', 20480),
     'pdf_active_content' => env('UPLOAD_PDF_ACTIVE_CONTENT', 'reject'),
     'antivirus' => [
         'enabled'  => (bool) env('UPLOAD_AV_ENABLED', true),
@@ -164,6 +166,8 @@ return [
     ],
     'paths' => [
         'avatars'   => 'uploads/avatars',
+        'course_assignments'     => 'uploads/course-assignments',
+        'assignment_submissions' => 'uploads/assignment-submissions',
         'documents' => 'uploads/documents',
         'projects'  => 'uploads/projects',
         'reports'   => 'uploads/reports',
