@@ -99,6 +99,7 @@ use App\Http\Controllers\Api\ExamAnalyticsApiController;
 use App\Http\Controllers\Api\ExamAppealApiController;
 use App\Http\Controllers\Api\ExamCopyApiController;
 use App\Http\Controllers\Api\CourseGradebookApiController;
+use App\Http\Controllers\Api\GradingApiController;
 use App\Http\Controllers\Api\ExamQuestionQualityApiController;
 use App\Http\Controllers\Api\ExamSimilarityApiController;
 use App\Http\Controllers\Api\ExamAttemptApiController;
@@ -1211,6 +1212,26 @@ Route::prefix('v1')->group(function () {
         Route::get('/windows/{wid}/qr', [CourseAttendanceApiController::class, 'qr'])->where('wid', '[0-9]+')->middleware('throttle:60,1');
         Route::post('/windows/{wid}/close', [CourseAttendanceApiController::class, 'close'])->where('wid', '[0-9]+');
         Route::put('/windows/{wid}/students/{sid}', [CourseAttendanceApiController::class, 'mark'])->where(['wid' => '[0-9]+', 'sid' => '[0-9]+']);
+    });
+
+    // كشف الدرجات والـ GPA: نظام التقديرات (أدمن/جامعة/كلية) + درجة المقرر النهائية (مديرو المادة) + كشف الطالب.
+    Route::prefix('grading')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        $ids = ['id' => '[0-9]+', 'cid' => '[0-9]+', 'sid' => '[0-9]+'];
+        Route::get('/scale', [GradingApiController::class, 'scaleShow']);
+        Route::put('/scale', [GradingApiController::class, 'scaleSave'])->middleware('throttle:30,1');
+        Route::delete('/scale', [GradingApiController::class, 'scaleReset'])->middleware('throttle:10,1');
+        Route::get('/transcript', [GradingApiController::class, 'transcript']);
+        Route::get('/transcript/pdf', [GradingApiController::class, 'transcriptPdf'])->middleware('throttle:20,1');
+        Route::get('/courses/{id}', [GradingApiController::class, 'setup'])->where($ids);
+        Route::put('/courses/{id}/components', [GradingApiController::class, 'saveComponents'])->where($ids)->middleware('throttle:30,1');
+        Route::get('/courses/{id}/components/{cid}/scores', [GradingApiController::class, 'manualScores'])->where($ids);
+        Route::put('/courses/{id}/components/{cid}/scores', [GradingApiController::class, 'saveManualScores'])->where($ids)->middleware('throttle:60,1');
+        Route::get('/courses/{id}/sheet', [GradingApiController::class, 'sheet'])->where($ids);
+        Route::post('/courses/{id}/calculate', [GradingApiController::class, 'calculate'])->where($ids)->middleware('throttle:20,1');
+        Route::put('/courses/{id}/students/{sid}', [GradingApiController::class, 'override'])->where($ids)->middleware('throttle:120,1');
+        Route::post('/courses/{id}/publish', [GradingApiController::class, 'publish'])->where($ids)->middleware('throttle:20,1');
+        Route::post('/courses/{id}/unpublish', [GradingApiController::class, 'unpublish'])->where($ids)->middleware('throttle:20,1');
+        Route::get('/courses/{id}/export', [GradingApiController::class, 'export'])->where($ids);
     });
 
     // Courses (المواد): university / faculty / doctor manage them, students enrol, doctors see the roster.

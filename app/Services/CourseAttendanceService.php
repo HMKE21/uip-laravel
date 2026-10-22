@@ -166,7 +166,7 @@ class CourseAttendanceService
     }
 
     /** @return array<int, array{total:int,present:int,late:int,absent:int,excused:int}> student_id => counts */
-    private function counts(int $courseId, ?array $studentIds = null): array
+    public function counts(int $courseId, ?array $studentIds = null): array
     {
         $q = DB::table('attendance_records')->where('course_id', $courseId)
             ->select('student_id', 'status', DB::raw('COUNT(*) as n'))->groupBy('student_id', 'status');
@@ -185,7 +185,7 @@ class CourseAttendanceService
     }
 
     /** @return array{percent_absent: float, state: string, counted:int} */
-    private function standing(?array $c): array
+    public function standing(?array $c): array
     {
         $c ??= ['total' => 0, 'present' => 0, 'late' => 0, 'absent' => 0, 'excused' => 0];
         $counted = $c['total'] - $c['excused'];
