@@ -82,6 +82,10 @@ class UipResponseEncryptionMiddleware
 
         $kid  = (string) $request->header('X-Enc-Kid', '');
         $keys = $kid !== '' ? $this->crypto->keysFor($kid) : null;
+        // A key id presented by a different client / account than the one that negotiated it is treated as expired (client re-handshakes).
+        if ($keys !== null && !$this->crypto->bindClient($kid, (string) $request->userAgent(), (string) $request->header('Authorization', ''))) {
+            $keys = null;
+        }
 
         // Admin → Platform Policy switched the envelope OFF: answers are plain JSON, enforcement is lifted.
         // A tab that still holds an old key may keep sending encrypted bodies for a while, so those are still

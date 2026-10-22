@@ -63,7 +63,11 @@ class ResponseCryptoService
             'req'  => hash_hkdf('sha256', $shared, 32, 'uip-req-enc-v1', $salt),
         ];
 
-        Cache::put('resp_enc:' . $kid, json_encode(array_map('base64_encode', $keys)), (int) config('secure_transport.key_ttl', 7200));
+        $ttl = (int) config('secure_transport.key_ttl', 7200);
+        // The key id is bound to the client that did the handshake (User-Agent hash now, account id on its first
+        // authenticated call), so a leaked/stolen X-Enc-Kid cannot be replayed from another browser or another account.
+        $record = array_map('base64_encode', $keys) + ['ua' => hash('sha256', (string) request()->userAgent()), 'sub' => '', 'exp' => time() + $ttl];
+        Cache::put('resp_enc:' . $kid, json_encode($record), $ttl);
 
         return ['kid' => $kid, 'server_pub' => self::b64uEncode($serverPub), 'salt' => self::b64uEncode($salt)];
     }
@@ -81,6 +85,41 @@ class ResponseCryptoService
         }
 
         return ['resp' => base64_decode($arr['resp']), 'req' => base64_decode($arr['req'])];
+    }
+
+    /**
+     * True when this request may use the key `$kid`: same User-Agent as at handshake, and (once bound) same account.
+     * The account id is read from the Bearer JWT WITHOUT verifying it — it is only a binding label; real authentication
+     * still happens in the auth middleware. A forged `sub` can only make the key stop working, never grant access.
+     */
+    public function bindClient(string $kid, string $userAgent, string $authHeader): bool
+    {
+        $v = Cache::get('resp_enc:' . $kid);
+        $rec = $v ? json_decode($v, true) : null;
+        if (!is_array($rec)) {
+            return false;
+        }
+        if (isset($rec['ua']) && !hash_equals((string) $rec['ua'], hash('sha256', $userAgent))) {
+            return false;
+        }
+        $sub = '';
+        if (preg_match('/^Bearer\s+([\w-]+)\.([\w-]+)\.[\w-]+$/', $authHeader, $m)) {
+            $claims = json_decode(self::b64uDecode($m[2]), true);
+            $sub = is_array($claims) && isset($claims['sub']) && is_scalar($claims['sub']) ? substr((string) $claims['sub'], 0, 64) : '';
+        }
+        if ($sub === '') {
+            return true;
+        }
+        $bound = (string) ($rec['sub'] ?? '');
+        if ($bound === '') {
+            $rec['sub'] = $sub;
+            $left = max(1, (int) ($rec['exp'] ?? 0) - time());
+            Cache::put('resp_enc:' . $kid, json_encode($rec), $left);
+
+            return true;
+        }
+
+        return hash_equals($bound, $sub);
     }
 
     /**
