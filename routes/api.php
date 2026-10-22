@@ -46,6 +46,7 @@ use App\Http\Controllers\Api\CourseMaterialsApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
 use App\Http\Controllers\Api\AdminRequestApiController;
 use App\Http\Controllers\Api\RegistrationApiController;
+use App\Http\Controllers\Api\SummerApiController;
 use App\Http\Controllers\Api\CourseAttendanceApiController;
 use App\Http\Controllers\Api\CourseAssignmentApiController;
 use App\Http\Controllers\Api\AccountLinkApiController;
@@ -1234,6 +1235,21 @@ Route::prefix('v1')->group(function () {
         Route::post('/courses/{id}/publish', [GradingApiController::class, 'publish'])->where($ids)->middleware('throttle:20,1');
         Route::post('/courses/{id}/unpublish', [GradingApiController::class, 'unpublish'])->where($ids)->middleware('throttle:20,1');
         Route::get('/courses/{id}/export', [GradingApiController::class, 'export'])->where($ids);
+    });
+
+    // التسجيل الصيفي: فصول صيفية ومواد معروضة بسعة (جامعة/كلية) + طلبات الطلاب وقراراتها.
+    Route::prefix('summer')->middleware(['uip.auth', 'uip.staff_alias'])->group(function () {
+        Route::get('/status', [SummerApiController::class, 'status']);
+        Route::post('/register', [SummerApiController::class, 'register'])->middleware('throttle:30,1');
+        Route::post('/registrations/{id}/cancel', [SummerApiController::class, 'cancel'])->where('id', '[0-9]+');
+        Route::get('/terms', [SummerApiController::class, 'manage']);
+        Route::post('/terms', [SummerApiController::class, 'createTerm'])->middleware('throttle:30,1');
+        Route::put('/terms/{id}', [SummerApiController::class, 'updateTerm'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::delete('/terms/{id}', [SummerApiController::class, 'deleteTerm'])->where('id', '[0-9]+');
+        Route::put('/terms/{id}/offerings', [SummerApiController::class, 'saveOfferings'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::get('/requests', [SummerApiController::class, 'requests']);
+        Route::post('/requests/{id}/approve', [SummerApiController::class, 'approve'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/requests/{id}/reject', [SummerApiController::class, 'reject'])->where('id', '[0-9]+')->middleware('throttle:60,1');
     });
 
     // الطلبات الإدارية (شهادة قيد / بيان درجات / إفادة): طالب ← كلية ← جامعة، وبعد الاعتماد يتحمّل المستند PDF.

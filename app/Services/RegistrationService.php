@@ -104,7 +104,7 @@ class RegistrationService
     private function currentHours(int $studentId): array
     {
         $enrolled = (int) DB::table('course_enrollments as e')->join('courses as c', 'c.id', '=', 'e.course_id')
-            ->where('e.student_id', $studentId)->where('c.status', 'active')->sum('c.credit_hours');
+            ->where('e.student_id', $studentId)->where('c.status', 'active')->where('e.source', '!=', 'summer')->sum('c.credit_hours');
         $pending = (int) DB::table('course_enrollment_requests as r')->join('courses as c', 'c.id', '=', 'r.course_id')
             ->where('r.student_id', $studentId)->where('r.status', 'pending')->where('r.type', 'enroll')->sum('c.credit_hours');
         return ['enrolled' => $enrolled, 'pending' => $pending];
