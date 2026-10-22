@@ -15,6 +15,7 @@ use Illuminate\Http\Request;
  *   GET    /drive?parent_id=          محتوى مجلد (الجذر لو فاضي) + breadcrumb + الحصة
  *   GET    /drive/tree                كل المجلدات (الشجرة الجانبية)
  *   GET    /drive/search?q=
+ *   GET    /drive/resolve?ids=1,2,3   بيانات عناصر بالـ id (اختصارات سطح المكتب) + gone = اللي اتمسح نهائيًا
  *   GET    /drive/search-content?q=   بحث جوّه محتوى الملفات النصية (مطابقات + رقم السطر)
  *   GET    /drive/usage
  *   GET    /drive/templates           قوالب المشاريع
@@ -91,6 +92,12 @@ class DriveApiController extends Controller
     public function tree(Request $request)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->tree($uid), 'Folder tree retrieved successfully.'));
+    }
+
+    public function resolve(Request $request)
+    {
+        $ids = array_filter(explode(',', (string) $request->query('ids', '')), 'ctype_digit');
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->drive->resolveNodes($uid, $ids), 'OK'));
     }
 
     public function searchContent(Request $request, DriveContentSearchService $content)

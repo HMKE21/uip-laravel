@@ -203,6 +203,14 @@ class DesktopSettingsApiController extends Controller
             }
             $prefs[$hk] = array_values(array_unique($list));
         }
+        // اختصارات سطح المكتب: ids عناصر "جهازي" (الاختصار بيشاور على العنصر، مفيش نسخ)
+        $sc = [];
+        foreach (array_slice((array) ($in['shortcuts'] ?? []), 0, 100) as $v) {
+            if ((is_int($v) || (is_string($v) && ctype_digit($v))) && (int) $v > 0) {
+                $sc[] = (int) $v;
+            }
+        }
+        $prefs['shortcuts'] = array_values(array_unique($sc));
         if ($prefs['wallpaper'] === 'custom' && empty($row->wallpaper)) {
             $prefs['wallpaper'] = 'aurora'; // مفيش صورة مرفوعة لسه
         }

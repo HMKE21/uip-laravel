@@ -244,6 +244,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/', [DriveApiController::class, 'index']);
         Route::get('/tree', [DriveApiController::class, 'tree']);
         Route::get('/search', [DriveApiController::class, 'search']);
+        Route::get('/resolve', [DriveApiController::class, 'resolve'])->middleware('throttle:120,1');
         Route::get('/search-content', [DriveApiController::class, 'searchContent'])->middleware('throttle:40,1');
         Route::get('/usage', [DriveApiController::class, 'usage']);
         Route::get('/templates', [DriveApiController::class, 'templates']);

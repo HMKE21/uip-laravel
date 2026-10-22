@@ -815,6 +815,33 @@ class DriveService
         return $ids;
     }
 
+    /**
+     * بيانات عناصر بالـ id (لاختصارات سطح المكتب): items = الحيّة، gone = اللي اتمسحت نهائيًا (مش موجودة خالص — الاختصار بيتشال).
+     * اللي في السلة مش بترجع في الاتنين: الاختصار بيستنى لحد ما تترجّع.
+     * @return array{items:array,gone:int[]}
+     */
+    public function resolveNodes(int $uid, array $ids): array
+    {
+        $ids = array_slice(array_values(array_unique(array_filter(array_map('intval', $ids), fn ($i) => $i > 0))), 0, 100);
+        if (!$ids) {
+            return ['items' => [], 'gone' => []];
+        }
+        $rows = $this->q($uid)->whereIn('id', $ids)->get();
+        $crumbs = [];
+        $items = [];
+        foreach ($rows as $n) {
+            if ($n->deleted_at !== null) {
+                continue;
+            }
+            $pid = $n->parent_id !== null ? (int) $n->parent_id : null;
+            $crumbs[$pid ?? 0] ??= implode('/', array_column($this->breadcrumb($uid, $pid), 'name'));
+            $r = $n->toRowArray();
+            $r['path'] = $crumbs[$pid ?? 0];
+            $items[] = $r;
+        }
+        return ['items' => $items, 'gone' => array_values(array_diff($ids, $rows->pluck('id')->map(fn ($i) => (int) $i)->all()))];
+    }
+
     // ---- recycle bin ---------------------------------------------------------------------------------
 
     public function trash(int $uid, array $ids): int
