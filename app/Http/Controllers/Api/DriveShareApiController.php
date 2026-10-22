@@ -13,7 +13,7 @@ use Illuminate\Http\Request;
  * صاحب الملف (uip.auth + نفس أدوار "جهازي"):
  *   GET    /drive/shares                  كل روابطي الحيّة
  *   GET    /drive/nodes/{id}/shares       روابط عنصر
- *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never, can_download}
+ *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download}
  *   PATCH  /drive/shares/{id}             {expiry?, can_download?}
  *   DELETE /drive/shares/{id}             إلغاء الرابط
  *

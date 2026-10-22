@@ -21,6 +21,7 @@ class DriveShareService
 {
     public const EXPIRY = ['1d' => 1, '7d' => 7, '30d' => 30, 'never' => null];
     private const MAX_PER_USER = 300;
+    private const MAX_EXPIRY_MINUTES = 525600; // 365 يوم
 
     public function __construct(private DriveService $drive)
     {
@@ -28,12 +29,20 @@ class DriveShareService
 
     private static function expiryFor(?string $key): ?\Illuminate\Support\Carbon
     {
-        $key = $key ?: '7d';
-        if (!array_key_exists($key, self::EXPIRY)) {
+        $key = strtolower(trim((string) $key)) ?: '7d';
+        if ($key === 'never') {
+            return null;
+        }
+        // مدة بالدقايق/الساعات/الأيام بمزاج المستخدم: "5m" · "2h" · "3d" (الجاهزة 1d/7d/30d بتعدّي من نفس الصيغة).
+        if (!preg_match('/^(\d{1,6})([mhd])$/', $key, $m)) {
             throw new DriveException('Invalid expiry.', 422);
         }
-        $days = self::EXPIRY[$key];
-        return $days === null ? null : now()->addDays($days);
+        $n = (int) $m[1];
+        $minutes = $n * ['m' => 1, 'h' => 60, 'd' => 1440][$m[2]];
+        if ($n < 1 || $minutes > self::MAX_EXPIRY_MINUTES) {
+            throw new DriveException('Expiry must be between 1 minute and 365 days.', 422);
+        }
+        return now()->addMinutes($minutes);
     }
 
     private function mine(int $uid)
