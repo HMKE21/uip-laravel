@@ -12,7 +12,7 @@ class UipJwtService
 {
     private static function secret(): string
     {
-        $secret = env('JWT_SECRET');
+        $secret = config('security.jwt.secret');
         if (!$secret) {
             throw new \RuntimeException('JWT_SECRET is not configured.');
         }
@@ -68,7 +68,7 @@ class UipJwtService
     {
         static $warned = false;
         $bases = [];
-        $cur = env('JWT_ENC_KEY');
+        $cur = config('security.jwt.enc_key');
         if (!$cur) {
             if (!$warned && app()->environment('production')) {
                 \Illuminate\Support\Facades\Log::warning('JWT_ENC_KEY is not set — access-token encryption key is derived from JWT_SECRET. Set a separate random key.');
@@ -77,7 +77,7 @@ class UipJwtService
             $cur = self::secret();
         }
         $bases[] = (string) $cur;
-        if ($prev = env('JWT_ENC_KEY_PREV')) {
+        if ($prev = config('security.jwt.enc_key_prev')) {
             $bases[] = (string) $prev;
         }
 
@@ -179,7 +179,7 @@ class UipJwtService
      */
     public static function decodeAccess(string $token): ?array
     {
-        if (filter_var(env('AUTH_REQUIRE_SEALED', false), FILTER_VALIDATE_BOOLEAN) && !self::isSealed($token)) {
+        if ((bool) config('security.jwt.require_sealed', false) && !self::isSealed($token)) {
             return null;
         }
         $claims = self::decode($token);
@@ -209,7 +209,7 @@ class UipJwtService
      */
     public static function refreshTtl(): int
     {
-        $base = (int) env('JWT_REFRESH_TTL', 1209600);
+        $base = (int) config('security.jwt.refresh_ttl', 1209600);
         try {
             if (\App\Support\PlatformPolicy::flag('persistent_login')) {
                 return max($base, (int) config('security.persistent_refresh_ttl', 31536000));
@@ -223,7 +223,7 @@ class UipJwtService
 
     public static function issueTokenPair(int $userId, string $role, ?int $sessionId = null): array
     {
-        $accessTtl  = (int) env('JWT_ACCESS_TTL', 900);
+        $accessTtl  = (int) config('security.jwt.access_ttl', 900);
         $refreshTtl = self::refreshTtl();
 
         $user = \App\Models\User::find($userId);

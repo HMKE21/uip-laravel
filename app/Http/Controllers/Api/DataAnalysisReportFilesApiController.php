@@ -147,10 +147,10 @@ class DataAnalysisReportFilesApiController extends Controller
             'filename' => $row['original_filename'],
         ], $request->ip());
 
-        return new Response(file_get_contents($fullPath), 200, [
-            'Content-Type'        => $row['mime_type'] ?: 'application/octet-stream',
-            'Content-Disposition' => 'attachment; filename="' . basename((string) $row['original_filename']) . '"',
-            'Content-Length'      => (string) filesize($fullPath),
+        return response()->download($fullPath, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $row['original_filename'])), [
+            'Content-Type'            => $row['mime_type'] ?: 'application/octet-stream',
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; sandbox",
         ]);
     }
 
@@ -173,9 +173,11 @@ class DataAnalysisReportFilesApiController extends Controller
         }
 
         return new Response(file_get_contents($fullPath), 200, [
-            'Content-Type'        => $row['mime_type'] ?: 'application/pdf',
-            'Content-Disposition' => 'inline; filename="' . basename((string) $row['original_filename']) . '"',
-            'Content-Length'      => (string) filesize($fullPath),
+            'Content-Type'            => 'application/pdf',
+            'Content-Disposition'     => 'inline; filename="' . str_replace(["\r", "\n", '"', '\\'], '_', basename((string) $row['original_filename'])) . '"',
+            'Content-Length'          => (string) filesize($fullPath),
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; sandbox",
         ]);
     }
 

@@ -10,6 +10,29 @@
  */
 
 return [
+    // مفاتيح المصادقة: كلها هنا (مش env() جوه الكود) عشان `php artisan config:cache` ميكسرش الدخول
+    // (env() بترجّع null لما الكونفيج يتكاشّى => JWT_SECRET فاضي => كل الـ API يقع 500).
+    'jwt' => [
+        'secret'         => env('JWT_SECRET'),
+        'enc_key'        => env('JWT_ENC_KEY'),
+        'enc_key_prev'   => env('JWT_ENC_KEY_PREV'),
+        'access_ttl'     => (int) env('JWT_ACCESS_TTL', 900),
+        'refresh_ttl'    => (int) env('JWT_REFRESH_TTL', 1209600),
+        'require_sid'    => filter_var(env('AUTH_REQUIRE_SID', false), FILTER_VALIDATE_BOOLEAN),
+        'require_sealed' => filter_var(env('AUTH_REQUIRE_SEALED', false), FILTER_VALIDATE_BOOLEAN),
+    ],
+    'cors_allowed_origins'  => (string) env('CORS_ALLOWED_ORIGINS', ''),
+    'auth_allowed_origins'  => (string) env('AUTH_ALLOWED_ORIGINS', ''),
+    'trust_only_last_xff'   => filter_var(env('TRUST_ONLY_LAST_XFF', true), FILTER_VALIDATE_BOOLEAN),
+    'cookie' => [
+        'samesite'           => (string) env('AUTH_COOKIE_SAMESITE', 'strict'),
+        'samesite_device'    => (string) env('AUTH_COOKIE_SAMESITE', 'lax'),
+        'secure'             => env('AUTH_COOKIE_SECURE'),
+        'domain'             => (string) env('AUTH_COOKIE_DOMAIN', ''),
+        'allow_body_refresh' => filter_var(env('AUTH_ALLOW_BODY_REFRESH', true), FILTER_VALIDATE_BOOLEAN),
+        'refresh_transport'  => (string) env('AUTH_REFRESH_TRANSPORT', 'cookie'),
+    ],
+
     'rate_limit_per_min' => (int) env('RATE_LIMIT_PER_MIN', 60),
 
     // سقف مستقل لطلبات محاولة الامتحان الشغالة (attempts/{id}/answers|security-events|submit)

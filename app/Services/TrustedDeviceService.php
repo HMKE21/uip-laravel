@@ -40,12 +40,12 @@ class TrustedDeviceService
             'expires_at'   => now()->addDays(self::TTL_DAYS),
         ]);
 
-        $sameSite = strtolower((string) env('AUTH_COOKIE_SAMESITE', 'lax'));
+        $sameSite = strtolower((string) config('security.cookie.samesite_device', 'lax'));
         if (!in_array($sameSite, ['strict', 'lax', 'none'], true)) {
             $sameSite = 'lax';
         }
         $secure = app()->environment('production') || (bool) config('session.secure', false) || $sameSite === 'none';
-        $domain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
+        $domain = trim((string) config('security.cookie.domain', ''));
 
         $cookie = new Cookie(
             self::COOKIE_NAME,

@@ -207,8 +207,9 @@ class GithubConnectionApiController extends Controller
 
         $out = [];
         foreach ($rows as $row) {
-            if (preg_match('#github\.com/([\w.\-]+/[\w.\-]+?)(?:\.git)?/?$#i', (string) $row->url, $m)) {
-                $out[] = ['key' => strtolower($m[1]), 'uuid' => $row->uuid, 'title' => $row->title_en ?: $row->title_ar];
+            $parsedRepo = \App\Support\GithubRepoUrl::parse((string) $row->url);
+            if ($parsedRepo !== null) {
+                $out[] = ['key' => strtolower($parsedRepo[0] . '/' . $parsedRepo[1]), 'uuid' => $row->uuid, 'title' => $row->title_en ?: $row->title_ar];
             }
         }
         return $out;

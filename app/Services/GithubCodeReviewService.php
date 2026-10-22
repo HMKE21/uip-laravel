@@ -630,10 +630,7 @@ class GithubCodeReviewService
     /** @return array{0:string,1:string}|null [owner, repo] */
     private function parseRepoUrl(string $url): ?array
     {
-        if (!preg_match('#github\.com[/:]([\w.\-]+)/([\w.\-]+?)(?:\.git)?/?$#i', trim($url), $m)) {
-            return null;
-        }
-        return [$m[1], $m[2]];
+        return \App\Support\GithubRepoUrl::parse($url);
     }
 
     /** محتوى ملف واحد: raw.githubusercontent.com للعام (من غير استهلاك حد الـ API)، وcontents API بالتوكن للخاص. null عند الفشل. */

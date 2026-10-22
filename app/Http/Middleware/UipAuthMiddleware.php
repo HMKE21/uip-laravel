@@ -64,7 +64,7 @@ class UipAuthMiddleware
         // جلسة اتلغت من بورتال الأمان (أو خلصت) => الـ access token بيبطل فورًا.
         $sid = isset($claims['sid']) ? (int) $claims['sid'] : null;
         // توكن من غير sid مينفعش يتلغى بالـ logout — نرفضه لو AUTH_REQUIRE_SID=true.
-        if (!$sid && filter_var(env('AUTH_REQUIRE_SID', false), FILTER_VALIDATE_BOOLEAN)) {
+        if (!$sid && (bool) config('security.jwt.require_sid', false)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Your session has expired. Please log in again.',

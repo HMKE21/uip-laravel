@@ -45,11 +45,15 @@ class GithubHttp
     public static function file(string $owner, string $repo, string $branch, string $path, ?string $token = null): ?string
     {
         $token = $token ?: self::platformToken();
+        if (!\App\Support\GithubRepoUrl::safeSegment($owner) || !\App\Support\GithubRepoUrl::safeSegment($repo)
+            || in_array('..', explode('/', $path), true) || in_array('..', explode('/', $branch), true)) {
+            return null;
+        }
         $enc = implode('/', array_map('rawurlencode', explode('/', $path)));
 
         // 1) raw.githubusercontent.com: للريبوز العامة، من غير استهلاك حد الـ API.
         try {
-            $raw = Http::withHeaders(['User-Agent' => 'UIP-Platform'])->timeout(12)
+            $raw = Http::withHeaders(['User-Agent' => 'UIP-Platform'])->timeout(12)->withoutRedirecting()
                 ->get("https://raw.githubusercontent.com/{$owner}/{$repo}/" . rawurlencode($branch) . "/{$enc}");
             if ($raw->successful()) {
                 return $raw->body();
@@ -66,9 +70,27 @@ class GithubHttp
         }
     }
 
+    /**
+     * توكن المنصة بيتبعت مع كل طلب: لازم الـ host يكون api.github.com بس، والمسار من غير ".." (حتى مشفّرة)
+     * عشان owner/repo مايخرجوش من /repos/ لـ endpoint تاني بتوكن المنصة (SSRF/path traversal).
+     * @throws \RuntimeException
+     */
+    private static function assertGithubUrl(string $url): void
+    {
+        $p = parse_url($url);
+        $host = strtolower((string) ($p['host'] ?? ''));
+        $path = rawurldecode((string) ($p['path'] ?? ''));
+        if (($p['scheme'] ?? '') !== 'https' || !in_array($host, ['api.github.com', 'raw.githubusercontent.com'], true)
+            || isset($p['user']) || isset($p['port'])
+            || preg_match('#(^|/)\.\.?(/|$)#', $path) || str_contains($path, '\\')) {
+            throw new \RuntimeException('Blocked unsafe GitHub URL.');
+        }
+    }
+
     /** @throws \RuntimeException */
     private static function request(string $url, ?string $token, string $accept, bool $retried = false)
     {
+        self::assertGithubUrl($url);
         $req = Http::withHeaders(['User-Agent' => 'UIP-Platform', 'Accept' => $accept])->timeout(15);
         if ($token) {
             $req = $req->withToken($token);

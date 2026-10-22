@@ -30,10 +30,11 @@ class ProjectRepoContextService
     {
         $link = DB::table('project_links')->where('project_id', $project->id)->where('type', 'github')
             ->orderByDesc('is_primary')->orderByDesc('created_at')->first();
-        if (!$link || !preg_match('#github\.com[/:]([\w.\-]+)/([\w.\-]+?)(?:\.git)?/?$#i', trim((string) $link->url), $m)) {
+        $m = $link ? \App\Support\GithubRepoUrl::parse((string) $link->url) : null;
+        if (!$link || $m === null) {
             return "Repository: NO GitHub repository linked. Judge only from the written description and say so where evidence is missing; do not penalise code-quality for code you cannot see.";
         }
-        [$owner, $repo] = [$m[1], $m[2]];
+        [$owner, $repo] = [$m[0], $m[1]];
 
         return Cache::remember("ai_repo_ctx:{$project->id}:" . md5("{$owner}/{$repo}"), self::CACHE_TTL, function () use ($project, $owner, $repo) {
             try {

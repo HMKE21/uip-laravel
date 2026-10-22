@@ -58,7 +58,7 @@ class UipTrustedClientIpMiddleware
         // وعدّاد المحاولات الفاشلة وسياسات IP/Country. لو الطلب ماجاش بتوقيع صالح من Vercel، بنسيب بس آخر قيمة
         // (اللي أضافها الـ edge بتاع Railway بنفسه) ونمسح اللي قبلها اللي جاي من العميل.
         $signedOk = isset($valid) && $valid === true;
-        if (!$signedOk && filter_var(env('TRUST_ONLY_LAST_XFF', true), FILTER_VALIDATE_BOOLEAN)) {
+        if (!$signedOk && (bool) config('security.trust_only_last_xff', true)) {
             $xff = array_values(array_filter(array_map('trim', explode(',', (string) $request->headers->get('X-Forwarded-For', '')))));
             if (count($xff) > 1) {
                 $request->headers->set('X-Forwarded-For', end($xff));

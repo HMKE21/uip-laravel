@@ -76,12 +76,12 @@ class AuthCookies
 
     public static function allowBodyRefresh(): bool
     {
-        return filter_var(env('AUTH_ALLOW_BODY_REFRESH', true), FILTER_VALIDATE_BOOLEAN);
+        return (bool) config('security.cookie.allow_body_refresh', true);
     }
 
     public static function exposeRefreshInBody(): bool
     {
-        return strtolower((string) env('AUTH_REFRESH_TRANSPORT', 'cookie')) === 'both';
+        return strtolower((string) config('security.cookie.refresh_transport', 'cookie')) === 'both';
     }
 
     // ---- CSRF ------------------------------------------------------------
@@ -127,8 +127,8 @@ class AuthCookies
     public static function allowedOrigins(): array
     {
         $list = [];
-        foreach (['CORS_ALLOWED_ORIGINS', 'AUTH_ALLOWED_ORIGINS'] as $key) {
-            foreach (explode(',', (string) env($key, '')) as $o) {
+        foreach (['security.cors_allowed_origins', 'security.auth_allowed_origins'] as $key) {
+            foreach (explode(',', (string) config($key, '')) as $o) {
                 $o = rtrim(trim($o), '/');
                 if ($o !== '' && $o !== '*') {
                     $list[] = $o;
@@ -197,12 +197,12 @@ class AuthCookies
 
     private static function makeCookie(string $name, string $value, int $expires, string $path, bool $httpOnly, Request $request): Cookie
     {
-        $sameSite = strtolower((string) env('AUTH_COOKIE_SAMESITE', 'strict'));
+        $sameSite = strtolower((string) config('security.cookie.samesite', 'strict'));
         if (!in_array($sameSite, ['strict', 'lax', 'none'], true)) {
             $sameSite = 'strict';
         }
 
-        $secureEnv = env('AUTH_COOKIE_SECURE');
+        $secureEnv = config('security.cookie.secure');
         $secure = $secureEnv !== null && $secureEnv !== ''
             ? filter_var($secureEnv, FILTER_VALIDATE_BOOLEAN)
             : ($request->isSecure() || app()->environment('production'));
@@ -212,7 +212,7 @@ class AuthCookies
             $secure = true;
         }
 
-        $domain = trim((string) env('AUTH_COOKIE_DOMAIN', ''));
+        $domain = trim((string) config('security.cookie.domain', ''));
 
         return new Cookie(
             $name,
@@ -231,7 +231,7 @@ class AuthCookies
     {
         $key = (string) config('app.key', '');
         if ($key === '') {
-            $key = (string) env('JWT_SECRET', '');
+            $key = (string) config('security.jwt.secret', '');
         }
         if ($key === '') {
             throw new \RuntimeException('APP_KEY or JWT_SECRET must be set to issue auth cookies.');

@@ -99,9 +99,12 @@ class FilesApiController extends Controller
 
         $this->files->recordDownload($file->id);
 
-        return response(file_get_contents($path), 200, [
-            'Content-Type'        => $file->mime_type ?: 'application/octet-stream',
-            'Content-Disposition' => 'attachment; filename="' . $file->original_name . '"',
+        // response()->download بيبني Content-Disposition بشكل آمن (من غير حقن header عن طريق اسم الملف)
+        // ويبث الملف من غير تحميله كله في الذاكرة. nosniff + sandbox CSP: مفيش تنفيذ لو اتفتح inline.
+        return response()->download($path, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $file->original_name)), [
+            'Content-Type'            => $file->mime_type ?: 'application/octet-stream',
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; sandbox",
         ]);
     }
 

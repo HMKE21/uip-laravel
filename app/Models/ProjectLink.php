@@ -31,7 +31,7 @@ class ProjectLink extends Model
      */
     public static function isValidGithubRepoUrl(string $url): bool
     {
-        return (bool) preg_match('#^https?://(?:www\.)?github\.com/[\w.\-]+/[\w.\-]+?(?:\.git)?/?$#i', trim($url));
+        return (bool) preg_match('#^https?://(?:www\.)?github\.com/#i', trim($url)) && \App\Support\GithubRepoUrl::parse($url) !== null;
     }
 
     /** يطابق ProjectLink::toRowArray() القديمة بالظبط. */

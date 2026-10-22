@@ -71,7 +71,7 @@ class UipCorsMiddleware
     private function resolveAllowedOrigin(Request $request): string
     {
         $origin = $request->header('Origin');
-        $allowList = array_filter(array_map('trim', explode(',', (string) env('CORS_ALLOWED_ORIGINS', ''))));
+        $allowList = array_filter(array_map('trim', explode(',', (string) config('security.cors_allowed_origins', ''))));
 
         if (!$origin) {
             return (string) config('app.url', '*');

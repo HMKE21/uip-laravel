@@ -132,6 +132,10 @@ class LoginController extends Controller
             }
         }
 
+        // نفس زمن التحقق سواء الإيميل موجود أو لأ — عشان مفيش حد يعرف الإيميلات المسجلة من فرق الزمن.
+        if (!$user) {
+            password_hash((string) $data['password'], PASSWORD_DEFAULT);
+        }
         if (!$user || !password_verify($data['password'], $user->password_hash)) {
             if ($user) {
                 $attempt = $this->lockout->registerFailedAttempt($user, $request->ip(), $locale);

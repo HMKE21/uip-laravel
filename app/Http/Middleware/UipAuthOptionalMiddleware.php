@@ -24,7 +24,7 @@ class UipAuthOptionalMiddleware
             $claims = UipJwtService::decodeAccess(substr($header, 7));
             if ($claims && isset($claims['sub'])) {
                 $sid = isset($claims['sid']) ? (int) $claims['sid'] : null;
-                $requireSid = filter_var(env('AUTH_REQUIRE_SID', false), FILTER_VALIDATE_BOOLEAN);
+                $requireSid = (bool) config('security.jwt.require_sid', false);
 
                 $valid = true;
                 if ($sid) {
