@@ -15,7 +15,9 @@ use Illuminate\Http\Request;
  *   GET    /drive/nodes/{id}/shares       روابط عنصر
  *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download,
  *                                          require_visitor_info (اسم+إيميل+موبايل قبل الفتح), password (اختياري)}
- *   PATCH  /drive/shares/{id}             {expiry?, can_download?, require_visitor_info?, password?, remove_password?}
+ *                                          single_person (أول متصفح يفتحه بس), one_time + access (مرة واحدة + مدة الإتاحة بعد أول فتح: 10m / 2h / 1d)
+ *   PATCH  /drive/shares/{id}             {expiry?, can_download?, require_visitor_info?, password?, remove_password?, single_person?, one_time?, access?}
+ *   POST   /drive/shares/{id}/reset-claim يفضّي ربط المتصفح (أول واحد يفتحه بعد كده هو اللي بيتربط)
  *   DELETE /drive/shares/{id}             إلغاء الرابط (نهائي)
  *   GET    /drive/shares/manage           كل روابطي (شغّالة/موقوفة/منتهية/ملغية) + عدّاد الزوار — لصفحة "روابطي المشاركة"
  *   GET    /drive/shares/{id}/activity    مين فتح الرابط: ملخص + الزوار + آخر الأحداث
@@ -71,6 +73,9 @@ class DriveShareApiController extends Controller
                 $request->boolean('can_download', true),
                 $request->boolean('require_visitor_info', false),
                 $request->filled('password') ? (string) $request->input('password') : null,
+                $request->boolean('single_person', false),
+                $request->boolean('one_time', false),
+                $request->filled('access') ? (string) $request->input('access') : null,
             )->toRowArray(),
             'Share link created.', 201));
     }
@@ -88,6 +93,14 @@ class DriveShareApiController extends Controller
             if ($request->has('require_visitor_info')) {
                 $in['require_visitor_info'] = $request->boolean('require_visitor_info');
             }
+            foreach (['single_person', 'one_time'] as $k) {
+                if ($request->has($k)) {
+                    $in[$k] = $request->boolean($k);
+                }
+            }
+            if ($request->has('access')) {
+                $in['access'] = $request->input('access');
+            }
             if ($request->boolean('remove_password')) {
                 $in['remove_password'] = true;
             } elseif ($request->filled('password')) {
@@ -95,6 +108,11 @@ class DriveShareApiController extends Controller
             }
             return $this->apiSuccess($this->shares->update($uid, (int) $id, $in)->toRowArray(), 'Share link updated.');
         });
+    }
+
+    public function resetClaim(Request $request, $id)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess($this->shares->resetClaim($uid, (int) $id)->toRowArray(), 'Link reset.'));
     }
 
     public function revoke(Request $request, $id)
@@ -166,6 +184,8 @@ class DriveShareApiController extends Controller
             'ua'      => (string) $r->userAgent(),
             'user_id' => $uid ? (int) $uid : null,
             'session' => (string) $r->header('X-Share-Session', ''),
+            'client'  => (string) $r->header('X-Share-Client', ''),
+            'confirm' => $r->header('X-Share-Confirm') === '1',
         ];
     }
 

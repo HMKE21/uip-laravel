@@ -12,14 +12,20 @@ class DriveShare extends Model
     protected $fillable = [
         'user_id', 'node_id', 'token', 'can_download', 'expires_at', 'revoked_at', 'views', 'downloads', 'last_used_at',
         'require_visitor_info', 'password_hash', 'gate_version', 'paused_at',
+        'single_person', 'one_time', 'access_minutes', 'claim_hash', 'claimed_at', 'claim_expires_at', 'claimed_device',
     ];
 
-    protected $hidden = ['user_id', 'password_hash'];
+    protected $hidden = ['user_id', 'password_hash', 'claim_hash'];
 
     protected $casts = [
         'can_download' => 'boolean',
         'require_visitor_info' => 'boolean',
         'gate_version' => 'integer',
+        'single_person' => 'boolean',
+        'one_time'     => 'boolean',
+        'access_minutes' => 'integer',
+        'claimed_at'   => 'datetime',
+        'claim_expires_at' => 'datetime',
         'paused_at'    => 'datetime',
         'expires_at'   => 'datetime',
         'revoked_at'   => 'datetime',
@@ -30,7 +36,24 @@ class DriveShare extends Model
 
     public function isExpired(): bool
     {
-        return $this->expires_at !== null && $this->expires_at->isPast();
+        return ($this->expires_at !== null && $this->expires_at->isPast()) || $this->isConsumed();
+    }
+
+    /** رابط بيتربط بأول متصفح يفتحه (شخص واحد أو مرة واحدة). */
+    public function usesClaim(): bool
+    {
+        return (bool) $this->single_person || (bool) $this->one_time;
+    }
+
+    public function isClaimed(): bool
+    {
+        return $this->claim_hash !== null && $this->claim_hash !== '';
+    }
+
+    /** رابط "مرة واحدة" فتحه حد ومدة الإتاحة خلصت — مش هيتفتح تاني. */
+    public function isConsumed(): bool
+    {
+        return (bool) $this->one_time && $this->isClaimed() && $this->claim_expires_at !== null && $this->claim_expires_at->isPast();
     }
 
     public function isPaused(): bool
@@ -73,6 +96,14 @@ class DriveShare extends Model
             'status'       => $this->status(),
             'paused'       => $this->isPaused(),
             'require_visitor_info' => (bool) $this->require_visitor_info,
+            'single_person' => (bool) $this->single_person,
+            'one_time'     => (bool) $this->one_time,
+            'access_minutes' => $this->access_minutes !== null ? (int) $this->access_minutes : null,
+            'claimed'      => $this->isClaimed(),
+            'claimed_at'   => $this->claimed_at,
+            'claim_expires_at' => $this->claim_expires_at,
+            'claimed_device' => $this->claimed_device,
+            'consumed'     => $this->isConsumed(),
             'has_password' => $this->password_hash !== null && $this->password_hash !== '',
             'views'        => (int) $this->views,
             'downloads'    => (int) $this->downloads,

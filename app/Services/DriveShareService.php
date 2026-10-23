@@ -54,6 +54,26 @@ class DriveShareService
         return now()->addMinutes($minutes);
     }
 
+    private const MAX_ACCESS_MINUTES = 43200; // 30 يوم
+    private const DEFAULT_ACCESS_MINUTES = 10;
+
+    /** مدة الإتاحة بعد أول فتح (لروابط "مرة واحدة"): "10m" · "2h" · "1d" -> دقايق (من دقيقة لـ 30 يوم). */
+    private static function accessMinutes(?string $key): int
+    {
+        $key = strtolower(trim((string) $key));
+        if ($key === '') {
+            return self::DEFAULT_ACCESS_MINUTES;
+        }
+        if (!preg_match('/^(\d{1,6})([mhd])$/', $key, $m)) {
+            throw new DriveException('Invalid access time.', 422);
+        }
+        $minutes = (int) $m[1] * ['m' => 1, 'h' => 60, 'd' => 1440][$m[2]];
+        if ($minutes < 1 || $minutes > self::MAX_ACCESS_MINUTES) {
+            throw new DriveException('Access time must be between 1 minute and 30 days.', 422);
+        }
+        return $minutes;
+    }
+
     private function mine(int $uid)
     {
         return DriveShare::query()->where('user_id', $uid);
@@ -117,7 +137,7 @@ class DriveShareService
         return $out;
     }
 
-    public function create(int $uid, int $nodeId, ?string $expiry, bool $canDownload, bool $requireInfo = false, ?string $password = null): DriveShare
+    public function create(int $uid, int $nodeId, ?string $expiry, bool $canDownload, bool $requireInfo = false, ?string $password = null, bool $singlePerson = false, bool $oneTime = false, ?string $access = null): DriveShare
     {
         $node = $this->drive->find($uid, $nodeId);
         if ($this->mine($uid)->whereNull('revoked_at')->count() >= self::MAX_PER_USER) {
@@ -133,6 +153,9 @@ class DriveShareService
             'require_visitor_info' => $requireInfo,
             'password_hash' => $hash,
             'gate_version' => 1,
+            'single_person' => $singlePerson,
+            'one_time'     => $oneTime,
+            'access_minutes' => $oneTime ? self::accessMinutes($access) : null,
         ]);
     }
 
@@ -148,6 +171,31 @@ class DriveShareService
         }
         if (array_key_exists('expiry', $in)) {
             $s->expires_at = self::expiryFor($in['expiry'] !== null ? (string) $in['expiry'] : null);
+        }
+        // تغيير وضع الرابط (شخص واحد / مرة واحدة / مدة الإتاحة) بيبدأ من صفحة بيضا: الربط القديم بيتمسح.
+        $claimChanged = false;
+        foreach (['single_person', 'one_time'] as $k) {
+            if (array_key_exists($k, $in) && (bool) $in[$k] !== (bool) $s->{$k}) {
+                $s->{$k} = (bool) $in[$k];
+                $claimChanged = true;
+            }
+        }
+        if ($s->one_time) {
+            if (array_key_exists('access', $in) || $s->access_minutes === null) {
+                $mins = self::accessMinutes(isset($in['access']) ? (string) $in['access'] : null);
+                if ($mins !== (int) $s->access_minutes) {
+                    $claimChanged = true;
+                }
+                $s->access_minutes = $mins;
+            }
+        } else {
+            $s->access_minutes = null;
+        }
+        if ($claimChanged) {
+            $s->claim_hash = null;
+            $s->claimed_at = null;
+            $s->claim_expires_at = null;
+            $s->claimed_device = null;
         }
         $bump = false;
         if (array_key_exists('require_visitor_info', $in)) {
@@ -175,6 +223,18 @@ class DriveShareService
     {
         $s = $this->findMine($uid, $shareId);
         $s->paused_at = $pause ? now() : null;
+        $s->save();
+        return $s;
+    }
+
+    /** يفضّي ربط المتصفح (والمدة لو "مرة واحدة") — أول متصفح يفتح الرابط بعد كده هو اللي بيتربط. */
+    public function resetClaim(int $uid, int $shareId): DriveShare
+    {
+        $s = $this->findMine($uid, $shareId);
+        $s->claim_hash = null;
+        $s->claimed_at = null;
+        $s->claim_expires_at = null;
+        $s->claimed_device = null;
         $s->save();
         return $s;
     }
@@ -397,6 +457,9 @@ class DriveShareService
                 'paused_at'   => $s->paused_at ? (string) $s->paused_at : null,
             ]);
         }
+        if ($s->isConsumed()) {
+            throw new DriveException('This one-time link has already been used.', 410, ['code' => 'share_consumed']);
+        }
         if ($s->isExpired()) {
             throw new DriveException('This link has expired.', 410, ['code' => 'share_expired']);
         }
@@ -422,7 +485,60 @@ class DriveShareService
             'needs_password' => $s->password_hash !== null && $s->password_hash !== '',
             'needs_info'     => (bool) $s->require_visitor_info,
             'owner_name'     => $owner ? Str::limit(trim((string) $owner), 60, '') : null,
+        ] + $this->claimNotice($s);
+    }
+
+    /** اللي الزائر لازم يعرفه قبل ما يفتح: رابط لشخص واحد / مرة واحدة + مدة الإتاحة. */
+    private function claimNotice(DriveShare $s): array
+    {
+        return [
+            'single_person'  => (bool) $s->single_person,
+            'one_time'       => (bool) $s->one_time,
+            'access_minutes' => $s->one_time ? (int) $s->access_minutes : null,
         ];
+    }
+
+    /**
+     * رابط "شخص واحد / مرة واحدة": أول متصفح يوافق على الفتح بيتربط بالرابط (سر محفوظ في المتصفح بيتبعت في X-Share-Client).
+     *  - $claim=false: فحص بس (اترفض لو حد تاني فتحه) من غير ما نربط حد.
+     *  - $claim=true : لو لسه محدش فتحه → 423 share_confirm لحد ما الزائر يضغط "افتح" (هيدر X-Share-Confirm)، وساعتها بنربطه.
+     */
+    private function enforceClaim(DriveShare $s, array $ctx, bool $claim = true): void
+    {
+        if (!$s->usesClaim()) {
+            return;
+        }
+        $client = (string) ($ctx['client'] ?? '');
+        $hash = ($client !== '' && strlen($client) <= 128) ? hash('sha256', $client) : '';
+        if ($s->isClaimed()) {
+            if ($hash === '' || !hash_equals((string) $s->claim_hash, $hash)) {
+                throw new DriveException($s->one_time ? 'This one-time link was already opened by someone else.' : 'This link was already opened by someone else and cannot be opened from another device.', 403, ['code' => 'share_claimed'] + $this->claimNotice($s));
+            }
+            return;
+        }
+        if (!$claim) {
+            return;
+        }
+        if ($hash === '' || empty($ctx['confirm'])) {
+            throw new DriveException('Confirm to open this link.', 423, ['code' => 'share_confirm', 'owner_name' => $this->ownerName($s)] + $this->claimNotice($s));
+        }
+        $now = now();
+        // atomic: لو اتنين فتحوه في نفس اللحظة، واحد بس بيكسب
+        $won = DriveShare::query()->where('id', $s->id)->where(function ($q) {
+            $q->whereNull('claim_hash')->orWhere('claim_hash', '');
+        })->update([
+            'claim_hash'       => $hash,
+            'claimed_at'       => $now,
+            'claim_expires_at' => $s->one_time ? $now->copy()->addMinutes(max(1, (int) $s->access_minutes)) : null,
+            'claimed_device'   => self::deviceOf($ctx['ua'] ?? null),
+        ]);
+        if (!$won) {
+            $fresh = DriveShare::query()->find($s->id);
+            if (!$fresh || !hash_equals((string) $fresh->claim_hash, $hash)) {
+                throw new DriveException('This link was already opened by someone else.', 403, ['code' => 'share_claimed'] + $this->claimNotice($s));
+            }
+        }
+        $s->refresh();
     }
 
     private static function ipMask(?string $ip): ?string
@@ -548,6 +664,7 @@ class DriveShareService
     public function enter(string $token, array $in, array $ctx): array
     {
         [$s] = $this->resolve($token);
+        $this->enforceClaim($s, $ctx, false);
         if (!$s->hasGate()) {
             return ['session' => null, 'visitor_name' => null];
         }
@@ -666,7 +783,9 @@ class DriveShareService
     public function view(string $token, ?int $nodeId, array $ctx = []): array
     {
         [$s, $root] = $this->resolve($token);
+        $this->enforceClaim($s, $ctx, false); // someone else already owns the link -> refuse before the gate
         $visitor = $this->authorize($s, $ctx);
+        $this->enforceClaim($s, $ctx);        // gate passed (or none): this browser now owns a single-person / one-time link
         $node = $this->inside($s, $root, $nodeId);
         if ($nodeId === null && $this->logEvent($s, $visitor, 'open', $ctx, null, 300)) {
             $this->touch($s, 'views'); // فتحة جديدة (مش تحديث للصفحة في خلال 5 دقايق)
@@ -700,6 +819,9 @@ class DriveShareService
                 'owner_avatar' => $ownerAvatar ? (string) $ownerAvatar : null,
                 'visitor_name' => $visitor->name ?? null,
                 'visitor_email' => $visitor->email ?? null,
+                'single_person' => (bool) $s->single_person,
+                'one_time'     => (bool) $s->one_time,
+                'claim_expires_at' => $s->one_time && $s->claim_expires_at ? $s->claim_expires_at->toIso8601String() : null,
                 'root'         => $this->publicRow($root),
             ],
             'node'       => $this->publicRow($node),
@@ -725,7 +847,9 @@ class DriveShareService
     public function openFile(string $token, ?int $nodeId, bool $download, array $ctx = []): array
     {
         [$s, $root] = $this->resolve($token);
+        $this->enforceClaim($s, $ctx, false); // someone else already owns the link -> refuse before the gate
         $visitor = $this->authorize($s, $ctx);
+        $this->enforceClaim($s, $ctx);        // gate passed (or none): this browser now owns a single-person / one-time link
         $node = $this->inside($s, $root, $nodeId);
         if ($node->isFolder()) {
             throw new DriveException('Item not found.', 404);
@@ -747,7 +871,9 @@ class DriveShareService
     public function zipFor(string $token, ?int $nodeId, array $ctx = []): array
     {
         [$s, $root] = $this->resolve($token);
+        $this->enforceClaim($s, $ctx, false); // someone else already owns the link -> refuse before the gate
         $visitor = $this->authorize($s, $ctx);
+        $this->enforceClaim($s, $ctx);        // gate passed (or none): this browser now owns a single-person / one-time link
         $node = $this->inside($s, $root, $nodeId);
         if (!$s->can_download) {
             throw new DriveException('Downloading is turned off for this link.', 403);
