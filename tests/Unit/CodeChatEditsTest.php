@@ -56,11 +56,27 @@ class CodeChatEditsTest extends TestCase
     }
 
     #[Test]
-    public function creating_a_file_that_exists_in_the_project_is_dropped(): void
+    public function creating_a_file_that_exists_in_the_project_but_was_not_sent_is_dropped(): void
     {
-        $this->assertSame([], CodeChatEdits::parse($this->create('app.py', 'x'), $this->files, ['app.py']));
-        // ملف موجود في المشروع بس ما اتبعتش كسياق
+        // ملف موجود في المشروع بس ما اتبعتش كسياق: مينفعش نكتب فوقه
         $this->assertSame([], CodeChatEdits::parse($this->create('other.py', 'x'), $this->files, ['app.py', 'other.py']));
+    }
+
+    #[Test]
+    public function an_empty_search_on_a_sent_file_is_a_whole_file_rewrite_shown_as_a_normal_edit(): void
+    {
+        $e = CodeChatEdits::parse($this->create('app.py', "print('new')"), $this->files, ['app.py']);
+        $this->assertCount(1, $e);
+        $this->assertSame('edit', $e[0]['kind']);
+        $this->assertTrue($e[0]['rewrite']);
+        $this->assertSame($this->files['app.py'], $e[0]['search']);
+        $this->assertSame(['app.py' => "print('new')"], CodeChatEdits::apply($this->files, $e));
+        // ملف اتقصّ في السياق ما يتعادش كتابته، ولا يتكتب مرتين، ولا بعد تعديل جزئي عليه
+        $this->assertSame([], CodeChatEdits::parse($this->create('app.py', 'x'), $this->files, [], ['app.py']));
+        $twice = $this->create('app.py', 'x') . $this->create('app.py', 'y');
+        $this->assertCount(1, CodeChatEdits::parse($twice, $this->files));
+        $mixed = $this->block('app.py', 'return a + c', 'return a + b') . $this->create('app.py', 'z');
+        $this->assertCount(1, CodeChatEdits::parse($mixed, $this->files));
     }
 
     #[Test]

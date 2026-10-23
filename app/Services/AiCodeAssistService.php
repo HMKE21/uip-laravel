@@ -71,7 +71,7 @@ class AiCodeAssistService
             'max_tokens'        => (int) ($cfg['max_tokens'] ?? 1500),
             'complete_enabled'  => $get('autocomplete_enabled', '1') !== '0',
             'chat_enabled'      => $get('chat_enabled', '1') !== '0',
-            'chat_max_tokens'   => max(300, min(6000, (int) ($cfg['chat_max_tokens'] ?? 2000))),
+            'chat_max_tokens'   => max(300, min(8000, (int) ($cfg['chat_max_tokens'] ?? 4000))),
             'chat_max_context_chars' => max(10000, (int) ($cfg['chat_max_context_chars'] ?? 80000)),
             'complete_rate_limit_per_min' => max(1, (int) $get('complete_rate_limit_per_min', (string) ($cfg['complete_rate_limit_per_min'] ?? 40))),
             'complete_max_tokens' => max(16, min(300, (int) ($cfg['complete_max_tokens'] ?? 96))),
@@ -479,7 +479,8 @@ class AiCodeAssistService
             $edits = [];
             if ($in['mode'] === 'assistant') {
                 $contents = array_map(fn ($f) => $f['content'], $in['files']);
-                $edits = CodeChatEdits::parse($raw, $contents, $in['tree']);
+                $cut = array_keys(array_filter($in['files'], fn ($f) => !empty($f['truncated'])));
+                $edits = CodeChatEdits::parse($raw, $contents, $in['tree'], array_map('strval', $cut));
                 if ($edits) {
                     $emit(['type' => 'edits', 'edits' => $edits]);
                 }

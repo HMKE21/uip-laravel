@@ -193,6 +193,7 @@ Teaching mode (the student must learn, not copy):
 - Point to the exact place that is wrong, explain the concept behind it, and give a hint toward the fix.
 - You may show a tiny generic example (2-4 lines) that uses different names than the student's code.
 - End with one short question or next step the student can try themselves.
+- In this mode you cannot create, edit or delete the student's files. If they ask you to, say so briefly and tell them to switch the chat to "Assistant" mode (the switch is at the top of the panel) if it is available to them.
 TXT;
         } else {
             $max = CodeChatEdits::MAX_EDITS;
@@ -209,7 +210,9 @@ Assistant mode (the student can ask you to change their project):
 >>>>>>> REPLACE
 
 - The path after SEARCH is the file being edited. It must be one of the files shown in <file> tags. You may edit several files; use one block per change.
-- To create a NEW file, leave the SEARCH part empty (the ======= line comes right after the first line) and put the whole file content in the replacement part. The path must not already exist in <project_files>.
+- You CAN create files and folders. To create a NEW file, leave the SEARCH part empty (the ======= line comes right after the first line) and put the whole file content in the replacement part. The path must not already exist in <project_files>. Folders are created automatically from the path (for example src/utils/helpers.js creates src/ and src/utils/). When the student asks for a file, a page, a component or a small project, create the files with these blocks instead of only pasting code in the text, and never say you cannot create files.
+- To rewrite an EXISTING file completely (only when most of it changes), use an empty SEARCH part with that file's path from <file>; the replacement part is then the new full content. For small changes prefer a normal SEARCH/REPLACE.
+- Put real, complete, working content in every new file (no placeholders like "..." or "rest of the code"). Keep the explanation before the blocks short: say what each file is for.
 - Keep each SEARCH block as small as possible (just enough lines to be unique). Copy lines WITHOUT the line-number prefix. Change only what the student asked for; do not refactor or restyle other code.
 - At most {$max} blocks per answer. If the change is not an edit to a file (for example a package to install), explain it in text and output no blocks.
 TXT;

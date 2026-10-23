@@ -85,6 +85,7 @@ use App\Http\Controllers\Api\DesktopSettingsApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
 use App\Http\Controllers\Api\AiCodeAssistController;
+use App\Http\Controllers\Api\AiCodeChatHistoryController;
 use App\Http\Controllers\Api\AiAssistantSettingsController;
 use App\Http\Controllers\Api\FaqIntentController;
 use App\Http\Controllers\Api\SecurityDashboardApiController;
@@ -2124,6 +2125,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/assist', [AiCodeAssistController::class, 'assist']);
         Route::post('/chat', [AiCodeAssistController::class, 'chat']);
         Route::post('/complete', [AiCodeAssistController::class, 'complete']);
+
+        // محادثات الشات المحفوظة على الحساب (قايمة / فتح / حفظ / إعادة تسمية / حذف)
+        Route::get('/chats', [AiCodeChatHistoryController::class, 'index']);
+        Route::delete('/chats', [AiCodeChatHistoryController::class, 'destroyAll']);
+        Route::get('/chats/{uuid}', [AiCodeChatHistoryController::class, 'show']);
+        Route::put('/chats/{uuid}', [AiCodeChatHistoryController::class, 'save']);
+        Route::patch('/chats/{uuid}', [AiCodeChatHistoryController::class, 'rename']);
+        Route::delete('/chats/{uuid}', [AiCodeChatHistoryController::class, 'destroy']);
     });
 
     // بند 14 (Admin Settings) — كان الوحيد من كل بورتالات Settings من غير

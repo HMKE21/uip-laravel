@@ -110,9 +110,10 @@ class CodeChatEdits
      *
      * @param array<string,string> $files مسار → محتوى (الملفات اللي اتبعتت للموديل كسياق، بعد التطبيع)
      * @param array<int,string>    $tree  كل مسارات المشروع المعروفة (عشان الملف الجديد مايكتبش فوق ملف موجود)
+     * @param array<int,string>    $noRewrite ملفات اتقصّ محتواها في السياق: ممنوع إعادة كتابتها بالكامل (هنخسر الباقي)
      * @return array<int,array{path:string,kind:string,search:string,replace:string,start_line:int,end_line:int}>
      */
-    public static function parse(string $modelText, array $files, array $tree = []): array
+    public static function parse(string $modelText, array $files, array $tree = [], array $noRewrite = []): array
     {
         $known = array_fill_keys(array_map('strval', array_merge(array_keys($files), $tree)), true);
         $order = [];   // ترتيب ظهور الملفات في رد الموديل
@@ -130,7 +131,30 @@ class CodeChatEdits
             }
 
             if (!$b['has_search']) {
-                // ملف جديد
+                // قسم SEARCH فاضي على ملف موجود اتبعت للموديل = إعادة كتابة الملف بالكامل (بتتعرض كـ diff عادي: القديم ← الجديد)
+                if (array_key_exists($path, $files) && !isset($created[$path])) {
+                    if (in_array($path, $noRewrite, true)) {
+                        continue;
+                    }
+                    $old = CodeEditBlocks::normalize((string) $files[$path]);
+                    $new = $b['replace'];
+                    if (trim($new) === '' || $new === $old || mb_strlen($new) > self::MAX_NEW_FILE_CHARS || trim($old) === '' || !empty($taken[$path])) {
+                        continue;
+                    }
+                    $taken[$path][] = [0, strlen($old)];
+                    $order[$path] ??= count($order);
+                    $edits[] = [
+                        'path'       => $path,
+                        'kind'       => 'edit',
+                        'search'     => $old,
+                        'replace'    => $new,
+                        'start_line' => 1,
+                        'end_line'   => 1 + substr_count($old, "\n"),
+                        'rewrite'    => true,
+                    ];
+                    continue;
+                }
+                // ملف جديد (المجلدات بتتعمل لوحدها من المسار)
                 if (isset($known[$path]) || isset($created[$path])) {
                     continue;
                 }
