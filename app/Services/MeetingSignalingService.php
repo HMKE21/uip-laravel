@@ -168,6 +168,8 @@ class MeetingSignalingService
         $channelData = [
             'user_id'   => $actor['key'],
             'user_info' => [
+                // laravel-echo's here()/joining()/leaving() hand the frontend `user_info` ONLY (not user_id), so the actor key must ride inside it.
+                'id'       => $actor['key'],
                 'name'     => $actor['display_name'],
                 'role'     => $actor['role'],
                 'is_guest' => $actor['type'] === 'guest',
