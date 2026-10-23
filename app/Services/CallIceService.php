@@ -62,7 +62,7 @@ class CallIceService
                 default      => [],
             };
         } catch (\Throwable $e) {
-            Log::warning('Calls: TURN provider failed, falling back to STUN only', ['provider' => $provider, 'error' => $e->getMessage()]);
+            Log::error('Calls: TURN provider failed, falling back to STUN only', ['provider' => $provider, 'error' => $e->getMessage()]);
             $turn = [];
             $provider = 'none';
         }
