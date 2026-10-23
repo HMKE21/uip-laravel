@@ -43,12 +43,13 @@ class UipRateLimitMiddleware
         }
 
         $isExamAttempt = $this->isExamAttemptRequest($request);
+        $isCall = !$isExamAttempt && $this->isCallRequest($request);
         $limit = $isExamAttempt
             ? (int) config('security.exam_attempt_rate_limit_per_min', 240)
-            : $this->resolveLimit();
+            : ($isCall ? (int) config('calls.rate_limit_per_min', 300) : $this->resolveLimit());
 
         $window = (int) floor(time() / 60);
-        $key = 'ratelimit_' . ($isExamAttempt ? 'exam_' : '') . preg_replace('/[^a-zA-Z0-9]/', '_', $this->actorKey($request)) . '_' . $window;
+        $key = 'ratelimit_' . ($isExamAttempt ? 'exam_' : ($isCall ? 'calls_' : '')) . preg_replace('/[^a-zA-Z0-9]/', '_', $this->actorKey($request)) . '_' . $window;
 
         $count = (int) Cache::get($key, 0);
 
@@ -72,6 +73,12 @@ class UipRateLimitMiddleware
     private function isExamAttemptRequest(Request $request): bool
     {
         return $request->is('api/v1/exam-system/attempts/*');
+    }
+
+    /** مسارات المكالمات: /api/v1/messaging/calls/... — polling سريع (كل 1-4 ثواني) بيحتاج bucket مستقل عن الحد العام. */
+    private function isCallRequest(Request $request): bool
+    {
+        return $request->is('api/v1/messaging/calls', 'api/v1/messaging/calls/*');
     }
 
     /** true بس لو السياسة اتقرت بنجاح وenabled=false؛ أي خطأ في القراءة => نفضل محميين بالـ config. */

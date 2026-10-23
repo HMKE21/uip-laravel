@@ -77,6 +77,7 @@ use App\Http\Controllers\Api\MeetingsAttendanceApiController;
 use App\Http\Controllers\Api\MeetingsInvitationsApiController;
 use App\Http\Controllers\Api\MessagingController;
 use App\Http\Controllers\Api\StoriesApiController;
+use App\Http\Controllers\Api\CallsApiController;
 use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\GroupChatController;
 use App\Http\Controllers\Api\ChatSafetyApiController;
@@ -1837,6 +1838,14 @@ Route::prefix('v1')->group(function () {
         Route::get('/stories/{id}/viewers', [StoriesApiController::class, 'viewers'])->where('id', '[0-9]+');
         Route::post('/stories/{id}/react', [StoriesApiController::class, 'react'])->where('id', '[0-9]+');
         Route::post('/stories/{id}/reply', [StoriesApiController::class, 'reply'])->where('id', '[0-9]+');
+        // المكالمات 1:1 (صوت أولًا): signaling بـ polling + STUN/TURN. الثابتة (poll/ice) قبل /{id}.
+        Route::get('/calls/ice', [CallsApiController::class, 'ice']);
+        Route::get('/calls/poll', [CallsApiController::class, 'poll']);
+        Route::post('/calls', [CallsApiController::class, 'start']);
+        Route::post('/calls/{id}/accept', [CallsApiController::class, 'accept'])->where('id', '[0-9]+');
+        Route::post('/calls/{id}/decline', [CallsApiController::class, 'decline'])->where('id', '[0-9]+');
+        Route::post('/calls/{id}/end', [CallsApiController::class, 'end'])->where('id', '[0-9]+');
+        Route::post('/calls/{id}/signal', [CallsApiController::class, 'signal'])->where('id', '[0-9]+');
         // سلة المحذوفات (30 يوم): حذف متعدد/الكل، استرجاع، حذف نهائي.
         Route::get('/trash', [ConversationTrashController::class, 'index']);
         Route::post('/trash/delete', [ConversationTrashController::class, 'delete']);

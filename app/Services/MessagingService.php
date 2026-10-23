@@ -93,7 +93,7 @@ class MessagingService
                 'peer_blocked_by_me' => $peer ? isset($blockedSet[(int) $peer['id']]) : false,
                 'group_avatar'       => $row['group_avatar'] ?? null,
                 'preview_type'       => $row['last_message_type'] ?? 'text',
-                'preview_meta'       => ($row['last_message_type'] ?? '') === 'system' && !empty($row['last_message_meta']) ? json_decode($row['last_message_meta'], true) : null,
+                'preview_meta'       => in_array(($row['last_message_type'] ?? ''), ['system', 'call'], true) && !empty($row['last_message_meta']) ? json_decode($row['last_message_meta'], true) : null,
                 // الرسالة اللي ملهاش نص (صورة/صوت/ملف/استطلاع) كان preview بتاعها null فالفرونت يكتب
                 // "لا توجد رسائل بعد" مع إن فيه رسايل. دلوقتي بنرجّع نوع المعاينة (preview_kind) والعدد
                 // والفرونت هو اللي بيترجم الليبل حسب اللغة.
@@ -137,7 +137,7 @@ class MessagingService
         if ($type === 'system') {
             return null; // رسائل النظام ليها preview_meta خاص
         }
-        if (in_array($type, ['poll', 'gif', 'sticker', 'image', 'video', 'audio', 'file'], true)) {
+        if (in_array($type, ['poll', 'gif', 'sticker', 'image', 'video', 'audio', 'file', 'call'], true)) {
             return $type;
         }
         if ($type === 'location' || $type === 'live_location') {

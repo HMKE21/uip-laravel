@@ -65,3 +65,7 @@ Schedule::command('drive:purge-resets')->hourly()->withoutOverlapping();
 // شغّلها من crontab كل ساعة (مش لازم لعمل الميزة: الاستوري المنتهية بتتفلتر من الاستعلام أصلًا، ده تنضيف مساحة بس):
 //   php artisan stories:prune
 // أو عبر جدولة لارافيل: Schedule::command('stories:prune')->hourly()->withoutOverlapping();
+
+// المكالمات: تنضيف تخزين بس (الصفوف المنتهية الأقدم من CALLS_PRUNE_DAYS + أي مكالمة عالقة). صحة السلوك مش معتمدة عليه —
+// المكالمات المعلّقة بتتقفل كسولًا مع أي poll.
+Schedule::command('calls:prune')->dailyAt('04:30')->withoutOverlapping();
