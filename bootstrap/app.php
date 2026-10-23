@@ -69,6 +69,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'uip.auth.optional' => \App\Http\Middleware\UipAuthOptionalMiddleware::class,
         ]);
 
+        // المكالمات: الـ SDP لازم ينتهي بـ \r\n. TrimStrings الافتراضي كان بيشيله فالمستلم يرفض الـ offer
+        // والمكالمة تفشل. بنستثني حقل payload بتاع /messaging/calls/{id}/signal (الفرونت كمان بيصلّح الـ SDP).
+        $middleware->trimStrings(except: ['payload', 'payload.*', 'payload.sdp']);
+
         // بند 2 — نفس ترتيب القديم بالظبط. prepend() يحطهم أول الـ 'api'
         // middleware group (اللي routes/api.php محمّل عليها تلقائيًا في
         // لارافيل 11)، فبيغطوا كل ريكوست تحت /api/* — بما فيه أي OPTIONS
