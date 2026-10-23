@@ -390,7 +390,7 @@ class MeetingSignalingService
         $roster = [];
 
         foreach ($this->meetings->participantsFor($meeting->id) as $participant) {
-            if ($participant->status !== 'joined') {
+            if ($participant->status !== 'joined' || !$this->isPresenceFresh($participant)) {
                 continue;
             }
             $roster[] = [
@@ -413,6 +413,9 @@ class MeetingSignalingService
         }
 
         foreach ($this->meetings->admittedGuestsFor($meeting->id) as $joinRequest) {
+            if (!$this->isPresenceFresh($joinRequest)) {
+                continue;
+            }
             $roster[] = [
                 'key'                   => 'guest:' . $joinRequest->id,
                 'type'                  => 'guest',
@@ -433,6 +436,26 @@ class MeetingSignalingService
         }
 
         return $roster;
+    }
+
+    /**
+     * هل الجلسة لسه "حية"؟ آخر heartbeat/media-state/connection-state (last_seen_at) لازم يكون
+     * جوّه presence_stale_seconds. لو لسه null (دخل ومبعتش أي نبضة) بنقيس من joined_at، ولو
+     * ده كمان null بنفترض إنه حي (دخول لسه بيحصل) بدل ما نشيله بالغلط.
+     */
+    private function isPresenceFresh($model): bool
+    {
+        $ttl = (int) config('meetings.presence_stale_seconds', 90);
+        if ($ttl <= 0) {
+            return true;
+        }
+
+        $ref = $model->last_seen_at ?? ($model->joined_at ?? null);
+        if ($ref === null) {
+            return true;
+        }
+
+        return $ref->gt(now()->subSeconds($ttl));
     }
 
     /** بينج دوري من الفرونت (كل ~20-30 ثانية) — بيحدّث last_seen_at بس، من غير أي broadcast (مفيش داعي، الحالة نفسها ما اتغيرتش). */

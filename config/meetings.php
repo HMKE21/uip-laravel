@@ -23,6 +23,10 @@ return [
     // يرفض max_participants أكبر منها لحد ما الـ SFU يبقى موجود.
     'max_mesh_participants' => (int) env('MEETING_MAX_MESH_PARTICIPANTS', 8),
 
+    // مدة (بالثواني) بعدها مشارك مبعتش heartbeat (الفرونت بيبعت كل ~20-30 ث) بيتشال من roster() —
+    // بيمنع كروت "؟" الوهمية لجلسات قديمة (تاب اتقفل/نت قطع من غير ما leave يتنادى).
+    'presence_stale_seconds' => (int) env('MEETING_PRESENCE_STALE_SECONDS', 90),
+
     'waiting_room_default_enabled' => (bool) env('MEETING_WAITING_ROOM_DEFAULT', true),
     'allow_guests_default'         => (bool) env('MEETING_ALLOW_GUESTS_DEFAULT', false),
 

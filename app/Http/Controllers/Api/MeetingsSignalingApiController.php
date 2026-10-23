@@ -218,7 +218,18 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
-        return $this->apiSuccess(['ice_servers' => $this->signaling->iceServers()], 'ICE servers retrieved successfully.');
+        $iceServers = $this->signaling->iceServers();
+        // الفرونت يستخدمها يحذّر المستخدم لو مفيش TURN (الصوت/الفيديو هيفشل بين شبكات مختلفة).
+        $hasTurn = collect($iceServers)->contains(function ($s) {
+            foreach ((array) ($s['urls'] ?? []) as $u) {
+                if (preg_match('/^turns?:/i', (string) $u)) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        return $this->apiSuccess(['ice_servers' => $iceServers, 'has_turn' => $hasTurn], 'ICE servers retrieved successfully.');
     }
 
     /** Round 4 (WebRTC Core، بند 34). */
