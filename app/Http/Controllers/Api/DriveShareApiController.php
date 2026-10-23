@@ -23,6 +23,7 @@ use Illuminate\Http\Request;
  *   POST   /drive/shares/{id}/pause       إيقاف مؤقت
  *   POST   /drive/shares/{id}/resume      استئناف
  *   DELETE /drive/shares/{id}/forever     حذف الرابط وسجله نهائيًا
+ *   POST   /drive/shares/bulk             {action: pause|resume|delete, ids?: [..], all?: true} إجراء جماعي
  *
  * أي حد معاه الرابط (من غير تسجيل دخول) — /public/drive-share/{token}:
  *   POST   /enter                        البوابة: {name,email,phone,password} -> {session}. الجلسة بتتبعت بعد كده في هيدر X-Share-Session.
@@ -130,6 +131,20 @@ class DriveShareApiController extends Controller
     public function resume(Request $request, $id)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess($this->shares->pause($uid, (int) $id, false)->toRowArray(), 'Share link resumed.'));
+    }
+
+    /** POST /drive/shares/bulk {action: pause|resume|delete, ids?: int[], all?: bool} */
+    public function bulk(Request $request)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $res = $this->shares->bulk(
+                $uid,
+                (string) $request->input('action', ''),
+                (array) $request->input('ids', []),
+                $request->boolean('all', false),
+            );
+            return $this->apiSuccess($res, 'OK');
+        });
     }
 
     public function forever(Request $request, $id)

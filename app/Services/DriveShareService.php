@@ -179,6 +179,63 @@ class DriveShareService
         return $s;
     }
 
+    /** اسم صاحب الرابط (للشاشات العامة) — بيرجّع null لو مش متاح. */
+    private function ownerName(DriveShare $s): ?string
+    {
+        try {
+            $n = DB::table('users')->where('id', $s->user_id)->value('full_name');
+        } catch (\Throwable $e) {
+            $n = null;
+        }
+        return $n ? Str::limit(trim((string) $n), 60, '') : null;
+    }
+
+    /**
+     * إجراء جماعي على روابطي: pause | resume | delete.
+     * $ids = أرقام محددة، أو $all=true لكل روابطي. بيتجاهل الروابط اللي مش بتاعتي أو اللي الإجراء ما يتطبّقش عليها (مثلًا الإيقاف لرابط منتهي).
+     * @return array{done:int,skipped:int}
+     */
+    public function bulk(int $uid, string $action, array $ids, bool $all = false): array
+    {
+        if (!in_array($action, ['pause', 'resume', 'delete'], true)) {
+            throw new DriveException('Unknown action.', 422);
+        }
+        $q = $this->mine($uid);
+        if (!$all) {
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn ($i) => $i > 0)));
+            if (!$ids) {
+                throw new DriveException('Select at least one link.', 422);
+            }
+            if (count($ids) > 1000) {
+                throw new DriveException('Too many links at once.', 422);
+            }
+            $q->whereIn('id', $ids);
+        }
+        $rows = $q->get();
+        $done = 0;
+        DB::transaction(function () use ($rows, $action, &$done) {
+            foreach ($rows as $s) {
+                if ($action === 'delete') {
+                    DB::table('drive_share_events')->where('share_id', $s->id)->delete();
+                    DB::table('drive_share_visitors')->where('share_id', $s->id)->delete();
+                    $s->delete();
+                    $done++;
+                } elseif ($s->revoked_at === null) {
+                    if ($action === 'pause' && $s->paused_at === null) {
+                        $s->paused_at = now();
+                        $s->save();
+                        $done++;
+                    } elseif ($action === 'resume' && $s->paused_at !== null) {
+                        $s->paused_at = null;
+                        $s->save();
+                        $done++;
+                    }
+                }
+            }
+        });
+        return ['done' => $done, 'skipped' => max(0, $rows->count() - $done)];
+    }
+
     /** حذف نهائي للرابط + كل سجله (الزوار والأحداث). */
     public function forever(int $uid, int $shareId): void
     {
@@ -334,7 +391,11 @@ class DriveShareService
             throw new DriveException('This link was turned off by its owner.', 410, ['code' => 'share_revoked']);
         }
         if ($s->isPaused()) {
-            throw new DriveException('This link is paused by its owner right now.', 410, ['code' => 'share_paused']);
+            throw new DriveException('This link is paused by its owner right now.', 410, [
+                'code'        => 'share_paused',
+                'owner_name'  => $this->ownerName($s),
+                'paused_at'   => $s->paused_at ? (string) $s->paused_at : null,
+            ]);
         }
         if ($s->isExpired()) {
             throw new DriveException('This link has expired.', 410, ['code' => 'share_expired']);
