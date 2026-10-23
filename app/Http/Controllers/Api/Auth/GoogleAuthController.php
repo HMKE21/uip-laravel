@@ -78,6 +78,16 @@ class GoogleAuthController extends Controller
                 : "We couldn't verify your Google account. Please try again.", 401);
         }
 
+        return $this->handleVerified($request, $g, $locale);
+    }
+
+    /**
+     * كل اللي بعد التحقق من هوية الشخص عند مزوّد الدخول (جوجل أو مايكروسوفت): دخول لو عنده حساب، وإلا بداية تسجيل.
+     * $g = ['sub','email','name','picture', 'provider' => 'google'|'microsoft'] — الإيميل لازم يكون متأكَّد منه عند المزوّد.
+     */
+    public function handleVerified(Request $request, array $g, string $locale)
+    {
+        $g['provider'] = $g['provider'] ?? 'google';
         $user = $this->findUser($g);
         if ($user) {
             return $this->signIn($request, $user, $g, $locale);
@@ -97,6 +107,7 @@ class GoogleAuthController extends Controller
         $suggest = $this->suggestNames($g);
         $token = UipJwtService::encode([
             'typ'     => self::SIGNUP_TYP,
+            'prov'    => $g['provider'],
             'gsub'    => $g['sub'],
             'email'   => $g['email'],
             'name'    => $g['name'],
@@ -115,6 +126,7 @@ class GoogleAuthController extends Controller
                     'reason'      => $deletedState['code'],
                 ],
                 'profile'            => [
+                    'provider' => $g['provider'],
                     'email'   => $g['email'],
                     'name'    => $g['name'],
                     'picture' => $g['picture'],
@@ -141,6 +153,7 @@ class GoogleAuthController extends Controller
                 : 'Your sign-up session expired. Please choose your Google account again.', 422, ['code' => 'signup_expired']);
         }
         $g = [
+            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
             'sub' => (string) $claims['gsub'], 'email' => strtolower((string) $claims['email']),
             'name' => (string) ($claims['name'] ?? ''), 'picture' => $claims['picture'] ?? null,
             'given_name' => '', 'family_name' => '', 'locale' => null,
@@ -243,6 +256,7 @@ class GoogleAuthController extends Controller
                 : 'Your sign-up session expired. Please choose your Google account again.', 422, ['code' => 'signup_expired']);
         }
         $g = [
+            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
             'sub' => (string) $claims['gsub'], 'email' => strtolower((string) $claims['email']),
             'name' => (string) ($claims['name'] ?? ''), 'picture' => $claims['picture'] ?? null,
             'given_name' => '', 'family_name' => '', 'locale' => null,
@@ -283,7 +297,7 @@ class GoogleAuthController extends Controller
     /** المربوط بجوجل الأول (sub)، وبعدين بالإيميل. */
     private function findUser(array $g): ?User
     {
-        $uid = DB::table('user_social_accounts')->where('provider', 'google')->where('provider_user_id', $g['sub'])->value('user_id');
+        $uid = DB::table('user_social_accounts')->where('provider', $g['provider'] ?? 'google')->where('provider_user_id', $g['sub'])->value('user_id');
         $user = $uid ? User::find($uid) : null;
         return $user ?: User::whereRaw('LOWER(email) = ?', [$g['email']])->first();
     }
@@ -306,7 +320,7 @@ class GoogleAuthController extends Controller
         }
 
         // أول مرة يدخل بجوجل: نربط الحساب، ونأكّد الإيميل (جوجل أكدته)، ونجيب صورته لو معندوش.
-        $linked = DB::table('user_social_accounts')->where('provider', 'google')->where('provider_user_id', $g['sub'])->exists();
+        $linked = DB::table('user_social_accounts')->where('provider', $g['provider'] ?? 'google')->where('provider_user_id', $g['sub'])->exists();
         if (!$linked) {
             // حساب اتسجّل بالباسورد ومتأكدش إيميله قبل كده: ممكن حد تاني يكون سجّل بإيميل الشخص ده بباسورد
             // من عنده (pre-hijacking). جوجل أثبت إن صاحب الإيميل هو اللي بيدخل دلوقتي، فنبوّظ الباسورد القديم
@@ -336,7 +350,7 @@ class GoogleAuthController extends Controller
     private function link(User $user, array $g): void
     {
         DB::table('user_social_accounts')->updateOrInsert(
-            ['provider' => 'google', 'provider_user_id' => $g['sub']],
+            ['provider' => $g['provider'] ?? 'google', 'provider_user_id' => $g['sub']],
             ['user_id' => $user->id, 'email' => $g['email'], 'avatar_url' => $g['picture'] ?? null, 'updated_at' => now()]
         );
     }

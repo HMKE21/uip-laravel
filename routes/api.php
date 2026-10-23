@@ -184,6 +184,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/google', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'submit'])->middleware('throttle:20,1');
         Route::post('/google/complete', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'complete'])->middleware('throttle:10,1');
         Route::post('/google/restore', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'restoreDeleted'])->middleware('throttle:10,1');
+
+        // Sign in / sign up with Microsoft (حساب شخصي أو جامعة). بعد التحقق بيكمّل في نفس مسار جوجل (/google/complete و /google/restore).
+        Route::get('/microsoft/config', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'config']);
+        Route::post('/microsoft', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'submit'])->middleware('throttle:20,1');
         Route::post('/refresh-token', [RefreshTokenController::class, 'submit'])->middleware('throttle:60,1');
         Route::post('/logout', [LogoutController::class, 'handle']);
         Route::post('/forgot-password', [ForgotPasswordController::class, 'submit'])->middleware('throttle:10,1');
