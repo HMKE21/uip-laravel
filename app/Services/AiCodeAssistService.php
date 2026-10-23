@@ -419,6 +419,7 @@ class AiCodeAssistService
             $active = '';
         }
         $tree = CodeChat::cleanTree($input['tree'] ?? []);
+        $refs = CodeChat::cleanRefs($input['refs'] ?? []);
 
         $sel = null;
         if ($active !== '') {
@@ -439,6 +440,7 @@ class AiCodeAssistService
             'files'    => $files,
             'tree'     => $tree,
             'sel'      => $sel,
+            'refs'     => $refs,
             'error'    => $error,
             'mode'     => $mode,
             'locale'   => $locale,
@@ -466,7 +468,7 @@ class AiCodeAssistService
         }
         $messages[] = [
             'role'    => 'user',
-            'content' => CodeChat::userContent($last['content'], $in['files'], $in['active'], $in['tree'], $in['sel'], $in['error']),
+            'content' => CodeChat::userContent($last['content'], $in['files'], $in['active'], $in['tree'], $in['sel'], $in['error'], $in['refs'] ?? []),
         ];
 
         $filter = new EditBlockStreamFilter($emit);

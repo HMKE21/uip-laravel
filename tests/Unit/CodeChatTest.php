@@ -103,4 +103,33 @@ class CodeChatTest extends TestCase
         $this->assertStringContainsString('<<<<<<< SEARCH path/to/file.py', $assistant);
         $this->assertStringContainsString('Be brief.', $assistant);
     }
+
+    #[Test]
+    public function pinned_code_parts_are_cleaned_and_sent_with_their_location(): void
+    {
+        $refs = CodeChat::cleanRefs([
+            ['path' => 'src/app.js', 'from' => 5, 'to' => 9, 'text' => "const a = 1;\nconst b = 2;"],
+            ['path' => 'x.js', 'text' => '   '],            // empty -> dropped
+            'not an array',
+        ]);
+        $this->assertCount(1, $refs);
+        $this->assertSame(['path' => 'src/app.js', 'from' => 5, 'to' => 9], array_diff_key($refs[0], ['text' => 1]));
+        $this->assertCount(CodeChat::MAX_REFS, CodeChat::cleanRefs(array_fill(0, 20, ['text' => 'x', 'from' => 1, 'to' => 1])));
+
+        $u = CodeChat::userContent('what does this do?', [], '', [], null, '', $refs);
+        $this->assertStringContainsString('<attached_code location="src/app.js lines 5-9">', $u);
+        $this->assertStringContainsString('const b = 2;', $u);
+        $this->assertStringEndsWith("Student's message:\nwhat does this do?", $u);
+    }
+
+    #[Test]
+    public function the_assistant_is_named_uip_ai_and_credits_its_developer(): void
+    {
+        foreach (['tutor', 'assistant'] as $mode) {
+            $p = CodeChat::systemPrompt($mode, 'en', '');
+            $this->assertStringContainsString('You are UIP AI', $p);
+            $this->assertStringContainsString('Haitham Mohamed', $p);
+            $this->assertStringContainsString('founder of UIP', $p);
+        }
+    }
 }

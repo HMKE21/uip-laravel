@@ -74,7 +74,7 @@ class AiCodeAssistController extends Controller
 
     /**
      * POST /api/v1/ai-code/chat — شات اللوحة الجانبية.
-     * body: messages[{role,content}], active_path?, files[{path,content}], tree[]?, sel_from?, sel_to?, error?, mode?, locale?
+     * body: messages[{role,content}], active_path?, files[{path,content}], tree[]?, sel_from?, sel_to?, refs[{path,from,to,text}]? (أجزاء كود اتثبتت مع السؤال), error?, mode?, locale?
      *
      * نفس أحداث الستريم: start → token* → [edits] → done، أو error في أي لحظة. التعديلات متعددة الملفات:
      * { path, kind: 'edit'|'create', search, replace, start_line, end_line }.
@@ -85,7 +85,7 @@ class AiCodeAssistController extends Controller
 
         try {
             $forced = $this->assist->projectMode($userId, $request->input('project_id'));
-            $input = $this->assist->normalizeChatInput($request->only(['messages', 'active_path', 'files', 'tree', 'sel_from', 'sel_to', 'error', 'mode', 'locale']), $forced);
+            $input = $this->assist->normalizeChatInput($request->only(['messages', 'active_path', 'files', 'tree', 'sel_from', 'sel_to', 'error', 'mode', 'locale', 'refs']), $forced);
             $this->assist->assertCanServe($userId, $forced);
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, $this->httpStatus($e));
