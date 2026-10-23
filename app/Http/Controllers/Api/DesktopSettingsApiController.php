@@ -394,12 +394,17 @@ class DesktopSettingsApiController extends Controller
     {
         $uid = $this->uid($request);
         $ar = $this->ar($this->user($uid));
-        if ($b = $this->blocked($uid, $ar)) {
-            return $b;
-        }
         $row = $this->row($uid);
         if (empty($row->lock_hash)) {
             return $this->apiSuccess(['ok' => true, 'lockEnabled' => false], 'No lock password is set.');
+        }
+        // An EMPTY password is just the lock screen asking "is a password set?" (every click / key / reload on a stale device does that).
+        // It is not a wrong guess: counting it as one locked the real owner out with 429 after a few refreshes.
+        if ((string) $request->input('password', '') === '') {
+            return $this->apiError($ar ? 'اكتب باسورد القفل.' : 'Enter the lock password.', ['password' => ['required']], 422);
+        }
+        if ($b = $this->blocked($uid, $ar)) {
+            return $b;
         }
         if (!$this->lockOk($row, (string) $request->input('password', ''))) {
             return $this->wrong($uid, $ar, $ar ? 'الباسورد غير صحيح.' : 'Incorrect password.');
