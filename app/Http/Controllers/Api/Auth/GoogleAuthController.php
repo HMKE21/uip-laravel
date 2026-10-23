@@ -153,7 +153,7 @@ class GoogleAuthController extends Controller
                 : 'Your sign-up session expired. Please choose your Google account again.', 422, ['code' => 'signup_expired']);
         }
         $g = [
-            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
+            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft', 'github'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
             'sub' => (string) $claims['gsub'], 'email' => strtolower((string) $claims['email']),
             'name' => (string) ($claims['name'] ?? ''), 'picture' => $claims['picture'] ?? null,
             'given_name' => '', 'family_name' => '', 'locale' => null,
@@ -256,7 +256,7 @@ class GoogleAuthController extends Controller
                 : 'Your sign-up session expired. Please choose your Google account again.', 422, ['code' => 'signup_expired']);
         }
         $g = [
-            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
+            'provider' => in_array($claims['prov'] ?? 'google', ['google', 'microsoft', 'github'], true) ? (string) ($claims['prov'] ?? 'google') : 'google',
             'sub' => (string) $claims['gsub'], 'email' => strtolower((string) $claims['email']),
             'name' => (string) ($claims['name'] ?? ''), 'picture' => $claims['picture'] ?? null,
             'given_name' => '', 'family_name' => '', 'locale' => null,
@@ -371,11 +371,13 @@ class GoogleAuthController extends Controller
         $tmp = null;
         try {
             $parts = $url ? parse_url($url) : null;
-            // لينك صورة جوجل بس (https على *.googleusercontent.com) — يمنع SSRF لأي عنوان تاني.
-            if (!$parts || ($parts['scheme'] ?? '') !== 'https' || !preg_match('/(^|\.)googleusercontent\.com$/i', $parts['host'] ?? '')) {
+            // لينك صورة جوجل (*.googleusercontent.com) أو GitHub (avatars.githubusercontent.com) بس، https — يمنع SSRF لأي عنوان تاني.
+            if (!$parts || ($parts['scheme'] ?? '') !== 'https' || !preg_match('/^(([a-z0-9-]+\.)*googleusercontent\.com|avatars\.githubusercontent\.com)$/i', $parts['host'] ?? '')) {
                 return;
             }
-            $url = preg_replace('/=s\d+(-c)?$/', '=s400-c', $url);
+            if (str_contains((string) $parts['host'], 'googleusercontent.com') && !str_contains($parts['host'], 'githubusercontent')) {
+                $url = preg_replace('/=s\d+(-c)?$/', '=s400-c', $url);
+            }
             $res = Http::timeout(8)->withOptions(['allow_redirects' => false])->get($url);
             $body = $res->successful() ? $res->body() : '';
             if ($body === '' || strlen($body) > 2 * 1024 * 1024) {

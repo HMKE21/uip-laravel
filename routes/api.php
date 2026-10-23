@@ -188,6 +188,11 @@ Route::prefix('v1')->group(function () {
         // Sign in / sign up with Microsoft (حساب شخصي أو جامعة). بعد التحقق بيكمّل في نفس مسار جوجل (/google/complete و /google/restore).
         Route::get('/microsoft/config', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'config']);
         Route::post('/microsoft', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'submit'])->middleware('throttle:20,1');
+
+        // Sign in / sign up with GitHub (ويب بس). نافذة OAuth + polling بـ nonce؛ بعد التحقق نفس مسار جوجل (/google/complete و /google/restore).
+        Route::get('/github/config', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'config']);
+        Route::post('/github/start', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'start'])->middleware('throttle:20,1');
+        Route::post('/github/claim', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'claim'])->middleware('throttle:90,1');
         Route::post('/refresh-token', [RefreshTokenController::class, 'submit'])->middleware('throttle:60,1');
         Route::post('/logout', [LogoutController::class, 'handle']);
         Route::post('/forgot-password', [ForgotPasswordController::class, 'submit'])->middleware('throttle:10,1');

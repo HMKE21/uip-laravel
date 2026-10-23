@@ -58,6 +58,20 @@ class GithubConnectionApiController extends Controller
     /** عام (من غير Authorization header) — الهوية جاية من الـ state المحفوظ في الكاش. */
     public function callback(Request $request)
     {
+        // نفس الـ redirect URI بيخدم "الدخول بـ GitHub" كمان: الـ state اللي بيبدأ بـ gl_ مش بتاع الربط.
+        if (\App\Services\GithubLoginService::ownsState((string) $request->query('state', ''))) {
+            $ok = app(\App\Services\GithubLoginService::class)->complete(
+                (string) $request->query('code', ''),
+                (string) $request->query('state', ''),
+                $request->query('error') ? (string) $request->query('error') : null
+            );
+            $html = '<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>GitHub</title></head>'
+                . '<body style="font:15px system-ui;padding:32px;text-align:center"><p>'
+                . ($ok ? 'تمام ✔ — ارجع لتبويب المنصة. / Done — you can return to the platform tab.' : 'ارجع لتبويب المنصة. / Please return to the platform tab.')
+                . '</p><script>setTimeout(function(){window.close()},600)</script></body></html>';
+            return response($html, 200)->header('Content-Type', 'text/html; charset=utf-8');
+        }
+
         $base = rtrim((string) (config('app.frontend_url') ?: config('app.url')), '/') . '/student/github';
 
         if ($request->query('error')) { // الطالب ضغط Cancel في GitHub
