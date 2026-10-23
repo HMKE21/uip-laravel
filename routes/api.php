@@ -76,6 +76,7 @@ use App\Http\Controllers\Api\MeetingsRecordingsApiController;
 use App\Http\Controllers\Api\MeetingsAttendanceApiController;
 use App\Http\Controllers\Api\MeetingsInvitationsApiController;
 use App\Http\Controllers\Api\MessagingController;
+use App\Http\Controllers\Api\StoriesApiController;
 use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\GroupChatController;
 use App\Http\Controllers\Api\ChatSafetyApiController;
@@ -1825,6 +1826,17 @@ Route::prefix('v1')->group(function () {
 
     Route::prefix('messaging')->middleware(['uip.auth', 'uip.can:messaging.use'])->group(function () {
         Route::get('/inbox', [MessagingController::class, 'inbox']);
+        // الاستوري (Status) — نص/صورة/فيديو بتختفي بعد مدة. ثابتة قبل /conversations/{id} فمفيش تعارض.
+        Route::get('/stories', [StoriesApiController::class, 'index']);
+        Route::post('/stories', [StoriesApiController::class, 'store']);
+        Route::get('/stories/contacts', [StoriesApiController::class, 'contacts']);
+        Route::post('/stories/mute/{userId}', [StoriesApiController::class, 'mute'])->where('userId', '[0-9]+');
+        Route::delete('/stories/mute/{userId}', [StoriesApiController::class, 'mute'])->where('userId', '[0-9]+');
+        Route::delete('/stories/{id}', [StoriesApiController::class, 'destroy'])->where('id', '[0-9]+');
+        Route::post('/stories/{id}/view', [StoriesApiController::class, 'view'])->where('id', '[0-9]+');
+        Route::get('/stories/{id}/viewers', [StoriesApiController::class, 'viewers'])->where('id', '[0-9]+');
+        Route::post('/stories/{id}/react', [StoriesApiController::class, 'react'])->where('id', '[0-9]+');
+        Route::post('/stories/{id}/reply', [StoriesApiController::class, 'reply'])->where('id', '[0-9]+');
         // سلة المحذوفات (30 يوم): حذف متعدد/الكل، استرجاع، حذف نهائي.
         Route::get('/trash', [ConversationTrashController::class, 'index']);
         Route::post('/trash/delete', [ConversationTrashController::class, 'delete']);

@@ -60,3 +60,8 @@ Schedule::command('drive:purge-trash')->dailyAt('04:00')->withoutOverlapping();
 
 // "جهازي": إعادة التهيئة ليها مهلة تراجع 24 ساعة، وبعدها المسح النهائي.
 Schedule::command('drive:purge-resets')->hourly()->withoutOverlapping();
+
+// الاستوري: مسح اللي خلصت من أكتر من يوم (ملفات + صفوف). نفس مبدأ الأوامر اللي فوق —
+// شغّلها من crontab كل ساعة (مش لازم لعمل الميزة: الاستوري المنتهية بتتفلتر من الاستعلام أصلًا، ده تنضيف مساحة بس):
+//   php artisan stories:prune
+// أو عبر جدولة لارافيل: Schedule::command('stories:prune')->hourly()->withoutOverlapping();
