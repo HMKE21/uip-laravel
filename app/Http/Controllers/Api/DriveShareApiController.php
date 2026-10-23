@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
  *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download,
  *                                          require_visitor_info (اسم+إيميل+موبايل قبل الفتح), password (اختياري)}
  *                                          single_person (أول متصفح يفتحه بس), one_time + access (مرة واحدة + مدة الإتاحة بعد أول فتح: 10m / 2h / 1d)
+ *   POST   /drive/shares/bundle           رابط واحد لأكتر من ملف/مجلد: {node_ids: [..], title?} + نفس خيارات الإنشاء فوق (expiry, can_download, require_visitor_info, password, single_person, one_time, access)
  *   PATCH  /drive/shares/{id}             {expiry?, can_download?, require_visitor_info?, password?, remove_password?, single_person?, one_time?, access?}
  *   POST   /drive/shares/{id}/reset-claim يفضّي ربط المتصفح (أول واحد يفتحه بعد كده هو اللي بيتربط)
  *   DELETE /drive/shares/{id}             إلغاء الرابط (نهائي)
@@ -78,6 +79,26 @@ class DriveShareApiController extends Controller
                 $request->filled('access') ? (string) $request->input('access') : null,
             )->toRowArray(),
             'Share link created.', 201));
+    }
+
+    /** POST /drive/shares/bundle {node_ids: int[], title?: string, ...نفس خيارات create} */
+    public function createBundle(Request $request)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $share = $this->shares->createBundle(
+                $uid,
+                (array) $request->input('node_ids', []),
+                $request->filled('title') ? (string) $request->input('title') : null,
+                $request->input('expiry') !== null ? (string) $request->input('expiry') : null,
+                $request->boolean('can_download', true),
+                $request->boolean('require_visitor_info', false),
+                $request->filled('password') ? (string) $request->input('password') : null,
+                $request->boolean('single_person', false),
+                $request->boolean('one_time', false),
+                $request->filled('access') ? (string) $request->input('access') : null,
+            );
+            return $this->apiSuccess($share->toRowArray(), 'Share link created.', 201);
+        });
     }
 
     public function update(Request $request, $id)

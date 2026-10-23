@@ -13,6 +13,7 @@ class DriveShare extends Model
         'user_id', 'node_id', 'token', 'can_download', 'expires_at', 'revoked_at', 'views', 'downloads', 'last_used_at',
         'require_visitor_info', 'password_hash', 'gate_version', 'paused_at',
         'single_person', 'one_time', 'access_minutes', 'claim_hash', 'claimed_at', 'claim_expires_at', 'claimed_device',
+        'is_bundle', 'title',
     ];
 
     protected $hidden = ['user_id', 'password_hash', 'claim_hash'];
@@ -22,6 +23,7 @@ class DriveShare extends Model
         'require_visitor_info' => 'boolean',
         'gate_version' => 'integer',
         'single_person' => 'boolean',
+        'is_bundle'    => 'boolean',
         'one_time'     => 'boolean',
         'access_minutes' => 'integer',
         'claimed_at'   => 'datetime',
@@ -89,6 +91,8 @@ class DriveShare extends Model
         return [
             'id'           => (int) $this->id,
             'node_id'      => (int) $this->node_id,
+            'is_bundle'    => (bool) $this->is_bundle,
+            'title'        => $this->title,
             'token'        => $this->token,
             'can_download' => (bool) $this->can_download,
             'expires_at'   => $this->expires_at,

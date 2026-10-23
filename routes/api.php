@@ -286,6 +286,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/shares', [DriveShareApiController::class, 'index']);
         Route::get('/shares/manage', [DriveShareApiController::class, 'manage']);
         Route::post('/shares/bulk', [DriveShareApiController::class, 'bulk'])->middleware('throttle:30,1');
+        Route::post('/shares/bundle', [DriveShareApiController::class, 'createBundle'])->middleware('throttle:60,1');
         Route::get('/shares/{id}/activity', [DriveShareApiController::class, 'activity'])->where('id', '[0-9]+');
         Route::delete('/shares/{id}/activity', [DriveShareApiController::class, 'clearActivity'])->where('id', '[0-9]+');
         Route::post('/shares/{id}/reset-claim', [DriveShareApiController::class, 'resetClaim'])->where('id', '[0-9]+');

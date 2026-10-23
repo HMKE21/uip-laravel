@@ -1,0 +1,481 @@
+--- a/app/Models/DriveShare.php
++++ b/app/Models/DriveShare.php
+@@ -13,6 +13,7 @@
+         'user_id', 'node_id', 'token', 'can_download', 'expires_at', 'revoked_at', 'views', 'downloads', 'last_used_at',
+         'require_visitor_info', 'password_hash', 'gate_version', 'paused_at',
+         'single_person', 'one_time', 'access_minutes', 'claim_hash', 'claimed_at', 'claim_expires_at', 'claimed_device',
++        'is_bundle', 'title',
+     ];
+ 
+     protected $hidden = ['user_id', 'password_hash', 'claim_hash'];
+@@ -22,6 +23,7 @@
+         'require_visitor_info' => 'boolean',
+         'gate_version' => 'integer',
+         'single_person' => 'boolean',
++        'is_bundle'    => 'boolean',
+         'one_time'     => 'boolean',
+         'access_minutes' => 'integer',
+         'claimed_at'   => 'datetime',
+@@ -89,6 +91,8 @@
+         return [
+             'id'           => (int) $this->id,
+             'node_id'      => (int) $this->node_id,
++            'is_bundle'    => (bool) $this->is_bundle,
++            'title'        => $this->title,
+             'token'        => $this->token,
+             'can_download' => (bool) $this->can_download,
+             'expires_at'   => $this->expires_at,
+--- a/app/Services/DriveShareService.php
++++ b/app/Services/DriveShareService.php
+@@ -24,12 +24,15 @@
+  *   طلب البيانات بيزوّد gate_version فكل الجلسات القديمة بتتلغي.
+  * - سجل الأحداث (drive_share_events) + الزوار (drive_share_visitors): مين فتح، امتى، من أي جهاز، نزّل إيه.
+  *   الـ IP بيتخزّن مخفي جزئيًا (آخر خانة) + hash للعدّ بس.
++ * - "مجموعة" (is_bundle): رابط واحد لأكتر من ملف/مجلد. العناصر في drive_share_items، والزائر بيشوفها كمجلد افتراضي (id=0)
++ *   اسمه title، وأي عنصر بيتطلب لازم يكون واحد من عناصر المجموعة أو جوّا مجلد منها (insideBundle).
+  * - إيقاف مؤقت (paused_at) بيتكمّل بعدين؛ الإلغاء (revoked_at) نهائي؛ الحذف النهائي (forever) بيمسح الرابط وسجله.
+  */
+ class DriveShareService
+ {
+     public const EXPIRY = ['1d' => 1, '7d' => 7, '30d' => 30, 'never' => null];
+     private const MAX_PER_USER = 300;
++    private const MAX_BUNDLE_ITEMS = 200;
+     private const MAX_EXPIRY_MINUTES = 525600; // 365 يوم
+ 
+     public function __construct(private DriveService $drive, private SettingRepository $settings)
+@@ -113,10 +116,44 @@
+     public function forNode(int $uid, int $nodeId): array
+     {
+         $this->drive->find($uid, $nodeId);
+-        return $this->mine($uid)->where('node_id', $nodeId)->whereNull('revoked_at')
++        return $this->mine($uid)->where('node_id', $nodeId)->where('is_bundle', false)->whereNull('revoked_at')
+             ->orderByDesc('id')->get()->map(fn (DriveShare $s) => $s->toRowArray())->all();
+     }
+ 
++    /** @return array<int, int[]> share_id => [node_id...] لروابط المجموعات (بالترتيب). */
++    private function bundleMap($shares): array
++    {
++        $ids = $shares->filter(fn (DriveShare $x) => $x->is_bundle)->pluck('id')->all();
++        $map = [];
++        if (!$ids) {
++            return $map;
++        }
++        foreach (DB::table('drive_share_items')->whereIn('share_id', $ids)->orderBy('sort')->orderBy('id')->get(['share_id', 'node_id']) as $r) {
++            $map[(int) $r->share_id][] = (int) $r->node_id;
++        }
++        return $map;
++    }
++
++    /** وصف العنصر المشارَك لقوائم المالك: ملف/مجلد عادي أو مجموعة (type=bundle + count). */
++    private function ownerNodeInfo(DriveShare $s, $nodes, array $bundles): array
++    {
++        if ($s->is_bundle) {
++            $alive = array_values(array_filter($bundles[$s->id] ?? [], fn ($id) => ($n = $nodes->get($id)) && $n->deleted_at === null));
++            return [
++                'id' => (int) $s->node_id, 'name' => $this->bundleTitle($s), 'type' => 'bundle', 'count' => count($alive),
++                'items' => array_map(fn ($id) => ['id' => (int) $id, 'name' => $nodes->get($id)->name, 'type' => $nodes->get($id)->type], array_slice($alive, 0, 6)),
++            ];
++        }
++        $n = $nodes->get($s->node_id);
++        return $n ? ['id' => (int) $n->id, 'name' => $n->name, 'type' => $n->type] : ['id' => (int) $s->node_id, 'name' => '', 'type' => 'file'];
++    }
++
++    private function bundleTitle(DriveShare $s): string
++    {
++        $t = trim((string) $s->title);
++        return $t !== '' ? $t : 'Shared items';
++    }
++
+     /** كل الروابط الحيّة مع اسم العنصر (لقائمة "مشاركاتي"). العناصر المحذوفة بتتخفّى. */
+     public function listMine(int $uid): array
+     {
+@@ -124,19 +161,93 @@
+         if ($shares->isEmpty()) {
+             return [];
+         }
++        $bundles = $this->bundleMap($shares);
++        $nodeIds = array_unique(array_merge($shares->pluck('node_id')->all(), ...array_values($bundles ?: [[]])));
+         $nodes = DriveNode::query()->where('user_id', $uid)->whereNull('deleted_at')
+-            ->whereIn('id', $shares->pluck('node_id')->unique()->all())->get()->keyBy('id');
++            ->whereIn('id', $nodeIds)->get()->keyBy('id');
+         $out = [];
+         foreach ($shares as $s) {
+-            $n = $nodes->get($s->node_id);
+-            if (!$n) {
++            $info = $this->ownerNodeInfo($s, $nodes, $bundles);
++            if ($s->is_bundle ? $info['count'] === 0 : !$nodes->get($s->node_id)) {
+                 continue;
+             }
+-            $out[] = $s->toRowArray() + ['node' => ['id' => (int) $n->id, 'name' => $n->name, 'type' => $n->type]];
++            $out[] = $s->toRowArray() + ['node' => $info];
+         }
+         return $out;
+     }
+ 
++    /**
++     * رابط واحد لأكتر من ملف/مجلد. بيشيل أي عنصر أبوه مختار معاه (مجلد + ملف جواه = المجلد بس).
++     * لو فضل عنصر واحد بعد التنضيف بيتعمل رابط عادي عليه.
++     */
++    public function createBundle(int $uid, array $nodeIds, ?string $title, ?string $expiry, bool $canDownload, bool $requireInfo = false, ?string $password = null, bool $singlePerson = false, bool $oneTime = false, ?string $access = null): DriveShare
++    {
++        $ids = array_values(array_unique(array_filter(array_map('intval', $nodeIds), fn ($i) => $i > 0)));
++        if (!$ids) {
++            throw new DriveException('Select at least one item.', 422);
++        }
++        if (count($ids) > self::MAX_BUNDLE_ITEMS) {
++            throw new DriveException('Too many items in one link (max ' . self::MAX_BUNDLE_ITEMS . ').', 422);
++        }
++        $nodes = [];
++        foreach ($ids as $id) {
++            $nodes[$id] = $this->drive->find($uid, $id); // 404 لو مش بتاعي / محذوف
++        }
++        // شيل العناصر اللي أحد آبائها مختار برضو.
++        $picked = array_flip($ids);
++        $keep = [];
++        foreach ($nodes as $id => $n) {
++            $cur = $n;
++            $covered = false;
++            $guard = 0;
++            while ($cur && $cur->parent_id !== null && $guard++ < 64) {
++                if (isset($picked[(int) $cur->parent_id])) {
++                    $covered = true;
++                    break;
++                }
++                $cur = DriveNode::query()->where('user_id', $uid)->where('id', $cur->parent_id)->first();
++            }
++            if (!$covered) {
++                $keep[] = (int) $id;
++            }
++        }
++        if (count($keep) === 1) {
++            return $this->create($uid, $keep[0], $expiry, $canDownload, $requireInfo, $password, $singlePerson, $oneTime, $access);
++        }
++        if ($this->mine($uid)->whereNull('revoked_at')->count() >= self::MAX_PER_USER) {
++            throw new DriveException('You have too many active share links. Revoke some first.', 422);
++        }
++        $title = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $title)));
++        $title = $title === '' ? null : mb_substr($title, 0, 120);
++        $hash = ($password !== null && $password !== '') ? Hash::make(self::cleanPassword($password)) : null;
++        $expiresAt = self::expiryFor($expiry);
++        $accessMinutes = $oneTime ? self::accessMinutes($access) : null;
++
++        return DB::transaction(function () use ($uid, $keep, $title, $canDownload, $requireInfo, $hash, $singlePerson, $oneTime, $expiresAt, $accessMinutes) {
++            $share = DriveShare::create([
++                'user_id'      => $uid,
++                'node_id'      => $keep[0],
++                'is_bundle'    => true,
++                'title'        => $title,
++                'token'        => Str::random(40),
++                'can_download' => $canDownload,
++                'expires_at'   => $expiresAt,
++                'require_visitor_info' => $requireInfo,
++                'password_hash' => $hash,
++                'gate_version' => 1,
++                'single_person' => $singlePerson,
++                'one_time'     => $oneTime,
++                'access_minutes' => $accessMinutes,
++            ]);
++            $rows = [];
++            foreach ($keep as $i => $id) {
++                $rows[] = ['share_id' => $share->id, 'node_id' => $id, 'sort' => $i, 'created_at' => now(), 'updated_at' => now()];
++            }
++            DB::table('drive_share_items')->insert($rows);
++            return $share;
++        });
++    }
++
+     public function create(int $uid, int $nodeId, ?string $expiry, bool $canDownload, bool $requireInfo = false, ?string $password = null, bool $singlePerson = false, bool $oneTime = false, ?string $access = null): DriveShare
+     {
+         $node = $this->drive->find($uid, $nodeId);
+@@ -276,6 +387,7 @@
+         DB::transaction(function () use ($rows, $action, &$done) {
+             foreach ($rows as $s) {
+                 if ($action === 'delete') {
++                    DB::table('drive_share_items')->where('share_id', $s->id)->delete();
+                     DB::table('drive_share_events')->where('share_id', $s->id)->delete();
+                     DB::table('drive_share_visitors')->where('share_id', $s->id)->delete();
+                     $s->delete();
+@@ -301,6 +413,7 @@
+     {
+         $s = $this->findAnyMine($uid, $shareId);
+         DB::transaction(function () use ($s) {
++            DB::table('drive_share_items')->where('share_id', $s->id)->delete();
+             DB::table('drive_share_events')->where('share_id', $s->id)->delete();
+             DB::table('drive_share_visitors')->where('share_id', $s->id)->delete();
+             $s->delete();
+@@ -331,8 +444,9 @@
+         if ($shares->isEmpty()) {
+             return [];
+         }
+-        $nodes = DriveNode::query()->where('user_id', $uid)
+-            ->whereIn('id', $shares->pluck('node_id')->unique()->all())->get()->keyBy('id');
++        $bundles = $this->bundleMap($shares);
++        $nodeIds = array_unique(array_merge($shares->pluck('node_id')->all(), ...array_values($bundles ?: [[]])));
++        $nodes = DriveNode::query()->where('user_id', $uid)->whereIn('id', $nodeIds)->get()->keyBy('id');
+         $people = [];
+         $rows = DB::table('drive_share_events')->whereIn('share_id', $shares->pluck('id')->all())->where('type', 'open')
+             ->select('share_id', 'visitor_id', 'ip_hash', 'device')->distinct()->limit(50000)->get();
+@@ -344,9 +458,10 @@
+         $out = [];
+         foreach ($shares as $s) {
+             $n = $nodes->get($s->node_id);
+-            $deleted = !$n || $n->deleted_at !== null;
++            $info = $this->ownerNodeInfo($s, $nodes, $bundles);
++            $deleted = $s->is_bundle ? $info['count'] === 0 : (!$n || $n->deleted_at !== null);
+             $out[] = $s->toRowArray() + [
+-                'node' => $n ? ['id' => (int) $n->id, 'name' => $n->name, 'type' => $n->type] : ['id' => (int) $s->node_id, 'name' => '', 'type' => 'file'],
++                'node' => $info,
+                 'node_deleted' => $deleted,
+                 'unique_visitors' => count($people[$s->id] ?? []),
+                 'identified_visitors' => (int) ($infoCount[$s->id] ?? 0),
+@@ -463,6 +578,12 @@
+         if ($s->isExpired()) {
+             throw new DriveException('This link has expired.', 410, ['code' => 'share_expired']);
+         }
++        if ($s->is_bundle) {
++            if (!$this->bundleItems($s)) {
++                throw new DriveException('This item is no longer available.', 410, ['code' => 'share_gone']);
++            }
++            return [$s, $this->virtualRoot($s)];
++        }
+         $node = DriveNode::query()->where('user_id', $s->user_id)->where('id', $s->node_id)->whereNull('deleted_at')->first();
+         if (!$node) {
+             throw new DriveException('This item is no longer available.', 410, ['code' => 'share_gone']);
+@@ -470,6 +591,39 @@
+         return [$s, $node];
+     }
+ 
++    // ---- bundles (one link, many items) --------------------------------------------------------------
++
++    /** عناصر المجموعة اللي لسه حيّة (مش في السلة/محذوفة)، بترتيب اختيار المالك. @return DriveNode[] */
++    private function bundleItems(DriveShare $s): array
++    {
++        $ids = DB::table('drive_share_items')->where('share_id', $s->id)->orderBy('sort')->orderBy('id')->pluck('node_id')->map(fn ($i) => (int) $i)->all();
++        if (!$ids) {
++            return [];
++        }
++        $by = DriveNode::query()->where('user_id', $s->user_id)->whereNull('deleted_at')->whereIn('id', $ids)->get()->keyBy('id');
++        $out = [];
++        foreach ($ids as $id) {
++            if ($by->has($id)) {
++                $out[] = $by->get($id);
++            }
++        }
++        return $out;
++    }
++
++    /** المجلد الافتراضي اللي بيمثّل المجموعة عند الزائر (id=0، مش موجود في الداتابيز). */
++    private function virtualRoot(DriveShare $s): DriveNode
++    {
++        $n = new DriveNode();
++        $n->forceFill(['type' => 'folder', 'kind' => 'folder', 'name' => $this->bundleTitle($s), 'parent_id' => null]);
++        $n->id = 0;
++        return $n;
++    }
++
++    private static function isVirtual(DriveNode $n): bool
++    {
++        return (int) $n->id === 0;
++    }
++
+     // ---- gate (password / visitor details) + activity log ---------------------------------------------
+ 
+     private function gateErrors(DriveShare $s): array
+@@ -734,6 +888,9 @@
+     /** العنصر المطلوب لازم يكون هو المشارَك نفسه أو جوّاه (يمشي لفوق بالـ parent_id). */
+     private function inside(DriveShare $s, DriveNode $root, ?int $nodeId): DriveNode
+     {
++        if ($s->is_bundle) {
++            return $this->insideBundle($s, $root, $nodeId);
++        }
+         if ($nodeId === null || $nodeId === (int) $root->id) {
+             return $root;
+         }
+@@ -756,9 +913,51 @@
+         throw new DriveException('Item not found.', 404);
+     }
+ 
++    /** في المجموعة: العنصر لازم يكون واحد من عناصرها أو جوّا مجلد منها (يمشي لفوق بالـ parent_id). */
++    private function insideBundle(DriveShare $s, DriveNode $root, ?int $nodeId): DriveNode
++    {
++        if ($nodeId === null || $nodeId === 0) {
++            return $root;
++        }
++        $roots = array_flip(array_map(fn (DriveNode $n) => (int) $n->id, $this->bundleItems($s)));
++        $uid = (int) $s->user_id;
++        $n = DriveNode::query()->where('user_id', $uid)->where('id', $nodeId)->whereNull('deleted_at')->first();
++        $cur = $n;
++        $guard = 0;
++        while ($cur && $guard++ < 64) {
++            if (isset($roots[(int) $cur->id])) {
++                return $n;
++            }
++            if ($cur->parent_id === null) {
++                break;
++            }
++            $cur = DriveNode::query()->where('user_id', $uid)->where('id', $cur->parent_id)->whereNull('deleted_at')->first();
++        }
++        throw new DriveException('Item not found.', 404);
++    }
++
+     /** المسار من العنصر المشارَك لحد $node (من غير ما يكشف أي حاجة فوق الجذر المشارَك). */
+     private function crumbs(DriveShare $s, DriveNode $root, DriveNode $node): array
+     {
++        if ($s->is_bundle) {
++            $top = ['id' => 0, 'name' => (string) $root->name];
++            if (self::isVirtual($node)) {
++                return [$top];
++            }
++            $roots = array_flip(array_map(fn (DriveNode $n) => (int) $n->id, $this->bundleItems($s)));
++            $out = [];
++            $cur = $node;
++            $guard = 0;
++            while ($cur && $guard++ < 64) {
++                array_unshift($out, ['id' => (int) $cur->id, 'name' => $cur->name]);
++                if (isset($roots[(int) $cur->id]) || $cur->parent_id === null) {
++                    break;
++                }
++                $cur = DriveNode::query()->where('user_id', $s->user_id)->where('id', $cur->parent_id)->first();
++            }
++            array_unshift($out, $top);
++            return $out;
++        }
+         $out = [];
+         $cur = $node;
+         $guard = 0;
+@@ -791,7 +990,11 @@
+             $this->touch($s, 'views'); // فتحة جديدة (مش تحديث للصفحة في خلال 5 دقايق)
+         }
+         $items = [];
+-        if ($node->isFolder()) {
++        if ($s->is_bundle && self::isVirtual($node)) {
++            $rows = $this->bundleItems($s);
++            usort($rows, fn (DriveNode $a, DriveNode $b) => [$a->isFolder() ? 0 : 1, mb_strtolower((string) $a->name)] <=> [$b->isFolder() ? 0 : 1, mb_strtolower((string) $b->name)]);
++            $items = array_map(fn (DriveNode $n) => $this->publicRow($n), $rows);
++        } elseif ($node->isFolder()) {
+             $items = DriveNode::query()->where('user_id', $s->user_id)->where('parent_id', $node->id)->whereNull('deleted_at')
+                 ->orderByRaw("type = 'folder' desc")->orderBy('name')->limit(2000)->get()
+                 ->map(fn (DriveNode $n) => $this->publicRow($n))->all();
+@@ -878,6 +1081,15 @@
+         if (!$s->can_download) {
+             throw new DriveException('Downloading is turned off for this link.', 403);
+         }
++        if ($s->is_bundle && self::isVirtual($node)) {
++            $ids = array_map(fn (DriveNode $n) => (int) $n->id, $this->bundleItems($s));
++            $res = $this->drive->buildZip((int) $s->user_id, $ids);
++            $safe = trim(preg_replace('#[\\\\/:*?"<>|\x00-\x1F]+#u', '_', (string) $node->name)) ?: 'Shared items';
++            $res[1] = mb_substr($safe, 0, 100) . '.zip';
++            $this->touch($s, 'downloads');
++            $this->logEvent($s, $visitor, 'zip', $ctx, null);
++            return $res;
++        }
+         $res = $this->drive->buildZip((int) $s->user_id, [(int) $node->id]);
+         $this->touch($s, 'downloads');
+         $this->logEvent($s, $visitor, 'zip', $ctx, $node);
+--- a/app/Http/Controllers/Api/DriveShareApiController.php
++++ b/app/Http/Controllers/Api/DriveShareApiController.php
+@@ -16,6 +16,7 @@
+  *   POST   /drive/nodes/{id}/shares       {expiry: 1d|7d|30d|never أو مدة مخصصة <رقم><m|h|d> زي 5m / 2h / 3d (من دقيقة لـ 365 يوم), can_download,
+  *                                          require_visitor_info (اسم+إيميل+موبايل قبل الفتح), password (اختياري)}
+  *                                          single_person (أول متصفح يفتحه بس), one_time + access (مرة واحدة + مدة الإتاحة بعد أول فتح: 10m / 2h / 1d)
++ *   POST   /drive/shares/bundle           رابط واحد لأكتر من ملف/مجلد: {node_ids: [..], title?} + نفس خيارات الإنشاء فوق (expiry, can_download, require_visitor_info, password, single_person, one_time, access)
+  *   PATCH  /drive/shares/{id}             {expiry?, can_download?, require_visitor_info?, password?, remove_password?, single_person?, one_time?, access?}
+  *   POST   /drive/shares/{id}/reset-claim يفضّي ربط المتصفح (أول واحد يفتحه بعد كده هو اللي بيتربط)
+  *   DELETE /drive/shares/{id}             إلغاء الرابط (نهائي)
+@@ -80,6 +81,26 @@
+             'Share link created.', 201));
+     }
+ 
++    /** POST /drive/shares/bundle {node_ids: int[], title?: string, ...نفس خيارات create} */
++    public function createBundle(Request $request)
++    {
++        return $this->guard($request, function ($uid) use ($request) {
++            $share = $this->shares->createBundle(
++                $uid,
++                (array) $request->input('node_ids', []),
++                $request->filled('title') ? (string) $request->input('title') : null,
++                $request->input('expiry') !== null ? (string) $request->input('expiry') : null,
++                $request->boolean('can_download', true),
++                $request->boolean('require_visitor_info', false),
++                $request->filled('password') ? (string) $request->input('password') : null,
++                $request->boolean('single_person', false),
++                $request->boolean('one_time', false),
++                $request->filled('access') ? (string) $request->input('access') : null,
++            );
++            return $this->apiSuccess($share->toRowArray(), 'Share link created.', 201);
++        });
++    }
++
+     public function update(Request $request, $id)
+     {
+         return $this->guard($request, function ($uid) use ($request, $id) {
+--- a/routes/api.php
++++ b/routes/api.php
+@@ -286,6 +286,7 @@
+         Route::get('/shares', [DriveShareApiController::class, 'index']);
+         Route::get('/shares/manage', [DriveShareApiController::class, 'manage']);
+         Route::post('/shares/bulk', [DriveShareApiController::class, 'bulk'])->middleware('throttle:30,1');
++        Route::post('/shares/bundle', [DriveShareApiController::class, 'createBundle'])->middleware('throttle:60,1');
+         Route::get('/shares/{id}/activity', [DriveShareApiController::class, 'activity'])->where('id', '[0-9]+');
+         Route::delete('/shares/{id}/activity', [DriveShareApiController::class, 'clearActivity'])->where('id', '[0-9]+');
+         Route::post('/shares/{id}/reset-claim', [DriveShareApiController::class, 'resetClaim'])->where('id', '[0-9]+');
+--- /dev/null
++++ b/database/migrations/2027_01_13_100000_add_bundles_to_drive_shares.php
+@@ -0,0 +1,57 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++/**
++ * رابط مشاركة واحد لأكتر من ملف/مجلد ("مجموعة"):
++ *  - drive_shares.is_bundle = true  → الرابط بيشاور على قايمة عناصر في drive_share_items بدل عنصر واحد
++ *    (node_id بيفضل أول عنصر عشان باقي الكود/الاستعلامات القديمة تفضل شغالة).
++ *  - drive_shares.title     → اسم المجموعة اللي بيظهر عند المستلم.
++ * الملفات نفسها مبتتنسخش، زي الروابط العادية.
++ */
++return new class extends Migration
++{
++    public function up(): void
++    {
++        if (Schema::hasTable('drive_shares')) {
++            Schema::table('drive_shares', function (Blueprint $table) {
++                if (!Schema::hasColumn('drive_shares', 'is_bundle')) {
++                    $table->boolean('is_bundle')->default(false);
++                }
++                if (!Schema::hasColumn('drive_shares', 'title')) {
++                    $table->string('title', 190)->nullable();
++                }
++            });
++        }
++
++        if (!Schema::hasTable('drive_share_items')) {
++            Schema::create('drive_share_items', function (Blueprint $table) {
++                $table->id();
++                $table->unsignedBigInteger('share_id');
++                $table->unsignedBigInteger('node_id');
++                $table->unsignedInteger('sort')->default(0);
++                $table->timestamps();
++
++                $table->unique(['share_id', 'node_id'], 'dsi_share_node_uq');
++                $table->index('share_id', 'dsi_share_idx');
++                $table->index('node_id', 'dsi_node_idx');
++            });
++        }
++    }
++
++    public function down(): void
++    {
++        Schema::dropIfExists('drive_share_items');
++        if (Schema::hasTable('drive_shares')) {
++            Schema::table('drive_shares', function (Blueprint $table) {
++                foreach (['is_bundle', 'title'] as $c) {
++                    if (Schema::hasColumn('drive_shares', $c)) {
++                        $table->dropColumn($c);
++                    }
++                }
++            });
++        }
++    }
++};
