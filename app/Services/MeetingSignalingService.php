@@ -342,6 +342,23 @@ class MeetingSignalingService
             ];
         }
 
+        // No meeting-specific TURN? Reuse the one the 1:1 calls already use (Cloudflare / Metered / coturn / static, config/calls.php),
+        // so a single TURN setup serves both. Skipped when that provider is "none", so nothing changes for installs without it.
+        if (!$turnUrls || $secret === '') {
+            try {
+                $ice = app(\App\Services\CallIceService::class);
+                if ($ice->provider() !== 'none') {
+                    foreach ($ice->forUser(0)['ice_servers'] as $s) {
+                        if (!empty($s['username'])) {
+                            $servers[] = $s;
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('Meetings: call TURN fallback failed', ['error' => $e->getMessage()]);
+            }
+        }
+
         return $servers;
     }
 
