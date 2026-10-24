@@ -1032,6 +1032,54 @@ Route::prefix('v1')->group(function () {
         });
     });
 
+    // Admin → My PC Control (تحكم كامل في "جهازي": إعدادات + حصص + ملفات المستخدمين + روابط المشاركة + سجل).
+    // راجع docblock AdminDriveControlApiController.
+    Route::prefix('admin/drive/control')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+        $c = \App\Http\Controllers\Api\AdminDriveControlApiController::class;
+        Route::get('overview', [$c, 'overview']);
+        Route::get('settings', [$c, 'settings']);
+        Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
+        Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
+
+        Route::get('users', [$c, 'users']);
+        Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
+        Route::post('users/bulk-limits', [$c, 'bulkLimits'])->middleware('throttle:20,1');
+        Route::prefix('users/{id}')->where(['id' => '[0-9]+', 'nodeId' => '[0-9]+', 'vid' => '[0-9]+'])->group(function () use ($c) {
+            Route::get('/', [$c, 'user']);
+            Route::put('limits', [$c, 'setLimits'])->middleware('throttle:60,1');
+            Route::delete('limits', [$c, 'resetLimits'])->middleware('throttle:60,1');
+            Route::get('files', [$c, 'files']);
+            Route::get('files/{nodeId}', [$c, 'node']);
+            Route::get('files/{nodeId}/download', [$c, 'download'])->middleware('throttle:120,1');
+            Route::get('files/{nodeId}/versions/{vid}/download', [$c, 'downloadVersion'])->middleware('throttle:120,1');
+            Route::get('archive', [$c, 'archive'])->middleware('throttle:6,1');
+            Route::post('files/trash', [$c, 'trash'])->middleware('throttle:60,1');
+            Route::post('files/restore', [$c, 'restore'])->middleware('throttle:60,1');
+            Route::post('files/purge', [$c, 'purge'])->middleware('throttle:60,1');
+            Route::post('trash/empty', [$c, 'emptyTrash'])->middleware('throttle:20,1');
+            Route::post('wipe', [$c, 'wipe'])->middleware('throttle:5,1');
+        });
+
+        Route::get('files', [$c, 'searchFiles']);
+
+        Route::get('shares', [$c, 'shares']);
+        Route::post('shares/bulk', [$c, 'shareBulk'])->middleware('throttle:20,1');
+        Route::prefix('shares/{id}')->where(['id' => '[0-9]+'])->group(function () use ($c) {
+            Route::get('activity', [$c, 'shareActivity']);
+            Route::post('pause', [$c, 'sharePause']);
+            Route::post('resume', [$c, 'shareResume']);
+            Route::post('revoke', [$c, 'shareRevoke']);
+            Route::post('reset-claim', [$c, 'shareResetClaim']);
+            Route::post('clear-activity', [$c, 'shareClearActivity']);
+            Route::delete('/', [$c, 'shareDelete']);
+        });
+        Route::post('emergency/revoke-all-shares', [$c, 'revokeAllShares'])->middleware('throttle:5,1');
+
+        Route::get('audit', [$c, 'audit']);
+        Route::post('maintenance/purge-trash', [$c, 'purgeTrash'])->middleware('throttle:5,1');
+        Route::get('maintenance/missing-files', [$c, 'missingFiles'])->middleware('throttle:10,1');
+    });
+
     // بند 25 batch 2 — دليل Universities
     // بتاعة الأدمن (React admin dashboard conversion). كل واحدة بتعيد
     // استخدام نفس الـ repository calls بالظبط زي الـ Blade view المطابقة

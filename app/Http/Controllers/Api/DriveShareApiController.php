@@ -44,8 +44,9 @@ class DriveShareApiController extends Controller
 
     private function guard(Request $request, callable $fn)
     {
-        if (!in_array((string) $request->attributes->get('uip_role'), (array) config('drive.roles'), true)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        $d = \App\Services\DriveAdminSettings::denial((int) $request->attributes->get('uip_user_id'), (string) $request->attributes->get('uip_role'), !in_array($request->method(), ['GET', 'HEAD'], true));
+        if ($d) {
+            return $this->apiError($d[0], ['code' => $d[2]], $d[1]);
         }
         try {
             return $fn((int) $request->attributes->get('uip_user_id'));

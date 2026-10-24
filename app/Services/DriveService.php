@@ -26,6 +26,12 @@ class DriveService
     /** @var array<int,int> memo لعمق المجلدات (بيتمسح مع أي نقل) */
     private array $depthMemo = [];
 
+    public function __construct()
+    {
+        // Admin → My PC Control: إعدادات الأدمن (حصص/حدود/أيام السلة...) بتتطبّق على config('drive.*') قبل أي استخدام.
+        DriveAdminSettings::applyToConfig();
+    }
+
     // ---- infra ---------------------------------------------------------------------------------------
 
     private function disk(): Filesystem
@@ -38,14 +44,20 @@ class DriveService
         return DriveNode::query()->where('user_id', $uid);
     }
 
-    private function quotaBytes(): int
+    /** حصة المستخدم (تخصيصه > حصة دوره > العامة). 0 في الإعدادات = بلا حد (PHP_INT_MAX). */
+    private function quotaBytes(int $uid): int
     {
-        return max(1, (int) config('drive.quota_mb')) * 1048576;
+        return DriveAdminSettings::quotaBytes($uid);
     }
 
-    private function maxFileBytes(): int
+    private function maxFileBytes(int $uid): int
     {
-        return max(1, (int) config('drive.max_file_mb')) * 1048576;
+        return DriveAdminSettings::maxFileBytes($uid);
+    }
+
+    private function maxFileMb(int $uid): int
+    {
+        return (int) DriveAdminSettings::limitsFor($uid)['max_file_mb'];
     }
 
     private function maxZipBytes(): int
@@ -103,10 +115,11 @@ class DriveService
 
     private function assertQuota(int $uid, int $add): void
     {
-        if ($add > $this->maxFileBytes()) {
-            throw new DriveException('The file is larger than the maximum allowed size (' . (int) config('drive.max_file_mb') . ' MB).', 413);
+        DriveAdminSettings::assertUploadsAllowed($uid);
+        if ($add > $this->maxFileBytes($uid)) {
+            throw new DriveException('The file is larger than the maximum allowed size (' . $this->maxFileMb($uid) . ' MB).', 413);
         }
-        if ($this->usedBytes($uid) + $add > $this->quotaBytes()) {
+        if ($this->usedBytes($uid) + $add > $this->quotaBytes($uid)) {
             throw new DriveException('Not enough storage space in My PC. Empty the recycle bin or delete some files.', 413);
         }
     }
@@ -121,15 +134,19 @@ class DriveService
     public function usage(int $uid): array
     {
         $used = $this->usedBytes($uid);
-        $quota = $this->quotaBytes();
+        $lim = DriveAdminSettings::limitsFor($uid);
+        $unlimited = $lim['quota_mb'] <= 0;
+        $quota = $unlimited ? 0 : $this->quotaBytes($uid);
         return [
             'used_bytes'  => $used,
-            'quota_bytes' => $quota,
+            'quota_bytes' => $quota, // 0 + unlimited=true => بلا حد
+            'unlimited'   => $unlimited,
             'used_human'  => DriveNode::humanSize($used),
-            'quota_human' => DriveNode::humanSize($quota),
+            'quota_human' => $unlimited ? 'Unlimited' : DriveNode::humanSize($quota),
             'percent'     => $quota > 0 ? round($used * 100 / $quota, 1) : 0,
-            'max_file_mb' => (int) config('drive.max_file_mb'),
+            'max_file_mb' => $this->maxFileMb($uid),
             'trash_days'  => (int) config('drive.trash_days'),
+            'status'      => $lim['status'],
         ];
     }
 
@@ -329,7 +346,9 @@ class DriveService
         if (strlen($content) > (int) config('drive.max_text_edit_kb') * 1024) {
             throw new DriveException('The text is too large.', 413);
         }
-        $name = $this->freeName($uid, $parent?->id, $this->validName($name));
+        $name = $this->validName($name);
+        DriveAdminSettings::assertNameAllowed($name);
+        $name = $this->freeName($uid, $parent?->id, $name);
         $tmp = tempnam(sys_get_temp_dir(), 'drv');
         try {
             file_put_contents($tmp, $content);
@@ -359,6 +378,7 @@ class DriveService
         if ($name === '') {
             throw new DriveException('Invalid file name.', 422);
         }
+        DriveAdminSettings::assertNameAllowed($name);
         return DB::transaction(function () use ($uid, $parent, $dirSegs, $name, $file) {
             $target = $dirSegs ? $this->ensureFolderPath($uid, $parent?->id, $dirSegs) : $parent?->id;
             $name = $this->freeName($uid, $target, $name);
@@ -390,7 +410,7 @@ class DriveService
         if ($delta > 0) {
             $this->assertQuota($uid, $delta);
         }
-        if ($size > $this->maxFileBytes()) {
+        if ($size > $this->maxFileBytes($uid)) {
             throw new DriveException('The file is larger than the maximum allowed size.', 413);
         }
         $old = $n->storage_path;
@@ -523,6 +543,7 @@ class DriveService
         if ($name === '') {
             throw new DriveException('Invalid file name.', 422);
         }
+        DriveAdminSettings::assertNameAllowed($name);
         $this->assertQuota($uid, max(0, $size));
         $this->assertNodeBudget($uid);
         $sp = "u{$uid}/" . Str::uuid()->toString();
@@ -576,8 +597,8 @@ class DriveService
         }
         $delta = $size - (int) $n->size_bytes;
         $this->assertQuota($uid, max(0, $delta));
-        if ($size > $this->maxFileBytes()) {
-            throw new DriveException('The file is larger than the maximum allowed size (' . (int) config('drive.max_file_mb') . ' MB).', 413);
+        if ($size > $this->maxFileBytes($uid)) {
+            throw new DriveException('The file is larger than the maximum allowed size (' . $this->maxFileMb($uid) . ' MB).', 413);
         }
         $sp = "u{$uid}/" . Str::uuid()->toString();
         $mime = $mime ? substr(preg_replace('/[^\x20-\x7E]/', '', $mime), 0, 120) : ($n->mime_type ?: null);
@@ -607,7 +628,7 @@ class DriveService
             if ($delta > 0) {
                 $this->assertQuota($uid, $delta);
             }
-            if ($size > $this->maxFileBytes()) {
+            if ($size > $this->maxFileBytes($uid)) {
                 throw new DriveException('The file is larger than the maximum allowed size.', 413);
             }
             $old = $n->storage_path;
@@ -677,6 +698,9 @@ class DriveService
     {
         $n = $this->find($uid, $id);
         $name = $this->validName($name);
+        if (!$n->isFolder() && $name !== $n->name) {
+            DriveAdminSettings::assertNameAllowed($name);
+        }
         if ($name !== $n->name && $this->nameTaken($uid, $n->parent_id !== null ? (int) $n->parent_id : null, $name, (int) $n->id)) {
             throw new DriveException('An item with this name already exists here.', 409);
         }
@@ -762,7 +786,7 @@ class DriveService
             $count += $sub->count();
             $totalBytes += (int) $sub->where('type', 'file')->sum('size_bytes');
         }
-        if ($this->usedBytes($uid) + $totalBytes > $this->quotaBytes()) {
+        if ($this->usedBytes($uid) + $totalBytes > $this->quotaBytes($uid)) {
             throw new DriveException('Not enough storage space in My PC.', 413);
         }
         $this->assertNodeBudget($uid, $count);
@@ -1007,7 +1031,7 @@ class DriveService
         foreach ($rows as $r) {
             $kids[(int) ($r->parent_id ?? 0)][] = $r;
         }
-        $quota = $this->quotaBytes();
+        $quota = $this->quotaBytes($uid);
         $out = [];
         foreach ($rows as $r) {
             if ($r->parent_id !== null || $r->type !== 'folder' || $r->kind !== 'disk') {

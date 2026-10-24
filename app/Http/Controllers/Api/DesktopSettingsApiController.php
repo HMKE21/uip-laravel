@@ -317,8 +317,8 @@ class DesktopSettingsApiController extends Controller
         $uid = $this->uid($request);
         $user = $this->user($uid);
         $ar = $this->ar($user);
-        if (!in_array((string) $request->attributes->get('uip_role'), (array) config('drive.roles'), true)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = \App\Services\DriveAdminSettings::denial($uid, (string) $request->attributes->get('uip_role'), true)) {
+            return $this->apiError($d[0], ['code' => $d[2]], $d[1]);
         }
         if ((string) $request->input('confirm', '') !== 'RESET') {
             return $this->apiError($ar ? 'لازم تأكّد إعادة التهيئة.' : 'Please confirm the reset.', ['confirm' => ['required']], 422);

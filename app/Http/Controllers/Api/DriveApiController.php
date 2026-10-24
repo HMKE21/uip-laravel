@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\DriveAdminSettings;
 use App\Services\DriveContentSearchService;
 use App\Services\DriveService;
 use App\Support\DriveException;
@@ -53,16 +54,26 @@ class DriveApiController extends Controller
     {
     }
 
-    private function roleAllowed(Request $request): bool
+    /**
+     * فحص الدخول لـ"جهازي" (مفتاح الأدمن + الدور + حالة المستخدم: active/readonly/blocked). null = مسموح.
+     * $write: الطلب بيغيّر حاجة — الحساب "قراءة فقط" بيتمنع. راجع DriveAdminSettings::denial.
+     */
+    private function deny(Request $request, bool $write = false)
     {
-        return in_array((string) $request->attributes->get('uip_role'), (array) config('drive.roles'), true);
+        $d = DriveAdminSettings::denial((int) $request->attributes->get('uip_user_id'), (string) $request->attributes->get('uip_role'), $write);
+        return $d ? $this->apiError($d[0], ['code' => $d[2]], $d[1]) : null;
+    }
+
+    private function featureOff(string $feature, string $message)
+    {
+        return DriveAdminSettings::on($feature) ? null : $this->apiError($message, ['code' => 'feature_off'], 403);
     }
 
     /** يشغّل $fn($uid) ويحوّل DriveException لرد JSON بنفس الـ envelope. */
     private function guard(Request $request, callable $fn)
     {
-        if (!$this->roleAllowed($request)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = $this->deny($request, !in_array($request->method(), ['GET', 'HEAD'], true))) {
+            return $d;
         }
         try {
             return $fn((int) $request->attributes->get('uip_user_id'));
@@ -213,8 +224,8 @@ class DriveApiController extends Controller
 
     public function content(Request $request, $id)
     {
-        if (!$this->roleAllowed($request)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = $this->deny($request)) {
+            return $d;
         }
         try {
             [$node, $stream] = $this->drive->openStream((int) $request->attributes->get('uip_user_id'), (int) $id);
@@ -280,8 +291,8 @@ class DriveApiController extends Controller
 
     public function versionContent(Request $request, $id, $vid)
     {
-        if (!$this->roleAllowed($request)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = $this->deny($request)) {
+            return $d;
         }
         try {
             [$v, $stream] = $this->drive->openVersionStream((int) $request->attributes->get('uip_user_id'), (int) $id, (int) $vid);
@@ -416,8 +427,8 @@ class DriveApiController extends Controller
 
     public function archive(Request $request, $id)
     {
-        if (!$this->roleAllowed($request)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = $this->deny($request) ?? $this->featureOff('archive', 'Downloading folders as ZIP is turned off by the administrator.')) {
+            return $d;
         }
         try {
             [$tmp, $name] = $this->drive->buildZip((int) $request->attributes->get('uip_user_id'), [(int) $id], $request->boolean('root'));
@@ -432,8 +443,8 @@ class DriveApiController extends Controller
     /** كل ملفات "جهازي" في ZIP واحد (نسخة احتياطية قبل إعادة التهيئة). لو أكبر من الحد بيرجّع 413 برسالة واضحة. */
     public function archiveAll(Request $request)
     {
-        if (!$this->roleAllowed($request)) {
-            return $this->apiError('My PC is not available for your account type.', null, 403);
+        if ($d = $this->deny($request) ?? $this->featureOff('archive', 'Downloading folders as ZIP is turned off by the administrator.')) {
+            return $d;
         }
         $uid = (int) $request->attributes->get('uip_user_id');
         try {
@@ -469,6 +480,9 @@ class DriveApiController extends Controller
      */
     public function sandboxToken(Request $request, $id)
     {
+        if ($d = $this->featureOff('terminal', 'The terminal is turned off by the administrator.')) {
+            return $d;
+        }
         return $this->guard($request, function ($uid) use ($id) {
             $url    = rtrim((string) config('services.sandbox.url'), '/');
             $secret = (string) config('services.sandbox.secret');
@@ -493,6 +507,9 @@ class DriveApiController extends Controller
     /** POST /drive/terminal-token — token for the desktop Terminal app (one shell per user, not tied to a folder). */
     public function terminalToken(Request $request)
     {
+        if ($d = $this->featureOff('terminal', 'The terminal is turned off by the administrator.')) {
+            return $d;
+        }
         return $this->guard($request, function ($uid) {
             $url    = rtrim((string) config('services.sandbox.url'), '/');
             $secret = (string) config('services.sandbox.secret');

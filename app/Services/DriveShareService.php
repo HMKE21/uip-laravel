@@ -43,6 +43,9 @@ class DriveShareService
     {
         $key = strtolower(trim((string) $key)) ?: '7d';
         if ($key === 'never') {
+            if (!DriveAdminSettings::get('share_allow_never')) {
+                throw new DriveException('Links that never expire are turned off. Choose an expiry.', 422);
+            }
             return null;
         }
         // مدة بالدقايق/الساعات/الأيام بمزاج المستخدم: "5m" · "2h" · "3d" (الجاهزة 1d/7d/30d بتعدّي من نفس الصيغة).
@@ -51,8 +54,9 @@ class DriveShareService
         }
         $n = (int) $m[1];
         $minutes = $n * ['m' => 1, 'h' => 60, 'd' => 1440][$m[2]];
-        if ($n < 1 || $minutes > self::MAX_EXPIRY_MINUTES) {
-            throw new DriveException('Expiry must be between 1 minute and 365 days.', 422);
+        $maxDays = max(1, min(3650, (int) DriveAdminSettings::get('share_max_expiry_days')));
+        if ($n < 1 || $minutes > $maxDays * 1440) {
+            throw new DriveException('Expiry must be between 1 minute and ' . $maxDays . ' days.', 422);
         }
         return now()->addMinutes($minutes);
     }
@@ -214,7 +218,8 @@ class DriveShareService
         if (count($keep) === 1) {
             return $this->create($uid, $keep[0], $expiry, $canDownload, $requireInfo, $password, $singlePerson, $oneTime, $access);
         }
-        if ($this->mine($uid)->whereNull('revoked_at')->count() >= self::MAX_PER_USER) {
+        DriveAdminSettings::assertSharingAllowed($uid);
+        if ($this->mine($uid)->whereNull('revoked_at')->count() >= (int) DriveAdminSettings::get('share_max_active_per_user')) {
             throw new DriveException('You have too many active share links. Revoke some first.', 422);
         }
         $title = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $title)));
@@ -251,7 +256,8 @@ class DriveShareService
     public function create(int $uid, int $nodeId, ?string $expiry, bool $canDownload, bool $requireInfo = false, ?string $password = null, bool $singlePerson = false, bool $oneTime = false, ?string $access = null): DriveShare
     {
         $node = $this->drive->find($uid, $nodeId);
-        if ($this->mine($uid)->whereNull('revoked_at')->count() >= self::MAX_PER_USER) {
+        DriveAdminSettings::assertSharingAllowed($uid);
+        if ($this->mine($uid)->whereNull('revoked_at')->count() >= (int) DriveAdminSettings::get('share_max_active_per_user')) {
             throw new DriveException('You have too many active share links. Revoke some first.', 422);
         }
         $hash = ($password !== null && $password !== '') ? Hash::make(self::cleanPassword($password)) : null;
@@ -561,6 +567,12 @@ class DriveShareService
         $s = DriveShare::query()->where('token', $token)->first();
         if (!$s) {
             throw new DriveException('This link is not valid.', 404, ['code' => 'share_invalid']);
+        }
+        // Admin → My PC Control: مفتاح المشاركة العام / "جهازي" كله / صاحب الرابط محظور أو ممنوع من المشاركة.
+        if (!DriveAdminSettings::on('drive') || !DriveAdminSettings::on('sharing')
+            || in_array(DriveAdminSettings::limitsFor((int) $s->user_id)['status'], ['blocked'], true)
+            || DriveAdminSettings::limitsFor((int) $s->user_id)['sharing_blocked']) {
+            throw new DriveException('Sharing is turned off by the administrator.', 403, ['code' => 'share_disabled']);
         }
         if ($s->revoked_at !== null) {
             throw new DriveException('This link was turned off by its owner.', 410, ['code' => 'share_revoked']);
