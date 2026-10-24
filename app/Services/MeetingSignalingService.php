@@ -259,6 +259,10 @@ class MeetingSignalingService
         // في الـ spec). بنبعتها بس على الانتقال false->true (مش على كل
         // media-state update)، وبرضو نظير الإيقاف عشان الـ timeline
         // يفضل متسق (مفيش "بدأ" من غير "خلص" مقابله).
+        if ($wasSharing && !$model->screen_sharing) {
+            app(\App\Services\MeetingRemoteControlService::class)->stopIfInvolved($meeting, $actor['key']);
+        }
+
         if ($this->chat) {
             if (!$wasSharing && $model->screen_sharing) {
                 $this->chat->postSystemMessage($meeting, $actor['display_name'] . ' started sharing their screen');
@@ -511,6 +515,7 @@ class MeetingSignalingService
         $model->save();
 
         $this->attendance?->recordLeave($meeting, $actor);
+        app(\App\Services\MeetingRemoteControlService::class)->stopIfInvolved($meeting, $actor['key']);
 
         event(new ParticipantLeftMeeting($meeting->uuid, $actor['key'], $actor['display_name']));
     }

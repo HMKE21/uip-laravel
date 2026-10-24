@@ -533,6 +533,14 @@ Route::prefix('v1')->group(function () {
         Route::post('screen-share/stop', [MeetingsSignalingApiController::class, 'screenShareStop']);
     });
 
+    // التحكم عن بُعد في الشاشة المشاركة (زي Zoom) — لازم موافقة صاحب الشاشة، متحكم واحد في المرة.
+    Route::prefix('meetings/{uuid}/remote-control')->middleware('uip.auth.optional')->group(function () {
+        Route::post('request', [\App\Http\Controllers\Api\MeetingsRemoteControlApiController::class, 'request']);
+        Route::post('respond', [\App\Http\Controllers\Api\MeetingsRemoteControlApiController::class, 'respond']);
+        Route::post('stop', [\App\Http\Controllers\Api\MeetingsRemoteControlApiController::class, 'stop']);
+        Route::post('input', [\App\Http\Controllers\Api\MeetingsRemoteControlApiController::class, 'input'])->middleware('throttle:900,1');
+    });
+
     // Round 5 (Live Collaboration، بند 7 — Meeting Chat، بند 8 — Private
     // Chat). زي مجموعة signaling بالظبط: uip.auth.optional مبني على uuid
     // (مش join_token) — راجع docblock MeetingsChatApiController.
