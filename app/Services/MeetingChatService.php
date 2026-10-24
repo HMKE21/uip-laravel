@@ -67,10 +67,10 @@ class MeetingChatService
             if (!(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
                 throw new \RuntimeException('File sharing is disabled for this meeting.');
             }
-            if (!$this->uploads) {
-                throw new \RuntimeException('File uploads are not available right now.');
-            }
-            $stored = $this->uploads->store($file, 'meetings', $meeting->uuid);
+            // الحقن nullable (عشان الاختبارات اللي بتعمل new MeetingChatService($repo))، بس في الإنتاج لو الـ container
+            // رجّع null لأي سبب بنحلّه هنا صراحة بدل ما نرفض الرفع — نفس FileUploadService اللي بيستخدمه MeetingFileService.
+            $uploads = $this->uploads ?? app(FileUploadService::class);
+            $stored = $uploads->store($file, 'meetings', $meeting->uuid);
             $attachment = [
                 'original_name' => $stored['original_name'],
                 'stored_path'   => $stored['stored_path'],
