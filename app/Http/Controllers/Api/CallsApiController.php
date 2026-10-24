@@ -14,9 +14,10 @@ use Illuminate\Http\Request;
  *  GET  /calls/poll           ?client_id=&call_id=&after=  → { incoming[], call, signals[] }   (بيتنادى كل ~1-4 ثواني)
  *  POST /calls                { conversation_id, type?, client_id }
  *  POST /calls/{id}/accept    { client_id }
+ *  POST /calls/{id}/resume    { client_id }   → rebinds an ACTIVE call to this page after a refresh; returns the call + after_signal_id
  *  POST /calls/{id}/decline
  *  POST /calls/{id}/end       { reason? }
- *  POST /calls/{id}/signal    { client_id, kind: offer|answer|ice|state, payload }
+ *  POST /calls/{id}/signal    { client_id, kind: offer|answer|ice|state|resume, payload }
  */
 class CallsApiController extends Controller
 {
@@ -64,6 +65,11 @@ class CallsApiController extends Controller
     public function accept(Request $request, $id)
     {
         return $this->handle(fn () => $this->apiSuccess($this->calls->accept($this->uid($request), (int) $id, (string) $request->input('client_id', '')), 'Call accepted.'));
+    }
+
+    public function resume(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->calls->resume($this->uid($request), (int) $id, (string) $request->input('client_id', '')), 'Call resumed.'));
     }
 
     public function decline(Request $request, $id)

@@ -1847,6 +1847,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/calls/poll', [CallsApiController::class, 'poll']);
         Route::post('/calls', [CallsApiController::class, 'start']);
         Route::post('/calls/{id}/accept', [CallsApiController::class, 'accept'])->where('id', '[0-9]+');
+        Route::post('/calls/{id}/resume', [CallsApiController::class, 'resume'])->where('id', '[0-9]+');
         Route::post('/calls/{id}/decline', [CallsApiController::class, 'decline'])->where('id', '[0-9]+');
         Route::post('/calls/{id}/end', [CallsApiController::class, 'end'])->where('id', '[0-9]+');
         Route::post('/calls/{id}/signal', [CallsApiController::class, 'signal'])->where('id', '[0-9]+');

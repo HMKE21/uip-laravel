@@ -28,7 +28,7 @@ use Illuminate\Support\Facades\Log;
 class CallService
 {
     public const OPEN = ['ringing', 'active'];
-    public const SIGNAL_KINDS = ['offer', 'answer', 'ice', 'state'];
+    public const SIGNAL_KINDS = ['offer', 'answer', 'ice', 'state', 'resume'];
 
     public function __construct(
         private ChatSafetyService $safety,
@@ -141,6 +141,33 @@ class CallService
             throw new \RuntimeException('This call is no longer available.');
         }
         return $this->present($this->find($callId), $userId);
+    }
+
+    /**
+     * استئناف مكالمة شغّالة بعد ريفريش/إعادة تحميل الصفحة: الصفحة الجديدة ليها client_id جديد، فبنربط المكالمة بيه (عشان
+     * الـ poll والـ signal يقبلوه) ونسجّل نبضة. شغّال بس للمكالمة اللي status بتاعها active (اللي لسه بترن بتتلغي زي الأول).
+     * بيرجّع بيانات المكالمة + after_signal_id = آخر إشارة موجّهة لي، عشان الصفحة الجديدة تتجاهل إشارات الاتصال القديم.
+     *
+     * @return array<string,mixed>
+     */
+    public function resume(int $userId, int $callId, string $clientId): array
+    {
+        $this->assertEnabled();
+        $clientId = $this->cleanClient($clientId);
+        $call = $this->mine($userId, $callId);
+        $call = $this->reap($call);
+        if ($call->status !== 'active') {
+            throw new \RuntimeException('This call has ended.');
+        }
+        $isCaller = (int) $call->caller_id === $userId;
+        DB::table('calls')->where('id', $callId)->where('status', 'active')->update([
+            $isCaller ? 'caller_client' : 'callee_client'     => $clientId,
+            $isCaller ? 'caller_seen_at' : 'callee_seen_at'   => now(),
+        ]);
+        $after = (int) DB::table('call_signals')->where('call_id', $callId)->where('to_user_id', $userId)->max('id');
+        $out = $this->present($this->find($callId), $userId);
+        $out['after_signal_id'] = $after;
+        return $out;
     }
 
     /** @return array<string,mixed> */
