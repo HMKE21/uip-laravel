@@ -310,6 +310,57 @@ class MeetingAdminService
         ];
     }
 
+    /**
+     * تفاصيل حدث واحد في سجل النشاط: الحدث نفسه + مين عمله + الاجتماع المرتبط (حتى لو اتحذف) + آخر أحداث تانية على نفس الاجتماع.
+     * بيرجّع null لو الحدث مش تبع الاجتماعات (نفس نطاق audit()).
+     */
+    private function roleOf(int $uid): ?string
+    {
+        try {
+            return app(\App\Services\RoleService::class)->primaryRoleFor($uid) ?: null;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    public function auditDetail(int $id): ?array
+    {
+        $a = AuditLog::where('id', $id)
+            ->where(fn ($w) => $w->where('action', 'like', 'meetings.%')->orWhere('action', 'like', 'admin.meetings.%'))
+            ->first();
+        if (!$a) {
+            return null;
+        }
+
+        $user = $a->user_id ? DB::table('users')->where('id', $a->user_id)->first(['id', 'full_name', 'email']) : null;
+
+        $meeting = null;
+        $related = [];
+        if ($a->subject_type === 'Meeting' && $a->subject_id) {
+            $m = Meeting::withTrashed()->with('host:id,full_name,email')->find($a->subject_id);
+            if ($m) {
+                $meeting = [
+                    'id' => (int) $m->id, 'uuid' => $m->uuid, 'title' => $m->title, 'status' => $m->status,
+                    'meeting_code' => $m->meeting_code, 'deleted_at' => $m->deleted_at,
+                    'scheduled_start_at' => $m->scheduled_start_at, 'started_at' => $m->started_at, 'ended_at' => $m->ended_at,
+                    'host' => $m->host ? ['name' => $m->host->full_name, 'email' => $m->host->email] : null,
+                ];
+            }
+            $rel = AuditLog::where('subject_type', 'Meeting')->where('subject_id', $a->subject_id)->where('id', '!=', $a->id)
+                ->where(fn ($w) => $w->where('action', 'like', 'meetings.%')->orWhere('action', 'like', 'admin.meetings.%'))
+                ->orderByDesc('id')->limit(15)->get();
+            $names = DB::table('users')->whereIn('id', $rel->pluck('user_id')->filter()->unique()->all())->pluck('full_name', 'id')->all();
+            $related = $rel->map(fn (AuditLog $r) => ['id' => (int) $r->id, 'action' => $r->action, 'user_name' => $names[$r->user_id] ?? null, 'created_at' => $r->created_at])->all();
+        }
+
+        return [
+            'event'   => $this->auditRow($a),
+            'user'    => $user ? ['id' => (int) $user->id, 'name' => $user->full_name, 'email' => $user->email, 'role' => $this->roleOf((int) $user->id)] : null,
+            'meeting' => $meeting,
+            'related' => $related,
+        ];
+    }
+
     // ------------------------------------------------------------------
     // تعديل / إجراءات إجبارية
     // ------------------------------------------------------------------

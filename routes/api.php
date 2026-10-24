@@ -1010,6 +1010,7 @@ Route::prefix('v1')->group(function () {
             Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
 
             Route::get('audit', [$c, 'audit']);
+            Route::get('audit/{id}', [$c, 'auditShow'])->where('id', '[0-9]+');
             Route::post('emergency/end-all-live', [$c, 'endAllLive'])->middleware('throttle:5,1');
 
             Route::get('meetings', [$c, 'meetings']);

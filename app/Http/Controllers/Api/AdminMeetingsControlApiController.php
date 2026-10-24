@@ -154,6 +154,13 @@ class AdminMeetingsControlApiController extends Controller
         return $this->apiSuccess($this->admin->audit($request->query()));
     }
 
+    public function auditShow(int $id)
+    {
+        $d = $this->admin->auditDetail($id);
+
+        return $d ? $this->apiSuccess($d) : $this->apiError('Event not found.', null, 404);
+    }
+
     public function endAllLive(Request $request)
     {
         if (!$request->boolean('confirm')) {
