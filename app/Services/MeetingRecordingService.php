@@ -65,7 +65,17 @@ class MeetingRecordingService
     /** @return MeetingRecording[] */
     public function listFor(Meeting $meeting): array
     {
-        return $this->meetings->meetingRecordingsFor($meeting->id);
+        $recordings = $this->meetings->meetingRecordingsFor($meeting->id);
+
+        // Self-heal: a row can stay in "processing" if the queued job never ran (no queue worker on the host, worker
+        // restarted mid-job...). The file is already stored, so finishing it here is always safe.
+        foreach ($recordings as $recording) {
+            if ($recording->status === 'processing' && $recording->updated_at && $recording->updated_at->lt(now()->subSeconds(20))) {
+                $this->finalize($recording);
+            }
+        }
+
+        return $recordings;
     }
 
     /**
@@ -126,7 +136,8 @@ class MeetingRecordingService
         }
 
         $stoppedAt = now();
-        $durationSeconds = max(0, $stoppedAt->diffInSeconds($recording->started_at));
+        // Carbon 3: diffInSeconds() is SIGNED ($a->diffInSeconds($b) = b - a). Older -> newer is the positive direction.
+        $durationSeconds = (int) max(0, round($recording->started_at->diffInSeconds($stoppedAt)));
 
         try {
             $stored = $this->uploads->store(
@@ -163,7 +174,14 @@ class MeetingRecordingService
 
         event(new MeetingRecordingStopped($meeting->uuid, $recording->id, 'processing'));
 
-        ProcessMeetingRecordingJob::dispatch($recording->id);
+        // The "processing" step is only a metadata confirmation (the file is already stored), so by default it runs inline:
+        // the recording becomes "completed" immediately and never depends on a queue worker being alive on the host.
+        if (config('meetings.recording_process_inline', true)) {
+            $this->finalize($recording);
+            $recording->refresh();
+        } else {
+            ProcessMeetingRecordingJob::dispatch($recording->id);
+        }
 
         return $recording;
     }

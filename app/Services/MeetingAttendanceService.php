@@ -50,6 +50,22 @@ class MeetingAttendanceService
         ]);
     }
 
+    /**
+     * شبكة أمان ثانية للحضور: بتتنادى من أي طلب "وأنا جوه الغرفة" (media-state/heartbeat). authorizeChannel() لوحده
+     * مش مضمون (لو الـ presence channel اتفتح من غير ما يعدّي على الـ auth endpoint، أو الطلب فشل بصمت، الجدول بيفضل
+     * فاضي ومفيش تقرير). recordJoin() idempotent فالنداء المتكرر مفيهوش ضرر، واللي حالته "left" بنتجاهله عشان
+     * طلب متأخر بعد زرار Leave مايفتحش جلسة جديدة.
+     */
+    public function ensureJoined(Meeting $meeting, array $actor): void
+    {
+        $status = $actor['model']->status ?? null;
+        if (!in_array($status, ['joined', 'admitted'], true)) {
+            return;
+        }
+
+        $this->recordJoin($meeting, $actor);
+    }
+
     /** بيتنادى من leave() — بيقفل الجلسة المفتوحة الحالية (لو موجودة). */
     public function recordLeave(Meeting $meeting, array $actor): void
     {
@@ -85,11 +101,45 @@ class MeetingAttendanceService
      */
     public function report(Meeting $meeting): array
     {
-        $meetingDurationSeconds = $this->meetingDurationSeconds($meeting);
+        $sessions = $this->meetings->attendanceSessionsFor($meeting->id);
         $now = now();
 
+        // Fallback: anyone who really entered the meeting but has no attendance session (joined before this tracking
+        // was reliable, or the join hook never fired) is rebuilt from meeting_participants / admitted guests, so the
+        // report is never empty for a meeting people actually attended.
+        $known = [];
+        foreach ($sessions as $session) {
+            $known[$session->participant_key] = true;
+        }
+        $synthetic = [];
+        foreach ($this->meetings->participantsFor($meeting->id) as $p) {
+            $key = 'user:' . $p->user_id;
+            if (isset($known[$key]) || !$p->joined_at || !in_array($p->status, ['joined', 'left'], true)) {
+                continue;
+            }
+            $synthetic[] = new \App\Models\MeetingAttendanceSession([
+                'meeting_id' => $meeting->id, 'participant_key' => $key,
+                'display_name' => $p->user->full_name ?? ('User #' . $p->user_id),
+                'joined_at' => $p->joined_at, 'left_at' => $p->status === 'left' ? $p->left_at : null,
+            ]);
+        }
+        foreach ($this->meetings->admittedGuestsFor($meeting->id) as $g) {
+            $key = 'guest:' . $g->id;
+            if (isset($known[$key])) {
+                continue;
+            }
+            $synthetic[] = new \App\Models\MeetingAttendanceSession([
+                'meeting_id' => $meeting->id, 'participant_key' => $key,
+                'display_name' => (string) $g->guest_name,
+                'joined_at' => $g->decided_at ?? $g->requested_at ?? $now, 'left_at' => null,
+            ]);
+        }
+        $sessions = array_merge($sessions, $synthetic);
+
+        $meetingDurationSeconds = $this->meetingDurationSeconds($meeting, $sessions);
+
         $byParticipant = [];
-        foreach ($this->meetings->attendanceSessionsFor($meeting->id) as $session) {
+        foreach ($sessions as $session) {
             $key = $session->participant_key;
             if (!isset($byParticipant[$key])) {
                 $byParticipant[$key] = [
@@ -112,8 +162,9 @@ class MeetingAttendanceService
                 $row['last_left_at'] = null;
             }
 
+            // Carbon 3: diffInSeconds() is SIGNED (start->diffInSeconds(end) is positive), so always older -> newer.
             $sessionEnd = $session->left_at ?? $now;
-            $row['duration_seconds'] += max(0, $sessionEnd->diffInSeconds($session->joined_at));
+            $row['duration_seconds'] += (int) max(0, round($session->joined_at->diffInSeconds($sessionEnd)));
             unset($row);
         }
 
@@ -135,15 +186,28 @@ class MeetingAttendanceService
         }, $byParticipant));
     }
 
-    private function meetingDurationSeconds(Meeting $meeting): int
+    /**
+     * مدة الاجتماع المرجعية للنسبة. لو started_at فاضي (الهوست دخل الغرفة من غير ما يدوس "ابدأ") بنستخدم أول دخول فعلي
+     * بدل ما نرجّع 0 ونخلي كل النسب 0%.
+     * @param \App\Models\MeetingAttendanceSession[] $sessions
+     */
+    private function meetingDurationSeconds(Meeting $meeting, array $sessions = []): int
     {
-        if (!$meeting->started_at) {
+        $start = $meeting->started_at;
+        if (!$start) {
+            foreach ($sessions as $session) {
+                if ($session->joined_at && (!$start || $session->joined_at->lt($start))) {
+                    $start = $session->joined_at;
+                }
+            }
+        }
+        if (!$start) {
             return 0;
         }
 
         $end = $meeting->ended_at ?? now();
 
-        return max(0, $end->diffInSeconds($meeting->started_at));
+        return (int) max(0, round($start->diffInSeconds($end)));
     }
 
     /** بند 17 — "Allow authorized users to export attendance data" (CSV). */

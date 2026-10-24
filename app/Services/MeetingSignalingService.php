@@ -228,6 +228,9 @@ class MeetingSignalingService
         $model->last_seen_at = now();
         $model->save();
 
+        // الفرونت بيبعت media-state فور دخوله الـ presence channel — نقطة تانية مضمونة لتسجيل الحضور (راجع ensureJoined()).
+        $this->attendance?->ensureJoined($meeting, $actor);
+
         event(new ParticipantMediaStateChanged(
             $meeting->uuid,
             $actor['key'],
@@ -461,7 +464,7 @@ class MeetingSignalingService
     }
 
     /** بينج دوري من الفرونت (كل ~20-30 ثانية) — بيحدّث last_seen_at بس، من غير أي broadcast (مفيش داعي، الحالة نفسها ما اتغيرتش). */
-    public function heartbeat(array $actor): void
+    public function heartbeat(array $actor, ?Meeting $meeting = null): void
     {
         /** @var MeetingParticipant|MeetingJoinRequest $model */
         $model = $actor['model'];
@@ -470,6 +473,11 @@ class MeetingSignalingService
             $model->connection_state = 'connected';
         }
         $model->save();
+
+        // شبكة أمان للحضور (idempotent) — راجع MeetingAttendanceService::ensureJoined().
+        if ($meeting) {
+            $this->attendance?->ensureJoined($meeting, $actor);
+        }
     }
 
     /** خروج متعمّد (زرار "Leave meeting") — راجع docblock ParticipantLeftMeeting للفرق عن presence 'leaving' التلقائي. */

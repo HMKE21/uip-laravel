@@ -139,6 +139,34 @@ class MeetingCollaborationExtrasTest extends TestCase
     }
 
     #[Test]
+    public function attendance_duration_and_percentage_are_not_zero_for_a_session_that_lasted_a_while(): void
+    {
+        // Carbon 3 regression: diffInSeconds() is signed, so end->diffInSeconds(start) was negative and clamped to 0.
+        [$meeting, $hostId, $hostActor] = $this->joinAsHost();
+        $meeting->started_at = now()->subMinutes(10);
+        $meeting->save();
+        $this->enterRoom($meeting, $hostId);
+        \App\Models\MeetingAttendanceSession::where('meeting_id', $meeting->id)->update(['joined_at' => now()->subMinutes(5)]);
+        $this->signaling->leave($meeting, $hostActor);
+
+        $row = $this->attendance->report($meeting)[0];
+        $this->assertEqualsWithDelta(300, $row['duration_seconds'], 5);
+        $this->assertEqualsWithDelta(50, $row['attendance_percentage'], 2);
+    }
+
+    #[Test]
+    public function media_state_alone_records_attendance_even_if_the_channel_auth_never_ran(): void
+    {
+        [$meeting, $hostId, $hostActor] = $this->joinAsHost();
+
+        $this->signaling->updateMediaState($meeting, $hostActor, ['mic_enabled' => true]);
+
+        $report = $this->attendance->report($meeting);
+        $this->assertCount(1, $report);
+        $this->assertSame(1, $report[0]['joins']);
+    }
+
+    #[Test]
     public function rejoining_the_room_creates_a_second_session_and_counts_both_joins(): void
     {
         [$meeting, $hostId] = $this->joinAsHost();

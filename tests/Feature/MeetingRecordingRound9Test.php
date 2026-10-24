@@ -217,6 +217,42 @@ class MeetingRecordingRound9Test extends TestCase
     }
 
     #[Test]
+    public function by_default_stopping_finishes_processing_inline_so_it_never_waits_for_a_queue_worker(): void
+    {
+        config(['meetings.recording_process_inline' => true]);
+        Event::fake([MeetingRecordingReady::class]);
+        Queue::fake();
+        [$meeting, , $hostActor] = $this->joinAsHost();
+        $recording = $this->recordings->start($meeting, $hostActor, 'video');
+        $recording->started_at = now()->subSeconds(90);
+        $recording->save();
+
+        $stopped = $this->recordings->stop($meeting, $hostActor, $recording->fresh(), UploadedFile::fake()->create('inline.webm', 300, 'video/webm'));
+
+        $this->assertSame('completed', $stopped->status);
+        // Carbon 3 regression: the duration used to come out negative -> clamped to 0 (shown as "0:00").
+        $this->assertEqualsWithDelta(90, $stopped->fresh()->duration_seconds, 3);
+        Queue::assertNotPushed(ProcessMeetingRecordingJob::class);
+        Event::assertDispatched(MeetingRecordingReady::class);
+    }
+
+    #[Test]
+    public function listing_heals_a_recording_stuck_in_processing(): void
+    {
+        Event::fake([MeetingRecordingReady::class]);
+        [$meeting, , $hostActor] = $this->joinAsHost();
+        $recording = $this->recordings->start($meeting, $hostActor, 'video');
+        $recording = $this->recordings->stop($meeting, $hostActor, $recording, UploadedFile::fake()->create('stuck.webm', 300, 'video/webm'));
+        $this->assertSame('processing', $recording->status);
+
+        \App\Models\MeetingRecording::where('id', $recording->id)->update(['updated_at' => now()->subMinutes(5)]);
+
+        $this->recordings->listFor($meeting);
+
+        $this->assertSame('completed', $recording->fresh()->status);
+    }
+
+    #[Test]
     public function stopping_an_already_stopped_recording_fails(): void
     {
         [$meeting, , $hostActor] = $this->joinAsHost();

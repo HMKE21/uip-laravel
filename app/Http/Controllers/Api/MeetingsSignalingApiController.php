@@ -177,7 +177,7 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
-        $this->signaling->heartbeat($actor);
+        $this->signaling->heartbeat($actor, $meeting);
 
         return $this->apiSuccess(null, 'Heartbeat recorded.');
     }

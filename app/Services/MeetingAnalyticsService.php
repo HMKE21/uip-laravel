@@ -51,8 +51,12 @@ class MeetingAnalyticsService
         $recordings = MeetingRecording::where('meeting_id', $meeting->id)->get();
 
         $durationMinutes = null;
-        if ($meeting->started_at && $meeting->ended_at) {
-            $durationMinutes = $meeting->started_at->diffInMinutes($meeting->ended_at);
+        if ($meeting->started_at && !$meeting->ended_at && $meeting->status === 'live') {
+            // still running: show how long it has been going so far instead of "—"
+            $durationMinutes = (int) max(0, round($meeting->started_at->diffInMinutes(now())));
+        } elseif ($meeting->started_at && $meeting->ended_at) {
+            // Carbon 3: diffInMinutes() is signed — older -> newer is positive. Was null/negative before.
+            $durationMinutes = (int) max(0, round($meeting->started_at->diffInMinutes($meeting->ended_at)));
         }
 
         $failedConnections = AuditLog::where('subject_type', 'Meeting')
@@ -95,7 +99,7 @@ class MeetingAnalyticsService
         $activeParticipants = MeetingParticipant::where('connection_state', 'connected')->count();
 
         $completed = Meeting::whereNotNull('started_at')->whereNotNull('ended_at')->get(['started_at', 'ended_at']);
-        $durations = $completed->map(fn ($m) => $m->started_at->diffInMinutes($m->ended_at));
+        $durations = $completed->map(fn ($m) => max(0, round($m->started_at->diffInMinutes($m->ended_at))));
         $avgDuration = $durations->count() > 0 ? round($durations->avg(), 1) : null;
         $maxDuration = $durations->count() > 0 ? $durations->max() : null;
 

@@ -77,4 +77,8 @@ return [
     // max_size_kb العام (10MB افتراضيًا) لأن ده فيديو/صوت كامل مدة
     // الاجتماع، مش مستند. 500MB افتراضيًا (~ساعة فيديو 720p تقريبًا).
     'recording_max_kb' => (int) env('MEETING_RECORDING_MAX_KB', 512000),
+
+    // true = التسجيل بيخلّص "processing" -> "completed" في نفس الطلب (مفيش اعتماد على queue worker).
+    // false = يتبعت لـ ProcessMeetingRecordingJob (محتاج `php artisan queue:work` شغال).
+    'recording_process_inline' => (bool) env('MEETING_RECORDING_PROCESS_INLINE', true),
 ];
