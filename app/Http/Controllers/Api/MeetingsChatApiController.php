@@ -89,7 +89,8 @@ class MeetingsChatApiController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'body'                  => 'required|string|max:4000',
+            'body'                  => 'nullable|string|max:4000|required_without:file',
+            'file'                  => 'nullable|file',
             'recipient_key'         => 'nullable|string|max:40',
             'reply_to_message_id'   => 'nullable|integer|min:1',
             'mentioned_keys'        => 'nullable|array|max:20',
@@ -106,9 +107,9 @@ class MeetingsChatApiController extends Controller
         }
 
         try {
-            $message = $this->chat->send($meeting, $actor, $request->only([
+            $message = $this->chat->send($meeting, $actor, array_merge($request->only([
                 'body', 'recipient_key', 'reply_to_message_id', 'mentioned_keys',
-            ]));
+            ]), ['file' => $request->file('file')]));
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, 422);
         }

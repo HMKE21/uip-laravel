@@ -142,11 +142,13 @@ return [
         // allowed formats" حرفيًا زي ما المواصفة بتنص، بالإضافة لـ 'rar'
         // كتمثيل لـ "Other allowed formats" (نفس أرشيف تاني شائع زي
         // 'group_files'/'feed' المتشابهين).
-        'meetings' => [
-            'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx',
-            'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
-            'zip', 'rar',
-        ],
+        //
+        // تحديث: الاجتماع بيقبل أي نوع ملف ('*') — الحماية بقت من الفحص مش من
+        // قائمة الامتدادات: ClamAV (لو متثبّت) + فحص EICAR المدمج + تحييد
+        // الامتدادات اللي السيرفر ممكن ينفّذها (php/html/xml => .txt) +
+        // SvgGuard للـ SVG. لو الأدمن فعّل سياسة "restrict_extensions" في
+        // الإعدادات العامة بتفضل هي صاحبة القرار (راجع effectiveAllowed).
+        'meetings' => ['*'],
         // Generic REST API Files/Uploads module (spec section 9 "File
         // Upload APIs") — the standalone /api/v1/files surface used when an
         // upload isn't tied to one of the domain-specific categories above.

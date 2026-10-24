@@ -11,11 +11,12 @@ class MeetingChatMessage extends Model
 
     protected $fillable = [
         'meeting_id', 'sender_key', 'sender_type', 'sender_display_name',
-        'recipient_key', 'type', 'body', 'reply_to_message_id', 'mentioned_keys',
+        'recipient_key', 'type', 'body', 'attachment', 'reply_to_message_id', 'mentioned_keys',
     ];
 
     protected $casts = [
         'mentioned_keys' => 'array',
+        'attachment'     => 'array',
     ];
 
     public function meeting()

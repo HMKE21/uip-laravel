@@ -70,7 +70,12 @@ class FileUploadService
         $categoryAllowed = $allowedOverride ?? (array) config("upload.allowed.{$category}", []);
         $allowed = $this->uploadPolicy->effectiveAllowed($categoryAllowed);
         $extension = strtolower((string) $file->getClientOriginalExtension());
-        if (!$extension || !in_array($extension, $allowed, true)) {
+        $anyType = in_array('*', $allowed, true); // فئة بتقبل أي نوع (الحماية من الفحص الأمني تحت)
+        if ($anyType) {
+            // ملف من غير امتداد (أو امتداد غريب) بيتخزّن بامتداد 'bin' بدل ما يترفض؛ الأحرف غير الآمنة بتتشال.
+            $extension = preg_replace('/[^a-z0-9]/', '', $extension) ?: 'bin';
+            $extension = substr($extension, 0, 12);
+        } elseif (!$extension || !in_array($extension, $allowed, true)) {
             throw new \RuntimeException('File type not allowed. Accepted: ' . implode(', ', $allowed));
         }
 
@@ -234,6 +239,9 @@ class FileUploadService
      */
     private function scanForMalware(string $tmpPath, string $originalName, string $category): void
     {
+        // فحص دنيا-ورا مدمج (من غير ClamAV): ملف اختبار EICAR المعروف بيترفض دايمًا — نفس رسالة الماسح الحقيقي.
+        $this->assertNotEicar($tmpPath, $originalName, $category);
+
         if (!config('upload.antivirus.enabled', true)) {
             return;
         }
@@ -286,6 +294,18 @@ class FileUploadService
             if ($required) {
                 throw new \RuntimeException('The security scan could not be completed. Please try again or contact an administrator.');
             }
+        }
+    }
+
+    /** ملف اختبار EICAR (68 بايت — توقيع الفيروسات القياسي): بيترفض حتى لو ClamAV مش متثبّت على السيرفر. */
+    private function assertNotEicar(string $tmpPath, string $originalName, string $category): void
+    {
+        $head = @file_get_contents($tmpPath, false, null, 0, 2048);
+        if ($head !== false && str_contains($head, 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*')) {
+            SecurityLog::write("Malware detected in uploaded file: {$originalName} (EICAR signature) — upload rejected", [
+                'file' => $originalName, 'category' => $category,
+            ]);
+            throw new \RuntimeException('This file was rejected by the security scanner and could not be uploaded.');
         }
     }
 

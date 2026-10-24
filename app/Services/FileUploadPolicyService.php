@@ -100,11 +100,15 @@ class FileUploadPolicyService
     public function effectiveAllowed(array $categoryAllowed): array
     {
         $p = $this->getPolicy();
+        $anyType = in_array('*', $categoryAllowed, true); // الفئة بتقبل أي امتداد (مثلًا: ملفات الاجتماعات)
         if (empty($p['restrict_extensions']) || $p['allowed_extensions'] === '') {
             return $categoryAllowed;
         }
 
         $globalAllowed = array_filter(array_map('trim', explode(',', $p['allowed_extensions'])));
+        if ($anyType) {
+            return array_values($globalAllowed);
+        }
         $intersected = array_values(array_intersect($categoryAllowed, $globalAllowed));
 
         // تقاطع صارم: لو مفيش تقاطع، يبقى مفيش نوع مسموح (قبل كده كان بيرجع لقائمة الفئة كلها فيبطل التقييد).

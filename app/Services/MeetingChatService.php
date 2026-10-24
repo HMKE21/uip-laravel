@@ -7,6 +7,7 @@ use App\Events\Meetings\ChatMessageSent;
 use App\Models\Meeting;
 use App\Models\MeetingChatMessage;
 use App\Repositories\MeetingRepository;
+use Illuminate\Http\UploadedFile;
 
 /**
  * Meetings & Collaboration Platform — Round 5 (Live Collaboration): بند
@@ -25,7 +26,8 @@ use App\Repositories\MeetingRepository;
 class MeetingChatService
 {
     public function __construct(
-        private MeetingRepository $meetings
+        private MeetingRepository $meetings,
+        private ?FileUploadService $uploads = null
     ) {
     }
 
@@ -52,6 +54,30 @@ class MeetingChatService
     {
         if (!$this->isChatEnabled($meeting)) {
             throw new \RuntimeException('Chat is disabled for this meeting.');
+        }
+
+        $file = $data['file'] ?? null;
+        $body = trim((string) ($data['body'] ?? ''));
+        if ($body === '' && !$file instanceof UploadedFile) {
+            throw new \RuntimeException('Type a message or attach a file.');
+        }
+
+        $attachment = null;
+        if ($file instanceof UploadedFile) {
+            if (!(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
+                throw new \RuntimeException('File sharing is disabled for this meeting.');
+            }
+            if (!$this->uploads) {
+                throw new \RuntimeException('File uploads are not available right now.');
+            }
+            $stored = $this->uploads->store($file, 'meetings', $meeting->uuid);
+            $attachment = [
+                'original_name' => $stored['original_name'],
+                'stored_path'   => $stored['stored_path'],
+                'extension'     => $stored['extension'],
+                'mime_type'     => $stored['mime_type'],
+                'size_bytes'    => $stored['size_bytes'],
+            ];
         }
 
         $recipientKey = $data['recipient_key'] ?? null;
@@ -85,7 +111,8 @@ class MeetingChatService
             'sender_display_name'  => $actor['display_name'],
             'recipient_key'        => $recipientKey,
             'type'                 => 'text',
-            'body'                 => $data['body'],
+            'body'                 => $body,
+            'attachment'           => $attachment,
             'reply_to_message_id'  => $replyToId,
             'mentioned_keys'       => $mentionedKeys ?: null,
         ]);
@@ -188,10 +215,27 @@ class MeetingChatService
             'is_private'           => $message->isPrivate(),
             'type'                 => $message->type,
             'body'                 => $message->body,
+            'attachment'           => $this->presentAttachment($message->attachment),
             'reply_to_message_id'  => $message->reply_to_message_id,
             'mentioned_keys'       => $message->mentioned_keys ?? [],
             'reactions'            => array_values($reactions),
             'created_at'           => optional($message->created_at)->toISOString(),
+        ];
+    }
+
+    /** @return array<string,mixed>|null الملف المرفق بالرسالة (من غير المسار الداخلي) + رابط التحميل/المعاينة. */
+    private function presentAttachment(?array $attachment): ?array
+    {
+        if (!$attachment || empty($attachment['stored_path'])) {
+            return null;
+        }
+
+        return [
+            'original_name' => $attachment['original_name'] ?? 'file',
+            'extension'     => $attachment['extension'] ?? null,
+            'mime_type'     => $attachment['mime_type'] ?? null,
+            'size_bytes'    => $attachment['size_bytes'] ?? null,
+            'download_url'  => asset($attachment['stored_path']),
         ];
     }
 

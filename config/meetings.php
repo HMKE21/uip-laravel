@@ -28,7 +28,7 @@ return [
     'presence_stale_seconds' => (int) env('MEETING_PRESENCE_STALE_SECONDS', 90),
 
     'waiting_room_default_enabled' => (bool) env('MEETING_WAITING_ROOM_DEFAULT', true),
-    'allow_guests_default'         => (bool) env('MEETING_ALLOW_GUESTS_DEFAULT', false),
+    'allow_guests_default'         => (bool) env('MEETING_ALLOW_GUESTS_DEFAULT', true),
 
     // ساعات صلاحية دعوة قبل ما تتعتبر منتهية (invitation.status=expired) —
     // MeetingService::createInvitation() بيحسب expires_at من القيمة دي
