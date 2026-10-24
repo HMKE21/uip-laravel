@@ -288,6 +288,28 @@ class MeetingService
         $host = \App\Models\User::find($meeting->host_user_id);
         $hostName = $host ? $host->nameFor($locale) : ($ar ? 'مضيف الاجتماع' : 'The host');
 
+        $details = $this->inviteDetails($meeting, $hostName, $ar);
+
+        $ok = $mail->sendMeetingInvite(
+            $invitee->email,
+            $invitee->nameFor($locale),
+            $hostName,
+            (string) $meeting->title,
+            $details,
+            $message,
+            $this->meetingUrlFor($meeting, $invitee),
+            $locale
+        );
+        if (!$ok) {
+            $error = $mail->getLastError() ?: 'Email could not be sent.';
+        }
+
+        return $ok;
+    }
+
+    /** صفوف "تفاصيل الاجتماع" اللي بتظهر في إيميل الدعوة. @return array<int,array{label:string,value:string}> */
+    private function inviteDetails(Meeting $meeting, string $hostName, bool $ar): array
+    {
         $details = [['label' => $ar ? 'الاجتماع' : 'Meeting', 'value' => (string) $meeting->title]];
         if (!empty($meeting->description)) {
             $details[] = ['label' => $ar ? 'الوصف' : 'Description', 'value' => mb_substr((string) $meeting->description, 0, 300)];
@@ -305,15 +327,40 @@ class MeetingService
             $details[] = ['label' => $ar ? 'المدة' : 'Duration', 'value' => $meeting->duration_minutes . ($ar ? ' دقيقة' : ' min')];
         }
 
+        return $details;
+    }
+
+    /**
+     * دعوة بالإيميل لشخص **مالوش حساب** على المنصة: بنبعتله إيميل فيه تفاصيل الاجتماع + رابط الانضمام
+     * المباشر (/join/{join_token}) — بيدخل كضيف من غير تسجيل (لازم الاجتماع يسمح بالضيوف،
+     * والـ waiting room / كلمة السر لو متفعلين بيفضلوا شغالين زي ما هما). مفيش صف دعوة (الجدول مربوط بـ users).
+     */
+    public function emailGuestInvitation(Meeting $meeting, string $email, ?string $message = null, ?string &$error = null): bool
+    {
+        $error = null;
+        $mail = app(MailService::class);
+
+        $host = \App\Models\User::find($meeting->host_user_id);
+        $locale = ($host && ($host->preferred_language ?? 'ar') === 'en') ? 'en' : 'ar';
+        $ar = $locale === 'ar';
+        $hostName = $host ? $host->nameFor($locale) : ($ar ? 'مضيف الاجتماع' : 'The host');
+
+        $base = rtrim((string) (config('app.frontend_url') ?: config('app.url', 'http://localhost')), '/');
+        $details = $this->inviteDetails($meeting, $hostName, $ar);
+        if ($meeting->password_hash) {
+            $details[] = ['label' => $ar ? 'كلمة السر' : 'Password', 'value' => $ar ? 'الاجتماع محمي بكلمة سر — اطلبها من المضيف' : 'This meeting is password protected — ask the host for it'];
+        }
+
         $ok = $mail->sendMeetingInvite(
-            $invitee->email,
-            $invitee->nameFor($locale),
+            $email,
+            $ar ? 'ضيفنا الكريم' : 'there',
             $hostName,
             (string) $meeting->title,
             $details,
             $message,
-            $this->meetingUrlFor($meeting, $invitee),
-            $locale
+            "{$base}/join/{$meeting->join_token}",
+            $locale,
+            true
         );
         if (!$ok) {
             $error = $mail->getLastError() ?: 'Email could not be sent.';

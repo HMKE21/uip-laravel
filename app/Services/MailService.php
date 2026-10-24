@@ -230,7 +230,8 @@ class MailService
         array $details,
         ?string $message,
         string $meetingUrl,
-        string $locale = 'ar'
+        string $locale = 'ar',
+        bool $guest = false
     ): bool {
         $ar = $locale === 'ar';
 
@@ -239,6 +240,11 @@ class MailService
                 ? "{$hostName} دعاك لحضور اجتماع \"{$meetingTitle}\" على المنصة. اضغط على الزر أدناه لفتح صفحة الاجتماع والرد على الدعوة (قبول/رفض)."
                 : "{$hostName} invited you to the meeting \"{$meetingTitle}\" on the platform. Use the button below to open the meeting page and accept or decline.",
         ];
+        if ($guest) {
+            $lines[] = $ar
+                ? 'مش محتاج حساب على المنصة: افتح الرابط من المتصفح واكتب اسمك وانضم مباشرة.'
+                : 'No account needed: open the link in your browser, enter your name and join directly.';
+        }
         if ($message !== null && trim($message) !== '') {
             $lines[] = ($ar ? 'رسالة من المضيف: ' : 'Message from the host: ') . trim($message);
         }
@@ -248,7 +254,7 @@ class MailService
             $ar ? "دعوة لحضور اجتماع: {$meetingTitle}" : "Meeting invitation: {$meetingTitle}",
             $ar ? "أهلاً {$inviteeName}" : "Hi {$inviteeName}",
             $lines,
-            ['label' => $ar ? 'فتح الاجتماع' : 'Open the meeting', 'url' => $meetingUrl],
+            ['label' => $guest ? ($ar ? 'الانضمام للاجتماع' : 'Join the meeting') : ($ar ? 'فتح الاجتماع' : 'Open the meeting'), 'url' => $meetingUrl],
             $locale,
             $details,
             'sendMeetingInvite',

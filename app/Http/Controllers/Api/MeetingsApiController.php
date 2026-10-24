@@ -286,8 +286,11 @@ class MeetingsApiController extends Controller
         $invitedUser = $byEmail
             ? $this->users->findByEmail(mb_strtolower(trim((string) $request->input('email'))))
             : $this->users->findById($request->input('user_id'));
+        if (!$invitedUser && $byEmail) {
+            return $this->inviteGuestByEmail($request, $meeting, mb_strtolower(trim((string) $request->input('email'))));
+        }
         if (!$invitedUser) {
-            return $this->apiError($byEmail ? 'No account was found with this email.' : 'User not found.', null, 404);
+            return $this->apiError('User not found.', null, 404);
         }
 
         if ((int) $invitedUser->id === (int) $meeting->host_user_id) {
@@ -306,6 +309,32 @@ class MeetingsApiController extends Controller
         }
 
         return $this->apiSuccess($data, 'Invitation sent successfully.', 201);
+    }
+
+    /**
+     * البريد مالوش حساب: بنبعتله رابط الانضمام المباشر كضيف (من غير صف دعوة — meeting_invitations مربوط بـ users).
+     * محدود بـ 20 إيميل/ساعة لكل هوست عشان الميزة متتحولش لأداة سبام.
+     */
+    private function inviteGuestByEmail(Request $request, $meeting, string $email)
+    {
+        if (!$meeting->allow_guests) {
+            return $this->apiError('No account was found with this email, and guests are not allowed in this meeting. Turn on "Allow guests" in the meeting settings to invite people without an account.', null, 422);
+        }
+
+        $hostId = $this->userId($request);
+        $limiterKey = 'meeting-guest-mail:' . $hostId;
+        if (\Illuminate\Support\Facades\RateLimiter::tooManyAttempts($limiterKey, 20)) {
+            return $this->apiError('Too many invitation emails sent. Please try again later.', null, 429);
+        }
+
+        $emailError = null;
+        $sent = $this->meetingService->emailGuestInvitation($meeting, $email, $request->input('message'), $emailError);
+        if ($sent) {
+            \Illuminate\Support\Facades\RateLimiter::hit($limiterKey, 3600);
+            $this->auditLog->record($hostId, 'meetings.guest_email_invitation_sent', 'Meeting', $meeting->id);
+        }
+
+        return $this->apiSuccess(['guest' => true, 'email_sent' => $sent, 'email_error' => $emailError], 'Invitation sent successfully.', 201);
     }
 
     /** دعوات المستخدم الحالي المعلّقة عبر كل الاجتماعات — /api/v1/meetings/invitations */
