@@ -761,9 +761,10 @@ Route::prefix('v1')->group(function () {
     // فوق عشان "join" ميتفسرش غلط كـ {uuid} لو ترتيبه قبلها (مفيش تعارض
     // فعلي هنا لأن الـ prefix مختلف، بس نفس منطق الترتيب المتبع أعلى).
     Route::prefix('meetings/join')->middleware('uip.auth.optional')->group(function () {
-        Route::get('{joinToken}/info', [MeetingsLobbyApiController::class, 'info']);
-        Route::post('{joinToken}/verify-password', [MeetingsLobbyApiController::class, 'verifyPassword']);
-        Route::post('{joinToken}/request', [MeetingsLobbyApiController::class, 'requestAccess']);
+        // throttle: كود الاجتماع (10 أرقام) بقى مقبول هنا كمان، فلازم نحدّ التخمين.
+        Route::get('{joinToken}/info', [MeetingsLobbyApiController::class, 'info'])->middleware('throttle:40,1');
+        Route::post('{joinToken}/verify-password', [MeetingsLobbyApiController::class, 'verifyPassword'])->middleware('throttle:20,1');
+        Route::post('{joinToken}/request', [MeetingsLobbyApiController::class, 'requestAccess'])->middleware('throttle:20,1');
         Route::get('{joinToken}/request/{requestId}/status', [MeetingsLobbyApiController::class, 'requestStatus'])->where('requestId', '[0-9]+');
     });
 

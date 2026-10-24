@@ -40,7 +40,18 @@ class MeetingRepository
     /** بيبحث بـ join_token بدل uuid — سطح "الدخول للاجتماع" العام (Round 2). */
     public function findByJoinToken(string $token): ?Meeting
     {
-        return Meeting::where('join_token', $token)->first();
+        $meeting = Meeting::where('join_token', $token)->first();
+        if ($meeting) {
+            return $meeting;
+        }
+
+        // كود الاجتماع (10 أرقام، زي Zoom Meeting ID) اتولّد عشان يتكتب يدويًا في "انضم برابط" — فبنقبله هنا كمان.
+        // نفس سياسة الدخول بعد كده بالظبط (باسورد / غرفة انتظار / قفل)، والمسارات دي عليها throttle في routes/api.php.
+        if (preg_match('/^\d{10}$/', $token)) {
+            return Meeting::where('meeting_code', $token)->first();
+        }
+
+        return null;
     }
 
     /** Ownership-checked lookup — مقيدة بـ host_user_id بتاع المستخدم نفسه. */
