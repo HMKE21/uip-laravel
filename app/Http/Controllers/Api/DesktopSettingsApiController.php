@@ -163,6 +163,26 @@ class DesktopSettingsApiController extends Controller
 
     // -- settings ---------------------------------------------------------------------------------------
 
+    /**
+     * GET /desktop/access — هل "جهازي" مفتوح للحساب ده؟ الواجهة بتسأله قبل ما تعرض سطح المكتب
+     * (إغلاق الدور من Admin → My PC Control كان بيمنع الملفات بس، والشاشة نفسها كانت بتفتح).
+     * بيرد دايمًا 200: { allowed, code: disabled|role|blocked|null, message, readonly }
+     */
+    public function access(Request $request): JsonResponse
+    {
+        $uid = $this->uid($request);
+        $role = (string) $request->attributes->get('uip_role');
+        $d = \App\Services\DriveAdminSettings::denial($uid, $role, false);
+        $ro = !$d && \App\Services\DriveAdminSettings::denial($uid, $role, true) !== null;
+
+        return $this->apiSuccess([
+            'allowed'  => $d === null,
+            'code'     => $d[2] ?? null,
+            'message'  => $d[0] ?? null,
+            'readonly' => $ro,
+        ]);
+    }
+
     public function show(Request $request): JsonResponse
     {
         return $this->apiSuccess($this->payload($this->row($this->uid($request))), 'Desktop settings retrieved successfully.');

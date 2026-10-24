@@ -47,6 +47,7 @@ return Application::configure(basePath: dirname(__DIR__))
             // لازم يتحط بعد uip.auth في نفس المجموعة (محتاج uip_role
             // اللي uip.auth بيحطها في $request->attributes).
             'uip.admin' => \App\Http\Middleware\UipAdminMiddleware::class,
+            'uip.drive' => \App\Http\Middleware\UipDriveAccessMiddleware::class,
             // يقفل الـ route حسب صلاحيات الأدوار (صفحة /admin/roles). لازم يتحط بعد
             // uip.auth. شوف الـ docblock في UipPermissionMiddleware للصيغة.
             'uip.can' => \App\Http\Middleware\UipPermissionMiddleware::class,

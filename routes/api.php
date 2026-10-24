@@ -1962,6 +1962,9 @@ Route::prefix('v1')->group(function () {
 
     // إعدادات سطح المكتب ("جهازي") + باسورد شاشة القفل — بتتابع الطالب على أي جهاز. راجع DesktopSettingsApiController.
     Route::prefix('desktop')->middleware('uip.auth')->group(function () {
+        // هل "جهازي" مفتوح للحساب ده؟ (مفتاح الأدمن + الدور + حالة المستخدم). بيرد 200 دايمًا والواجهة بتقرر تعرض الشاشة أو رسالة الإغلاق.
+        Route::get('/access', [DesktopSettingsApiController::class, 'access'])->middleware('throttle:120,1');
+        Route::middleware('uip.drive')->group(function () {
         Route::get('/settings', [DesktopSettingsApiController::class, 'show'])->middleware('throttle:120,1');
         Route::put('/settings', [DesktopSettingsApiController::class, 'update'])->middleware('throttle:120,1');
         // الملاحظات اللاصقة والويدجت — DesktopWidgetsApiController
@@ -1986,6 +1989,7 @@ Route::prefix('v1')->group(function () {
             Route::post('/devices/lock-others', [\App\Http\Controllers\Api\DesktopSecurityApiController::class, 'lockOthers'])->middleware('throttle:20,1');
             Route::post('/devices/{id}/logout', [\App\Http\Controllers\Api\DesktopSecurityApiController::class, 'logoutDevice'])->where('id', '[0-9]+')->middleware('throttle:30,1');
             Route::post('/devices/{id}/lock', [\App\Http\Controllers\Api\DesktopSecurityApiController::class, 'lockDevice'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        });
         });
     });
 
