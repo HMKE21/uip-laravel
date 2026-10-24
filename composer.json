@@ -49,6 +49,14 @@
             "Composer\\Config::disableProcessTimeout",
             "@php artisan dev"
         ],
+        "reverb": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php artisan reverb:start --host=0.0.0.0 --port=8081"
+        ],
+        "start": [
+            "Composer\\Config::disableProcessTimeout",
+            "npx concurrently -k -n api,reverb \"php artisan serve\" \"php artisan reverb:start --host=0.0.0.0 --port=8081\""
+        ],
         "test": [
             "@php artisan config:clear --ansi @no_additional_args",
             "@php artisan test"

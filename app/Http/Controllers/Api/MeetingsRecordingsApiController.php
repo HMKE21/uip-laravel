@@ -8,6 +8,7 @@ use App\Services\AuditLogService;
 use App\Services\MeetingRecordingService;
 use App\Services\MeetingSignalingService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Facades\Validator;
 
 /**
@@ -49,6 +50,38 @@ class MeetingsRecordingsApiController extends Controller
         }
     }
 
+    private function attachmentUrl($recording): string
+    {
+        $meeting = $this->meetings->find((int) $recording->meeting_id);
+        $path = URL::temporarySignedRoute(
+            'meetings.recordings.download',
+            now()->addMinutes(60),
+            ['uuid' => $meeting?->uuid, 'recordingId' => $recording->id],
+            false
+        );
+
+        return url($path);
+    }
+
+    /** تحميل ملف التسجيل كـ attachment — الحماية بالتوقيع (signed:relative) اللي اتولّد لمستخدم مصرّح له في index(). */
+    public function download(Request $request, string $uuid, int $recordingId)
+    {
+        $meeting = $this->findMeeting($uuid);
+        $recording = $meeting ? \App\Models\MeetingRecording::where('meeting_id', $meeting->id)->where('id', $recordingId)->first() : null;
+        if (!$recording || empty($recording->stored_path)) {
+            abort(404);
+        }
+
+        $full = public_path(ltrim($recording->stored_path, '/'));
+        if (!is_file($full)) {
+            abort(404);
+        }
+
+        $name = $recording->original_name ?: ('recording-' . $recording->id . '.' . (pathinfo($full, PATHINFO_EXTENSION) ?: 'webm'));
+
+        return response()->download($full, $name);
+    }
+
     private function present($recording): array
     {
         return [
@@ -64,6 +97,8 @@ class MeetingsRecordingsApiController extends Controller
             'mime_type'                => $recording->mime_type,
             'size_bytes'               => $recording->size_bytes,
             'download_url'             => $recording->stored_path ? asset($recording->stored_path) : null,
+            // رابط تحميل حقيقي (Content-Disposition: attachment) موقّع ومؤقت — بيحمّل الملف من غير ما يفتح تاب فيديو خام.
+            'attachment_url'           => $recording->stored_path ? $this->attachmentUrl($recording) : null,
             'failure_reason'           => $recording->status === 'failed' ? $recording->failure_reason : null,
             'created_at'               => $recording->created_at,
         ];

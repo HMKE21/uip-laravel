@@ -839,6 +839,10 @@ Route::prefix('v1')->group(function () {
     // Round 9 (Recording، بند 18). زي مجموعة files بالظبط: uip.auth.optional
     // — راجع docblock MeetingsRecordingsApiController. start=host/co-host
     // بس، stop بياخد الملف النهائي بعد ما المتصفح ينهي MediaRecorder.
+    // تحميل ملف التسجيل: رابط موقّع مؤقت بيتولّد في index() لحد مصرّح له (مفيش auth header هنا لأنه navigation عادي من المتصفح).
+    Route::get('meetings/{uuid}/recordings/{recordingId}/download', [MeetingsRecordingsApiController::class, 'download'])
+        ->where('recordingId', '[0-9]+')->middleware('signed:relative')->name('meetings.recordings.download');
+
     Route::prefix('meetings/{uuid}/recordings')->middleware('uip.auth.optional')->group(function () {
         Route::get('/', [MeetingsRecordingsApiController::class, 'index']);
         Route::post('/', [MeetingsRecordingsApiController::class, 'store']);

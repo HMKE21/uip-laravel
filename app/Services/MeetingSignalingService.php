@@ -78,6 +78,21 @@ class MeetingSignalingService
      */
     public function resolveActor(Meeting $meeting, ?int $authUserId, ?string $guestToken): array
     {
+        // توكن ضيف صالح لنفس الاجتماع له الأولوية: لو نفس المتصفح فيه حساب مسجّل دخول (Bearer token) والشخص دخل كـ ضيف
+        // من رابط الانضمام، الطلب لازم يتحسب ضيف مش المستخدم المسجّل (اللي ممكن مايكونش participant أصلاً -> 403 "مانضمتش").
+        if ($guestToken !== null && $guestToken !== '') {
+            $guestRequest = $this->lobby->resolveGuestToken($guestToken, $meeting->id);
+            if ($guestRequest && in_array($guestRequest->status, ['admitted', 'left'], true)) {
+                return [
+                    'type'         => 'guest',
+                    'model'        => $guestRequest,
+                    'key'          => 'guest:' . $guestRequest->id,
+                    'display_name' => (string) $guestRequest->guest_name,
+                    'role'         => 'guest',
+                ];
+            }
+        }
+
         if ($authUserId !== null) {
             $participant = $this->meetings->findParticipant($meeting->id, $authUserId);
             if (!$participant || !in_array($participant->status, ['joined', 'left'], true)) {

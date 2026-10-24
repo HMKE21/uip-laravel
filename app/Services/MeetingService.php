@@ -67,7 +67,8 @@ class MeetingService
             'type'                 => $type,
             'status'               => 'scheduled',
             'scheduled_start_at'   => $type === 'scheduled' ? ($data['scheduled_start_at'] ?? null) : null,
-            'duration_minutes'     => $data['duration_minutes'] ?? $this->policy->defaultDurationMinutes(),
+            // null صريح = اجتماع مفتوح بلا نهاية (مفيش وقت محدد). لو الحقل مش مبعوت أصلاً نرجع للمدة الافتراضية.
+            'duration_minutes'     => array_key_exists('duration_minutes', $data) ? ($data['duration_minutes'] !== null ? (int) $data['duration_minutes'] : null) : $this->policy->defaultDurationMinutes(),
             'meeting_code'         => $this->meetings->generateUniqueMeetingCode(),
             'join_token'           => $this->meetings->generateUniqueJoinToken(),
             'password_hash'        => !empty($data['password']) ? Hash::make($data['password']) : null,
