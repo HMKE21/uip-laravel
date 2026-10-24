@@ -41,7 +41,7 @@ class GenericMail extends Mailable
         public string $mailLocale = 'ar',
         public ?array $meta = null, // صفوف label/value إضافية (زي الباسورد المؤقت)
         // نوع الإيميل — بيحدد الألوان والأيقونة والبادج في القالب:
-        // invite | reset | security | success | report | notification | test | info
+        // invite | meeting | reset | security | success | report | notification | test | info
         public string $variant = 'info',
         // Reply-To مخصّص (مثلاً: إيميل الزائر في فورم التواصل مع فريق المشروع)
         public ?string $replyToEmail = null,
@@ -84,6 +84,14 @@ class GenericMail extends Mailable
                 'note' => $ar
                     ? 'لأمان حسابك، غيّر كلمة السر المؤقتة بعد أول تسجيل دخول مباشرة.'
                     : 'For your security, change this temporary password right after your first login.',
+            ],
+            'meeting' => [
+                'from' => '#4f46e5', 'to' => '#7c3aed', 'accent' => '#4f46e5',
+                'soft' => '#eef2ff', 'softBorder' => '#c7d2fe', 'shadow' => 'rgba(79,70,229,0.35)',
+                'icon' => '📅', 'metaIcon' => '🗓️',
+                'badge' => $ar ? 'دعوة اجتماع' : 'Meeting invitation',
+                'metaTitle' => $ar ? 'تفاصيل الاجتماع' : 'Meeting details',
+                'note' => null,
             ],
             'reset' => [
                 'from' => '#f59e0b', 'to' => '#ea580c', 'accent' => '#ea580c',

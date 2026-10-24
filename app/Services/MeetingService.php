@@ -272,6 +272,71 @@ class MeetingService
         return $invitation;
     }
 
+    /**
+     * يبعت إيميل دعوة الاجتماع (التفاصيل + رابط صفحة الاجتماع) للمستخدم المدعو.
+     * الدعوة نفسها اتسجلت قبل كده في invite() — فشل الإيميل مبيلغيهاش، بس بيرجّع
+     * false (والسبب في $error) عشان الواجهة تبلّغ الهوست.
+     */
+    public function emailInvitation(Meeting $meeting, \App\Models\User $invitee, ?string $message = null, ?string &$error = null): bool
+    {
+        $error = null;
+        $mail = app(MailService::class);
+
+        $locale = ($invitee->preferred_language ?? 'ar') === 'en' ? 'en' : 'ar';
+        $ar = $locale === 'ar';
+
+        $host = \App\Models\User::find($meeting->host_user_id);
+        $hostName = $host ? $host->nameFor($locale) : ($ar ? 'مضيف الاجتماع' : 'The host');
+
+        $details = [['label' => $ar ? 'الاجتماع' : 'Meeting', 'value' => (string) $meeting->title]];
+        if (!empty($meeting->description)) {
+            $details[] = ['label' => $ar ? 'الوصف' : 'Description', 'value' => mb_substr((string) $meeting->description, 0, 300)];
+        }
+        $details[] = ['label' => $ar ? 'المضيف' : 'Host', 'value' => $hostName];
+        if ($meeting->scheduled_start_at) {
+            $details[] = [
+                'label' => $ar ? 'الموعد' : 'Starts at',
+                'value' => $meeting->scheduled_start_at->copy()->utc()->format('Y-m-d H:i') . ' (UTC)',
+            ];
+        } else {
+            $details[] = ['label' => $ar ? 'الموعد' : 'Starts at', 'value' => $ar ? 'اجتماع فوري / بدون موعد محدد' : 'Instant meeting / no fixed time'];
+        }
+        if (!empty($meeting->duration_minutes)) {
+            $details[] = ['label' => $ar ? 'المدة' : 'Duration', 'value' => $meeting->duration_minutes . ($ar ? ' دقيقة' : ' min')];
+        }
+
+        $ok = $mail->sendMeetingInvite(
+            $invitee->email,
+            $invitee->nameFor($locale),
+            $hostName,
+            (string) $meeting->title,
+            $details,
+            $message,
+            $this->meetingUrlFor($meeting, $invitee),
+            $locale
+        );
+        if (!$ok) {
+            $error = $mail->getLastError() ?: 'Email could not be sent.';
+        }
+
+        return $ok;
+    }
+
+    /** رابط صفحة الاجتماع في الفرونت حسب بوابة (portal) دور المدعو — نفس mapping portalPrefix() في navConfig.js. */
+    public function meetingUrlFor(Meeting $meeting, \App\Models\User $invitee): string
+    {
+        $role = app(RoleService::class)->primaryRoleFor((int) $invitee->id);
+        $prefix = [
+            'data_analyst'    => 'data-analysis',
+            'security_admin'  => 'security',
+            'security_officer' => 'security',
+            'academic_staff'  => 'academic-staff',
+        ][$role] ?? $role;
+        $base = rtrim((string) (config('app.frontend_url') ?: config('app.url', 'http://localhost')), '/');
+
+        return "{$base}/{$prefix}/meetings/{$meeting->uuid}";
+    }
+
     public function respondToInvitation(MeetingInvitation $invitation, int $userId, bool $accept): MeetingInvitation
     {
         if ((int) $invitation->invited_user_id !== $userId) {

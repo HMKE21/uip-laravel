@@ -217,6 +217,45 @@ class MailService
         );
     }
 
+    /**
+     * دعوة اجتماع بالإيميل — بتتبعت لما الهوست يدعو مستخدم عن طريق بريده.
+     * $details: صفوف label/value (موضوع الاجتماع، الموعد، المدة، المضيف...).
+     * كلمة سر الاجتماع (لو فيه) مش بتتبعت في الإيميل عمدًا.
+     */
+    public function sendMeetingInvite(
+        string $toEmail,
+        string $inviteeName,
+        string $hostName,
+        string $meetingTitle,
+        array $details,
+        ?string $message,
+        string $meetingUrl,
+        string $locale = 'ar'
+    ): bool {
+        $ar = $locale === 'ar';
+
+        $lines = [
+            $ar
+                ? "{$hostName} دعاك لحضور اجتماع \"{$meetingTitle}\" على المنصة. اضغط على الزر أدناه لفتح صفحة الاجتماع والرد على الدعوة (قبول/رفض)."
+                : "{$hostName} invited you to the meeting \"{$meetingTitle}\" on the platform. Use the button below to open the meeting page and accept or decline.",
+        ];
+        if ($message !== null && trim($message) !== '') {
+            $lines[] = ($ar ? 'رسالة من المضيف: ' : 'Message from the host: ') . trim($message);
+        }
+
+        return $this->deliver(
+            $toEmail,
+            $ar ? "دعوة لحضور اجتماع: {$meetingTitle}" : "Meeting invitation: {$meetingTitle}",
+            $ar ? "أهلاً {$inviteeName}" : "Hi {$inviteeName}",
+            $lines,
+            ['label' => $ar ? 'فتح الاجتماع' : 'Open the meeting', 'url' => $meetingUrl],
+            $locale,
+            $details,
+            'sendMeetingInvite',
+            'meeting'
+        );
+    }
+
     public function sendNotificationEmail(string $toEmail, string $fullName, string $title, ?string $body, ?string $linkUrl, string $locale = 'ar'): bool
     {
         $ar = $locale === 'ar';

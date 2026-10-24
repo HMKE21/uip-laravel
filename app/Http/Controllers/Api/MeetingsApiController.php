@@ -271,17 +271,23 @@ class MeetingsApiController extends Controller
             return $this->apiError('Meeting not found.', null, 404);
         }
 
+        // الدعوة إمّا بـ user_id (زي الأول) أو بالبريد الإلكتروني — الإيميل بيتبعت له رسالة
+        // فيها تفاصيل الاجتماع + الرابط (لازم يكون ليه حساب على المنصة).
         $validator = Validator::make($request->all(), [
-            'user_id' => 'required|integer',
+            'user_id' => 'required_without:email|nullable|integer',
+            'email'   => 'required_without:user_id|nullable|email|max:255',
             'message' => 'nullable|string|max:500',
         ]);
         if ($validator->fails()) {
             return $this->apiError($validator->errors()->first(), $validator->errors()->toArray(), 422);
         }
 
-        $invitedUser = $this->users->findById($request->input('user_id'));
+        $byEmail = $request->filled('email');
+        $invitedUser = $byEmail
+            ? $this->users->findByEmail(mb_strtolower(trim((string) $request->input('email'))))
+            : $this->users->findById($request->input('user_id'));
         if (!$invitedUser) {
-            return $this->apiError('User not found.', null, 404);
+            return $this->apiError($byEmail ? 'No account was found with this email.' : 'User not found.', null, 404);
         }
 
         if ((int) $invitedUser->id === (int) $meeting->host_user_id) {
@@ -292,7 +298,14 @@ class MeetingsApiController extends Controller
 
         $this->auditLog->record($this->userId($request), 'meetings.invitation_sent', 'MeetingInvitation', $invitation->id);
 
-        return $this->apiSuccess($invitation->toArray(), 'Invitation sent successfully.', 201);
+        $data = $invitation->toArray();
+        if ($byEmail) {
+            $emailError = null;
+            $data['email_sent'] = $this->meetingService->emailInvitation($meeting, $invitedUser, $request->input('message'), $emailError);
+            $data['email_error'] = $emailError;
+        }
+
+        return $this->apiSuccess($data, 'Invitation sent successfully.', 201);
     }
 
     /** دعوات المستخدم الحالي المعلّقة عبر كل الاجتماعات — /api/v1/meetings/invitations */
