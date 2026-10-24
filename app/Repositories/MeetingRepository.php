@@ -157,7 +157,9 @@ class MeetingRepository
 
     public function pendingInvitationsFor($userId): array
     {
+        // whereHas('meeting'): دعوة لاجتماع اتحذف (soft delete) متفضلش "معلّقة" — كانت بترجع meeting=null والفرونت بيكسر.
         return MeetingInvitation::with('meeting', 'invitedBy')
+            ->whereHas('meeting')
             ->where('invited_user_id', $userId)
             ->where('status', 'pending')
             ->orderByDesc('id')
