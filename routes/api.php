@@ -1267,6 +1267,41 @@ Route::prefix('v1')->group(function () {
         Route::get('/export', [AdminAuditLogsApiController::class, 'export']);
     });
 
+    // صفحات الدليل (Portal Guides): شرح كامل لكل بوابة، والأدمن (أو أي دور معاه guides.manage) يعدّله.
+    // القراءة لكل مستخدم مسجّل (دليل بوابته بس)، التعديل تحت uip.can:guides.manage — شوف PORTAL_GUIDE_API.md.
+    Route::prefix('guides')->middleware('uip.auth')->group(function () {
+        $c = \App\Http\Controllers\Api\PortalGuideApiController::class;
+        Route::get('/', [$c, 'index']);
+        Route::get('/me', [$c, 'me']);
+        Route::get('/me/search', [$c, 'searchMe']);
+        Route::post('/me/seen', [$c, 'seenMe']);
+        Route::get('/{portal}', [$c, 'show'])->where('portal', '[a-z\-]+');
+        Route::get('/{portal}/search', [$c, 'search'])->where('portal', '[a-z\-]+');
+        Route::post('/{portal}/seen', [$c, 'seen'])->where('portal', '[a-z\-]+');
+    });
+
+    Route::prefix('admin/guides')->middleware(['uip.auth', 'uip.can:guides.manage'])->group(function () {
+        $c = \App\Http\Controllers\Api\AdminPortalGuideApiController::class;
+        Route::prefix('portal/{portal}')->where(['portal' => '[a-z\-]+'])->group(function () use ($c) {
+            Route::put('/', [$c, 'updateMeta']);
+            Route::post('/sections', [$c, 'createSection']);
+            Route::post('/sections/reorder', [$c, 'reorderSections']);
+            Route::get('/revisions', [$c, 'revisions']);
+            Route::post('/reset', [$c, 'reset']);
+        });
+        Route::prefix('sections/{id}')->where(['id' => '[0-9]+'])->group(function () use ($c) {
+            Route::put('/', [$c, 'updateSection']);
+            Route::delete('/', [$c, 'deleteSection']);
+            Route::post('/items', [$c, 'createItem']);
+            Route::post('/items/reorder', [$c, 'reorderItems']);
+        });
+        Route::prefix('items/{id}')->where(['id' => '[0-9]+'])->group(function () use ($c) {
+            Route::put('/', [$c, 'updateItem']);
+            Route::delete('/', [$c, 'deleteItem']);
+        });
+        Route::post('/revisions/{id}/restore', [$c, 'restore'])->where('id', '[0-9]+');
+    });
+
     // publicIndex()/publicShow() لازم يفضلوا برّه أي middleware auth —
     // دول دليل عام حقيقي بيتفتحوا من غير تسجيل دخول (زي باقي
     // /api/v1/public/* فوق)؛ كانوا واقعين غلط جوه الجروب اللي تحت
