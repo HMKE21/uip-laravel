@@ -387,6 +387,28 @@ Route::prefix('v1')->group(function () {
         Route::get('/{uuid}/export', [\App\Http\Controllers\Api\CodeReviewReportApiController::class, 'export']);
     });
 
+    // بوابة الحساب المرتبط بجامعة: باقات/منح الوصول (أدمن|جامعة|كلية) + طابور طلبات انضمام الكلية.
+    // لازم قبل faculty/{id} العامة عشان "join-requests" ميتفسرش كـ id.
+    Route::prefix('access')->middleware('uip.auth')->group(function () {
+        Route::get('/features', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'features']);
+        Route::get('/plans', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'plans']);
+        Route::post('/plans', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'storePlan'])->middleware('throttle:30,1');
+        Route::patch('/plans/{id}', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'updatePlan'])->where('id', '[0-9]+');
+        Route::delete('/plans/{id}', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'deletePlan'])->where('id', '[0-9]+');
+        Route::get('/accounts', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'accounts']);
+        Route::get('/grants', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'grants']);
+        Route::post('/grants', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'grant'])->middleware('throttle:60,1');
+        Route::post('/grants/{id}/mark-paid', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'markPaid'])->where('id', '[0-9]+');
+        Route::post('/grants/{id}/extend', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'extend'])->where('id', '[0-9]+');
+        Route::post('/grants/{id}/revoke', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'revoke'])->where('id', '[0-9]+');
+    });
+
+    Route::prefix('faculty/join-requests')->middleware('uip.auth')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'facultyIndex']);
+        Route::post('/{id}/approve', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'facultyApprove'])->where('id', '[0-9]+');
+        Route::post('/{id}/reject', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'facultyReject'])->where('id', '[0-9]+');
+    });
+
     Route::prefix('faculty/approvals')->middleware('uip.auth')->group(function () {
         Route::get('/', [FacultyApprovalsApiController::class, 'index']);
         Route::get('/{id}', [FacultyApprovalsApiController::class, 'show']);
@@ -1304,6 +1326,7 @@ Route::prefix('v1')->group(function () {
         Route::patch('/me', [StudentsApiController::class, 'updateMe']);
         Route::post('/me/avatar', [StudentsApiController::class, 'uploadAvatar']);
         Route::post('/me/join-request', [StudentsApiController::class, 'joinRequest']);
+        Route::get('/me/access', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'myAccess']);
 
         Route::get('/{id}', [StudentsApiController::class, 'show']);
         Route::patch('/{id}', [StudentsApiController::class, 'update']);

@@ -47,6 +47,7 @@ final class PlatformPolicy
         'persistent_login'       => true,  // Facebook-style: sessions never expire from inactivity; only an explicit sign-out / revoke / device-limit eviction ends them
         'animations_enabled'     => true,  // platform-wide UI motion (ambient backdrop, pill/chip + page-enter animations); OFF = a calm, static UI for every user
         'messaging_restricted'   => false, // ON = students may only start chats with their project group / own institution; OFF = anyone can message anyone
+        'require_university_link' => true, // ON = a student account with no university can't use the platform (meetings, messaging, projects, My PC…) until a university/faculty approves it or the admin/university/faculty grants it access
     ];
 
     /**

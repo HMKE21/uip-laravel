@@ -124,6 +124,22 @@ class UipAuthMiddleware
             }
         }
 
+        // الحساب مش مرتبط بجامعة => مفيش استخدام للمنصة غير البروفايل/طلب الانضمام/الإشعارات لحد ما الجامعة أو الكلية
+        // توافق، أو أدمن/جامعة/كلية يمنحه ميزات (رسائل/اجتماعات/مشاريع/جهازي...). شوف AccountAccessGate.
+        [$allowed, $gate, $feature] = app(\App\Services\AccountAccessGate::class)->check((int) $claims['sub'], $claimRole, $request->path());
+        if (!$allowed) {
+            $ar = $request->header('X-Locale', 'en') === 'ar';
+            return response()->json([
+                'success' => false,
+                'message' => $ar
+                    ? 'حسابك مش مرتبط بجامعة. لازم تنضم لجامعة وتستنى موافقتها، أو تاخد صلاحية من الإدارة/الجامعة/الكلية قبل ما تستخدم الميزة دي.'
+                    : 'Your account is not linked to a university. Join a university and wait for its approval, or get access from the admin, university or faculty, before using this feature.',
+                'data'    => $gate + ['required_feature' => $feature],
+                'errors'  => ['code' => 'university_approval_required', 'feature' => $feature],
+                'meta'    => (object) [],
+            ], 403);
+        }
+
         return $next($request);
     }
 }

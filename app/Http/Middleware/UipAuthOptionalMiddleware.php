@@ -43,6 +43,16 @@ class UipAuthOptionalMiddleware
                     }
                 }
 
+                // بوابة الجامعة: حساب مقيّد من الميزة دي (مثلًا اجتماعات) بيتعامل كضيف هنا بدل ما يعدّيها من المسارات الاختيارية.
+                if ($valid) {
+                    try {
+                        [$allowed] = app(\App\Services\AccountAccessGate::class)->check((int) $claims['sub'], (string) ($claims['role'] ?? ''), $request->path());
+                        $valid = $allowed;
+                    } catch (\Throwable $e) {
+                        // نكمل زي الأول لو القراءة فشلت
+                    }
+                }
+
                 if ($valid) {
                     if ($sid) {
                         $request->attributes->set('uip_session_id', $sid);
