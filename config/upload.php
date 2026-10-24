@@ -36,6 +36,8 @@ return [
     'allowed' => [
         'documents' => ['pdf', 'doc', 'docx'],
         'avatars'   => ['jpg', 'jpeg', 'png', 'webp'],
+        // خلفيات الشات الشخصية (صور المستخدم نفسه) — صور بس، والفحص بالمحتوى (getimagesize) بيتم في FileUploadService.
+        'chat_wallpapers' => ['jpg', 'jpeg', 'png', 'webp'],
         'projects'  => ['pdf', 'doc', 'docx', 'zip', 'ppt', 'pptx'],
         'logos'     => ['jpg', 'jpeg', 'png', 'webp', 'svg'],
         // University signature / stamp / dean signature printed on certificates.
@@ -168,6 +170,7 @@ return [
     ],
     'paths' => [
         'avatars'   => 'uploads/avatars',
+        'chat_wallpapers' => 'uploads/chat-wallpapers',
         'course_assignments'     => 'uploads/course-assignments',
         'assignment_submissions' => 'uploads/assignment-submissions',
         'documents' => 'uploads/documents',

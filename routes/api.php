@@ -83,6 +83,7 @@ use App\Http\Controllers\Api\GroupChatController;
 use App\Http\Controllers\Api\ChatSafetyApiController;
 use App\Http\Controllers\Api\ConversationTrashController;
 use App\Http\Controllers\Api\AccountPrivacyApiController;
+use App\Http\Controllers\Api\ChatWallpapersApiController;
 use App\Http\Controllers\Api\DesktopSettingsApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
@@ -1793,6 +1794,13 @@ Route::prefix('v1')->group(function () {
     Route::prefix('account/photo-privacy')->middleware('uip.auth')->group(function () {
         Route::get('/', [AccountPrivacyApiController::class, 'show']);
         Route::patch('/', [AccountPrivacyApiController::class, 'update']);
+    });
+
+    // خلفيات الشات الشخصية (صور المستخدم) — بتتابعه على أي جهاز. راجع ChatWallpapersApiController.
+    Route::prefix('account/chat-wallpapers')->middleware('uip.auth')->group(function () {
+        Route::get('/', [ChatWallpapersApiController::class, 'index'])->middleware('throttle:120,1');
+        Route::post('/', [ChatWallpapersApiController::class, 'store'])->middleware('throttle:30,1');
+        Route::delete('{uid}', [ChatWallpapersApiController::class, 'destroy'])->where('uid', '[a-z0-9]{6,24}')->middleware('throttle:60,1');
     });
 
     // إعدادات سطح المكتب ("جهازي") + باسورد شاشة القفل — بتتابع الطالب على أي جهاز. راجع DesktopSettingsApiController.
