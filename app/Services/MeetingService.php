@@ -195,6 +195,7 @@ class MeetingService
         $meeting->ended_at = now();
         $meeting->save();
 
+        $this->attendance?->persistMissingSessions($meeting);
         $this->attendance?->closeAllOpenSessions($meeting);
 
         $this->notifyParticipants(

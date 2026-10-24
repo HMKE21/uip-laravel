@@ -87,6 +87,69 @@ class MeetingAttendanceService
     }
 
     /**
+     * كل واحد دخل الاجتماع فعلًا (يوزر مسجّل أو ضيف — حتى لو خرج/الاجتماع خلص) وملوش جلسة حضور محفوظة.
+     * قبل كده الضيوف كانوا بيتحسبوا بس لو status=admitted، فأول ما الاجتماع يخلص ويتحوّلوا لـ left كانوا بيختفوا من التقرير.
+     *
+     * @param \App\Models\MeetingAttendanceSession[] $sessions
+     * @return \App\Models\MeetingAttendanceSession[]
+     */
+    private function missingSessions(Meeting $meeting, array $sessions): array
+    {
+        $now = now();
+        $known = [];
+        foreach ($sessions as $session) {
+            $known[$session->participant_key] = true;
+        }
+        $fallbackEnd = $meeting->ended_at;
+        $out = [];
+
+        foreach ($this->meetings->participantsFor($meeting->id) as $p) {
+            $key = 'user:' . $p->user_id;
+            if (isset($known[$key]) || !$p->joined_at || !in_array($p->status, ['joined', 'left'], true)) {
+                continue;
+            }
+            $out[] = new \App\Models\MeetingAttendanceSession([
+                'meeting_id' => $meeting->id, 'participant_key' => $key,
+                'display_name' => $p->user->full_name ?? ('User #' . $p->user_id),
+                'joined_at' => $p->joined_at,
+                'left_at' => $p->status === 'left' ? ($p->left_at ?? $fallbackEnd) : $fallbackEnd,
+            ]);
+        }
+
+        foreach ($this->meetings->enteredGuestsFor($meeting->id) as $g) {
+            $key = 'guest:' . $g->id;
+            if (isset($known[$key])) {
+                continue;
+            }
+            $out[] = new \App\Models\MeetingAttendanceSession([
+                'meeting_id' => $meeting->id, 'participant_key' => $key,
+                'display_name' => (string) $g->guest_name,
+                'joined_at' => $g->decided_at ?? $g->requested_at ?? $now,
+                'left_at' => $g->status === 'left' ? ($g->left_at ?? $fallbackEnd) : $fallbackEnd,
+            ]);
+        }
+
+        return $out;
+    }
+
+    /**
+     * بتتنادى من MeetingService::end() قبل قفل الجلسات: أي شخص دخل ومالوش جلسة محفوظة بنثبّتله صف حقيقي في الجدول،
+     * فالتقرير مايعتمدش على حالة meeting_participants/join_requests اللي ممكن تتغير بعد انتهاء الاجتماع.
+     */
+    public function persistMissingSessions(Meeting $meeting): void
+    {
+        foreach ($this->missingSessions($meeting, $this->meetings->attendanceSessionsFor($meeting->id)) as $session) {
+            $this->meetings->createAttendanceSession([
+                'meeting_id'      => $meeting->id,
+                'participant_key' => $session->participant_key,
+                'display_name'    => $session->display_name,
+                'joined_at'       => $session->joined_at,
+                'left_at'         => $session->left_at,
+            ]);
+        }
+    }
+
+    /**
      * بند 17 — "Generate an attendance report": صف واحد لكل شخص شارك،
      * مجمّع من كل جلساته. attendance_percentage نسبة إلى مدة الاجتماع
      * الفعلية (started_at → ended_at، أو started_at → الآن لو لسه شغال) —
@@ -104,36 +167,7 @@ class MeetingAttendanceService
         $sessions = $this->meetings->attendanceSessionsFor($meeting->id);
         $now = now();
 
-        // Fallback: anyone who really entered the meeting but has no attendance session (joined before this tracking
-        // was reliable, or the join hook never fired) is rebuilt from meeting_participants / admitted guests, so the
-        // report is never empty for a meeting people actually attended.
-        $known = [];
-        foreach ($sessions as $session) {
-            $known[$session->participant_key] = true;
-        }
-        $synthetic = [];
-        foreach ($this->meetings->participantsFor($meeting->id) as $p) {
-            $key = 'user:' . $p->user_id;
-            if (isset($known[$key]) || !$p->joined_at || !in_array($p->status, ['joined', 'left'], true)) {
-                continue;
-            }
-            $synthetic[] = new \App\Models\MeetingAttendanceSession([
-                'meeting_id' => $meeting->id, 'participant_key' => $key,
-                'display_name' => $p->user->full_name ?? ('User #' . $p->user_id),
-                'joined_at' => $p->joined_at, 'left_at' => $p->status === 'left' ? $p->left_at : null,
-            ]);
-        }
-        foreach ($this->meetings->admittedGuestsFor($meeting->id) as $g) {
-            $key = 'guest:' . $g->id;
-            if (isset($known[$key])) {
-                continue;
-            }
-            $synthetic[] = new \App\Models\MeetingAttendanceSession([
-                'meeting_id' => $meeting->id, 'participant_key' => $key,
-                'display_name' => (string) $g->guest_name,
-                'joined_at' => $g->decided_at ?? $g->requested_at ?? $now, 'left_at' => null,
-            ]);
-        }
+        $synthetic = $this->missingSessions($meeting, $sessions);
         $sessions = array_merge($sessions, $synthetic);
 
         $meetingDurationSeconds = $this->meetingDurationSeconds($meeting, $sessions);

@@ -45,7 +45,8 @@ class MeetingAnalyticsService
     public function forMeeting(Meeting $meeting): array
     {
         $participants = MeetingParticipant::where('meeting_id', $meeting->id)->get();
-        $joinCount = $participants->whereIn('status', ['joined', 'left'])->count();
+        $guestsEntered = \App\Models\MeetingJoinRequest::where('meeting_id', $meeting->id)->whereNull('user_id')->whereIn('status', ['admitted', 'left'])->count();
+        $joinCount = $participants->whereIn('status', ['joined', 'left'])->count() + $guestsEntered;
         $currentlyConnected = $participants->where('connection_state', 'connected')->count();
 
         $recordings = MeetingRecording::where('meeting_id', $meeting->id)->get();

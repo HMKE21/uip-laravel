@@ -243,6 +243,17 @@ class MeetingRepository
             ->all();
     }
 
+    /** @return MeetingJoinRequest[] كل الضيوف اللي دخلوا فعلًا (admitted أو left) — أساس تقرير الحضور بعد انتهاء الاجتماع. */
+    public function enteredGuestsFor($meetingId): array
+    {
+        return MeetingJoinRequest::where('meeting_id', $meetingId)
+            ->whereNull('user_id')
+            ->whereIn('status', ['admitted', 'left'])
+            ->orderBy('decided_at')
+            ->get()
+            ->all();
+    }
+
     /** المشاركين الفعليين دلوقتي = يوزرز مسجلين status=joined + ضيوف مقبولين — عشان فحص max_participants. */
     public function countActiveParticipants($meetingId): int
     {
