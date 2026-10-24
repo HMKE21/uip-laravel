@@ -13,7 +13,9 @@ use Illuminate\Support\Facades\DB;
  * إلا لما:
  *   - الجامعة أو الكلية توافق على طلب الانضمام (أو الأدمن يربطه) => students.university_id يتحط، أو
  *   - أدمن/جامعة/كلية يديله منحة (account_access_grants) فيها مميزات محددة أو 'all'، مجانية أو مدفوعة، بمدة أو من غير.
- * باقي الأدوار مرتبطة بطبيعتها => مش متأثرة. الأدمن يقفل البوابة كلها من Platform Policy (require_university_link).
+ * باقي الأدوار مرتبطة بطبيعتها => مش متأثرة. حسابات الأمن وتحليل البيانات (EXEMPT_ROLES) مستثناة برضه، والأدمن يقدر يلغي
+ * الاستثناء عن حساب معيّن (account_gate_exemption_cancellations) فيتعامل زي الطالب غير المرتبط.
+ * الأدمن يقفل البوابة كلها من Platform Policy (require_university_link).
  */
 class AccountAccessGate
 {
@@ -48,8 +50,16 @@ class AccountAccessGate
         'universities', 'app-config', 'platform', 'public', 'v1',
     ];
 
+    /** أدوار مستثناة افتراضيًا من البوابة (الأدمن يلغي الاستثناء عن حساب معيّن). */
+    public const EXEMPT_ROLES = ['security_admin', 'security_officer', 'data_analyst'];
+
     /** @var array<string,array> */
     private array $memo = [];
+
+    public function exemptionCancelled(int $userId): bool
+    {
+        return DB::table('account_gate_exemption_cancellations')->where('user_id', $userId)->exists();
+    }
 
     /** @return string|null  null = مسموح للمقيّد؛ غير كده اسم الميزة المطلوبة ('all' لو مش متصنّفة) */
     public static function featureForPath(string $path): ?string
@@ -103,13 +113,22 @@ class AccountAccessGate
 
         $out = [
             'enabled' => PlatformPolicy::flag('require_university_link'),
-            'restricted' => false, 'reason' => null,
+            'restricted' => false, 'reason' => null, 'exemption_cancelled' => false,
             'allowed_features' => [], 'grants' => [], 'request' => null,
         ];
 
-        if ($out['enabled'] && $role === 'student') {
-            $s = DB::table('students')->where('user_id', $userId)->first(['id', 'university_id']);
-            if (!$s || !$s->university_id) {
+        if ($out['enabled']) {
+            $gated = false;
+            $student = null;
+            if ($role === 'student') {
+                $student = DB::table('students')->where('user_id', $userId)->first(['id', 'university_id']);
+                $gated = !$student || !$student->university_id;
+            } elseif (in_array($role, self::EXEMPT_ROLES, true) && $this->exemptionCancelled($userId)) {
+                $gated = true;
+                $out['exemption_cancelled'] = true;
+            }
+
+            if ($gated) {
                 $grants = $this->activeGrants($userId);
                 $features = [];
                 foreach ($grants as $g) {
@@ -119,9 +138,9 @@ class AccountAccessGate
                 $out['grants'] = $grants;
                 $out['allowed_features'] = $features;
                 $out['restricted'] = !in_array('all', $features, true);
-                $out['reason'] = $out['restricted'] ? 'no_university' : null;
-                if ($s) {
-                    $r = DB::table('student_university_requests')->where('student_id', $s->id)->orderByDesc('id')->first(['status', 'created_at', 'university_id']);
+                $out['reason'] = $out['restricted'] ? ($out['exemption_cancelled'] ? 'exemption_cancelled' : 'no_university') : null;
+                if ($student) {
+                    $r = DB::table('student_university_requests')->where('student_id', $student->id)->orderByDesc('id')->first(['status', 'created_at', 'university_id']);
                     $out['request'] = $r ? ['status' => $r->status, 'created_at' => $r->created_at, 'university_id' => $r->university_id] : null;
                 }
             }

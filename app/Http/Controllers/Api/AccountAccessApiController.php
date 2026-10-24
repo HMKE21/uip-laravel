@@ -29,6 +29,11 @@ use Illuminate\Support\Facades\DB;
  *   POST   access/grants/{id}/extend    {days}
  *   POST   access/grants/{id}/revoke
  *
+ * الأدمن بس — استثناء حسابات الأمن وتحليل البيانات:
+ *   GET  access/exemptions                       حسابات security_admin/security_officer/data_analyst + هل الاستثناء شغال
+ *   POST access/exemptions/{userId}/cancel       {note?} إلغاء الاستثناء (الحساب بيتقفل لحد ما يتمنح صلاحية)
+ *   POST access/exemptions/{userId}/restore      رجوع الاستثناء
+ *
  * الكلية:
  *   GET  faculty/join-requests?status=pending|all
  *   POST faculty/join-requests/{id}/approve | reject      (نفس منطق الجامعة بالظبط)
@@ -321,10 +326,11 @@ class AccountAccessApiController extends Controller
             return $this->apiError('Account not found.', null, 404);
         }
         $stu = DB::table('students')->where('user_id', $user->id)->first(['id', 'university_id']);
-        if (!$stu) {
-            return $this->apiError('Only student accounts can be granted access.', null, 422);
+        $staffGated = $this->gate->exemptionCancelled((int) $user->id);
+        if (!$stu && !$staffGated) {
+            return $this->apiError('Only student accounts (or accounts whose exemption was cancelled) can be granted access.', null, 422);
         }
-        if ($stu->university_id) {
+        if ($stu && $stu->university_id && !$staffGated) {
             return $this->apiError('This account is already linked to a university; it does not need a grant.', null, 422);
         }
 
@@ -451,6 +457,74 @@ class AccountAccessApiController extends Controller
         $this->auditLog->record($this->uid($request), 'account_access.revoked', 'User', (int) $g->user_id, ['grant_id' => $id], null, $request->ip());
 
         return $this->apiSuccess(['id' => $id], 'Access withdrawn.');
+    }
+
+    // ------------------------------------------------------------ admin: exemptions (security / data analysts)
+
+    private function denyUnlessAdmin(Request $r)
+    {
+        return $this->role($r) === 'admin' ? null : $this->apiError('Only admin accounts can manage exemptions.', null, 403);
+    }
+
+    public function exemptions(Request $request)
+    {
+        if ($e = $this->denyUnlessAdmin($request)) {
+            return $e;
+        }
+        $q = DB::table('users as u')
+            ->join('user_roles as ur', 'ur.user_id', '=', 'u.id')->join('roles as r', 'r.id', '=', 'ur.role_id')
+            ->leftJoin('account_gate_exemption_cancellations as c', 'c.user_id', '=', 'u.id')
+            ->whereNull('u.deleted_at')->whereIn('r.slug', AccountAccessGate::EXEMPT_ROLES);
+        if (($term = trim((string) $request->query('q', ''))) !== '') {
+            $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
+            $q->where(fn ($w) => $w->where('u.full_name', 'like', $like)->orWhere('u.email', 'like', $like));
+        }
+        $rows = $q->orderBy('r.slug')->orderBy('u.full_name')->limit(300)
+            ->get(['u.id', 'u.full_name', 'u.email', 'u.status', 'r.slug as role', 'c.id as cancel_id', 'c.created_at as cancelled_at', 'c.note'])
+            ->map(function ($u) {
+                $grants = $u->cancel_id ? $this->gate->activeGrants((int) $u->id) : [];
+                return [
+                    'id' => (int) $u->id, 'name' => $u->full_name, 'email' => $u->email, 'account_status' => $u->status, 'role' => $u->role,
+                    'exempt' => $u->cancel_id === null, 'cancelled_at' => $u->cancelled_at, 'note' => $u->note, 'active_grants' => $grants,
+                ];
+            })->all();
+
+        return $this->apiSuccess([
+            'enabled' => \App\Support\PlatformPolicy::flag('require_university_link'),
+            'items' => $rows,
+        ]);
+    }
+
+    public function cancelExemption(Request $request, int $userId)
+    {
+        if ($e = $this->denyUnlessAdmin($request)) {
+            return $e;
+        }
+        $role = DB::table('user_roles as ur')->join('roles as r', 'r.id', '=', 'ur.role_id')->where('ur.user_id', $userId)
+            ->whereIn('r.slug', AccountAccessGate::EXEMPT_ROLES)->value('r.slug');
+        if (!$role) {
+            return $this->apiError('This account is not a security or data-analyst account.', null, 404);
+        }
+        $note = mb_substr(trim((string) $request->input('note', '')), 0, 300) ?: null;
+        DB::table('account_gate_exemption_cancellations')->updateOrInsert(['user_id' => $userId], ['cancelled_by' => $this->uid($request), 'note' => $note, 'created_at' => now()]);
+        $this->notifications->notify($userId, 'account_exemption_cancelled', 'Your account access was restricted', 'An administrator restricted your account. Contact the admin to get access back.', null);
+        $this->auditLog->record($this->uid($request), 'account_access.exemption_cancelled', 'User', $userId, ['exempt' => true], ['role' => $role, 'note' => $note], $request->ip());
+
+        return $this->apiSuccess(['user_id' => $userId, 'exempt' => false], 'Exemption cancelled.');
+    }
+
+    public function restoreExemption(Request $request, int $userId)
+    {
+        if ($e = $this->denyUnlessAdmin($request)) {
+            return $e;
+        }
+        $n = DB::table('account_gate_exemption_cancellations')->where('user_id', $userId)->delete();
+        if ($n) {
+            $this->notifications->notify($userId, 'account_exemption_restored', 'Your account access was restored', null, null);
+            $this->auditLog->record($this->uid($request), 'account_access.exemption_restored', 'User', $userId, ['exempt' => false], ['exempt' => true], $request->ip());
+        }
+
+        return $this->apiSuccess(['user_id' => $userId, 'exempt' => true], $n ? 'Exemption restored.' : 'This account was already exempt.');
     }
 
     // ------------------------------------------------------------ faculty join requests

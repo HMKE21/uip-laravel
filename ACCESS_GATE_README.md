@@ -23,3 +23,10 @@ POST /api/v1/access/grants/{id}/mark-paid | extend {days} | revoke
 GET  /api/v1/faculty/join-requests?status=pending|all
 POST /api/v1/faculty/join-requests/{id}/approve | reject
 Admin sees/manages all grants + admin plans; university/faculty only their own plans & grants.
+
+## Exemptions (security / data analysts) — admin only
+security_admin, security_officer and data_analyst are exempt from the gate. Admin can cancel the exemption per account:
+GET  /api/v1/access/exemptions?q=
+POST /api/v1/access/exemptions/{userId}/cancel {note?}   -> account is locked like an unlinked student (grants can reopen features)
+POST /api/v1/access/exemptions/{userId}/restore
+Run `php artisan migrate` again (new table account_gate_exemption_cancellations).

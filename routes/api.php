@@ -396,6 +396,9 @@ Route::prefix('v1')->group(function () {
         Route::patch('/plans/{id}', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'updatePlan'])->where('id', '[0-9]+');
         Route::delete('/plans/{id}', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'deletePlan'])->where('id', '[0-9]+');
         Route::get('/accounts', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'accounts']);
+        Route::get('/exemptions', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'exemptions']);
+        Route::post('/exemptions/{userId}/cancel', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'cancelExemption'])->where('userId', '[0-9]+');
+        Route::post('/exemptions/{userId}/restore', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'restoreExemption'])->where('userId', '[0-9]+');
         Route::get('/grants', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'grants']);
         Route::post('/grants', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'grant'])->middleware('throttle:60,1');
         Route::post('/grants/{id}/mark-paid', [\App\Http\Controllers\Api\AccountAccessApiController::class, 'markPaid'])->where('id', '[0-9]+');
