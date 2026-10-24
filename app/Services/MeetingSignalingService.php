@@ -13,6 +13,7 @@ use App\Events\Meetings\ParticipantReactionSent;
 use App\Events\Meetings\ParticipantScreenShareForceStopped;
 use App\Events\Meetings\ScreenShareParticipantPolicyChanged;
 use App\Events\Meetings\ScreenSharePolicyChanged;
+use App\Exceptions\MeetingSessionConflictException;
 use App\Models\Meeting;
 use App\Models\MeetingJoinRequest;
 use App\Models\MeetingParticipant;
@@ -151,7 +152,7 @@ class MeetingSignalingService
      * @throws \InvalidArgumentException اسم قناة غلط لهذا الاجتماع.
      * @throws \RuntimeException الـ actor مش مصرح له (راجع resolveActor).
      */
-    public function authorizeChannel(Meeting $meeting, ?int $authUserId, ?string $guestToken, string $socketId, string $channelName): array
+    public function authorizeChannel(Meeting $meeting, ?int $authUserId, ?string $guestToken, string $socketId, string $channelName, ?string $sessionId = null): array
     {
         $actor = $this->resolveActor($meeting, $authUserId, $guestToken);
 
@@ -164,6 +165,9 @@ class MeetingSignalingService
         if ($channelName !== $this->expectedChannelName($meeting)) {
             throw new \InvalidArgumentException('This channel does not belong to this meeting.');
         }
+
+        // جلسة واحدة بس لكل شخص في الاجتماع (تابة/متصفح/جهاز واحد). لو فيه جلسة تانية حية → نرفض الجديدة.
+        $this->claimSession($meeting, $actor, $sessionId);
 
         // بند 7 — "Ahmed joined the meeting" مرة واحدة بس لكل دخول حقيقي
         // (last_seen_at لسه null يعني الجلسة دي أول مرة تدخل الغرفة
@@ -481,6 +485,58 @@ class MeetingSignalingService
 
         return $ref->gt(now()->subSeconds($ttl));
     }
+
+    // ---- single active session per person per meeting ---------------------------------------------------------------
+    // الجلسة بتتخزن في الـ cache بمفتاح (الاجتماع + الـ actor key) وبتتجدد مع كل heartbeat. لو التابة اتقفلت من غير leave
+    // (كراش/قفل النت) الجلسة بتنتهي لوحدها بعد SESSION_TTL ثانية. تابات الخلفية بتبطّأ الـ timers فالمدة واسعة.
+    private const SESSION_TTL = 120;
+
+    private function sessionKey(Meeting $meeting, array $actor): string
+    {
+        return 'meeting_session:' . $meeting->id . ':' . $actor['key'];
+    }
+
+    /** @throws MeetingSessionConflictException لو فيه جلسة تانية حية لنفس الشخص. */
+    public function claimSession(Meeting $meeting, array $actor, ?string $sessionId): void
+    {
+        if ($sessionId === null || $sessionId === '') {
+            return; // عميل قديم مابيبعتش session id — مفيش إنفاذ
+        }
+        $key = $this->sessionKey($meeting, $actor);
+        $ttl = now()->addSeconds(self::SESSION_TTL);
+        if (\Illuminate\Support\Facades\Cache::add($key, $sessionId, $ttl)) {
+            return;
+        }
+        $current = \Illuminate\Support\Facades\Cache::get($key);
+        if ($current !== null && $current !== $sessionId) {
+            throw new MeetingSessionConflictException('You are already in this meeting on another tab or device.');
+        }
+        \Illuminate\Support\Facades\Cache::put($key, $sessionId, $ttl);
+    }
+
+    /** @throws MeetingSessionConflictException لو الجلسة دي اتحل محلها (أو اتسرقت). بتجدد الـ TTL لو هي صاحبة الجلسة. */
+    public function touchSession(Meeting $meeting, array $actor, ?string $sessionId): void
+    {
+        if ($sessionId === null || $sessionId === '') {
+            return;
+        }
+        $key = $this->sessionKey($meeting, $actor);
+        $current = \Illuminate\Support\Facades\Cache::get($key);
+        if ($current !== null && $current !== $sessionId) {
+            throw new MeetingSessionConflictException('This meeting was opened in another tab or device.');
+        }
+        \Illuminate\Support\Facades\Cache::put($key, $sessionId, now()->addSeconds(self::SESSION_TTL));
+    }
+
+    public function releaseSession(Meeting $meeting, array $actor, ?string $sessionId): void
+    {
+        $key = $this->sessionKey($meeting, $actor);
+        $current = \Illuminate\Support\Facades\Cache::get($key);
+        if ($sessionId === null || $sessionId === '' || $current === null || $current === $sessionId) {
+            \Illuminate\Support\Facades\Cache::forget($key);
+        }
+    }
+
 
     /** بينج دوري من الفرونت (كل ~20-30 ثانية) — بيحدّث last_seen_at بس، من غير أي broadcast (مفيش داعي، الحالة نفسها ما اتغيرتش). */
     public function heartbeat(array $actor, ?Meeting $meeting = null): void

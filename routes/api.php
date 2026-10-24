@@ -781,6 +781,8 @@ Route::prefix('v1')->group(function () {
         Route::post('connection-state', [MeetingsSignalingApiController::class, 'connectionState']);
         Route::post('heartbeat', [MeetingsSignalingApiController::class, 'heartbeat']);
         Route::post('leave', [MeetingsSignalingApiController::class, 'leave']);
+        Route::post('claim-session', [MeetingsSignalingApiController::class, 'claimSession']);
+        Route::post('release-session', [MeetingsSignalingApiController::class, 'releaseSession']);
 
         // Round 4 (WebRTC Core، بند 4/6/34).
         Route::get('ice-servers', [MeetingsSignalingApiController::class, 'iceServers']);

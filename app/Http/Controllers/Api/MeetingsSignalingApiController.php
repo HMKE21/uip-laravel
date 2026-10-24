@@ -69,6 +69,7 @@ class MeetingsSignalingApiController extends Controller
             'socket_id'    => 'required|string|max:100',
             'channel_name' => 'required|string|max:200',
             'guest_token'  => 'nullable|string',
+            'session_id'   => 'nullable|string|max:100',
         ]);
         if ($validator->fails()) {
             return $this->apiError($validator->errors()->first(), $validator->errors()->toArray(), 422);
@@ -80,8 +81,11 @@ class MeetingsSignalingApiController extends Controller
                 $this->authUserId($request),
                 $request->input('guest_token'),
                 $request->input('socket_id'),
-                $request->input('channel_name')
+                $request->input('channel_name'),
+                $request->input('session_id')
             );
+        } catch (\App\Exceptions\MeetingSessionConflictException $e) {
+            return $this->apiError($e->getMessage(), ['code' => 'already_in_meeting'], 409);
         } catch (\InvalidArgumentException $e) {
             return $this->apiError($e->getMessage(), null, 422);
         } catch (\RuntimeException $e) {
@@ -177,9 +181,58 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
+        try {
+            $this->signaling->touchSession($meeting, $actor, $request->input('session_id'));
+        } catch (\App\Exceptions\MeetingSessionConflictException $e) {
+            return $this->apiError($e->getMessage(), ['code' => 'session_replaced'], 409);
+        }
+
         $this->signaling->heartbeat($actor, $meeting);
 
         return $this->apiSuccess(null, 'Heartbeat recorded.');
+    }
+
+    /** التابة بتتقفل/بتتعمل reload: بس بنحرر "الجلسة الحية" (مش leave كامل) عشان التحميل الجديد مايترفضش بسبب جلستنا القديمة. */
+    public function releaseSession(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        $actor = $this->resolveActorOr403($request, $meeting);
+        if ($actor instanceof \Illuminate\Http\JsonResponse) {
+            return $actor;
+        }
+
+        $sid = $request->input('session_id');
+        if ($sid !== null && $sid !== '') {
+            $this->signaling->releaseSession($meeting, $actor, $sid);
+        }
+
+        return $this->apiSuccess(null, 'Session released.');
+    }
+
+    /** نفس الشخص من تابة/جهاز تاني؟ لازم نعرف قبل ما نفتح الكاميرا ونغيّر أي حاجة في الاجتماع. */
+    public function claimSession(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        $actor = $this->resolveActorOr403($request, $meeting);
+        if ($actor instanceof \Illuminate\Http\JsonResponse) {
+            return $actor;
+        }
+
+        try {
+            $this->signaling->claimSession($meeting, $actor, $request->input('session_id'));
+        } catch (\App\Exceptions\MeetingSessionConflictException $e) {
+            return $this->apiError($e->getMessage(), ['code' => 'already_in_meeting'], 409);
+        }
+
+        return $this->apiSuccess(null, 'Session claimed.');
     }
 
     public function leave(Request $request, string $uuid)
@@ -194,6 +247,13 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
+        // تابة قديمة/مرفوضة بتقفل ماينفعش تطرد الجلسة الحية بتاعة نفس الشخص من تابة تانية.
+        $sid = $request->input('session_id');
+        $liveSid = \Illuminate\Support\Facades\Cache::get('meeting_session:' . $meeting->id . ':' . $actor['key']);
+        if ($sid !== null && $sid !== '' && $liveSid !== null && $liveSid !== $sid) {
+            return $this->apiSuccess(null, 'Ignored: this is not the active session.');
+        }
+        $this->signaling->releaseSession($meeting, $actor, $sid);
         $this->signaling->leave($meeting, $actor);
         $this->auditLog->record($this->authUserId($request) ?? null, 'meetings.signaling_left', 'Meeting', $meeting->id);
 
