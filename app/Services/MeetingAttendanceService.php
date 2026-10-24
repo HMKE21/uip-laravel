@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Meeting;
 use App\Repositories\MeetingRepository;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Meetings & Collaboration Platform — Round 7 (Collaboration Extras):
@@ -35,11 +36,34 @@ class MeetingAttendanceService
     ) {
     }
 
-    /** بيتنادى من authorizeChannel() — مفيش تأثير لو فيه جلسة مفتوحة بالفعل (reconnect/refresh عادي). */
-    public function recordJoin(Meeting $meeting, array $actor): void
+    /**
+     * بيتنادى من authorizeChannel() ومن ensureJoined().
+     *
+     * $pageSessionId = الـ MEETING_SESSION_ID اللي الفرونت بيولّده مرة لكل page load (refresh/تابة جديدة = id جديد، reconnect
+     * للـ websocket بس = نفس الـ id). لو فيه جلسة حضور مفتوحة لنفس الشخص بس مربوطة بـ page load تاني، يبقى الصفحة القديمة
+     * ماتت (refresh/كراش) من غير ما "release" توصل — فنقفل القديمة (خروج) ونفتح جديدة (دخول) بدل ما الدخول الجديد يتبلع.
+     */
+    public function recordJoin(Meeting $meeting, array $actor, ?string $pageSessionId = null): void
     {
-        if ($this->meetings->openAttendanceSession($meeting->id, $actor['key'])) {
-            return;
+        $open = $this->meetings->openAttendanceSession($meeting->id, $actor['key']);
+        $cacheKey = $this->pageSessionCacheKey($meeting, $actor);
+
+        if ($open) {
+            $knownSid = $pageSessionId ? Cache::get($cacheKey) : null;
+            if ($pageSessionId === null || $knownSid === null || $knownSid === $pageSessionId) {
+                if ($pageSessionId !== null) {
+                    Cache::put($cacheKey, $pageSessionId, now()->addDay());
+                }
+
+                return; // نفس الصفحة (reconnect/heartbeat عادي) — مفيش حاجة تتغير.
+            }
+
+            // page load مختلف: الصفحة القديمة خرجت. آخر نبضة للشخص هي أقرب تقدير للحظة الخروج (مش "دلوقتي").
+            $model = $actor['model'] ?? null;
+            $lastSeen = $model->last_seen_at ?? null;
+            $leftAt = ($lastSeen && $lastSeen->gt($open->joined_at) && $lastSeen->lte(now())) ? $lastSeen : now();
+            $open->left_at = $leftAt;
+            $open->save();
         }
 
         $this->meetings->createAttendanceSession([
@@ -48,6 +72,31 @@ class MeetingAttendanceService
             'display_name'    => $actor['display_name'],
             'joined_at'       => now(),
         ]);
+
+        if ($pageSessionId !== null) {
+            Cache::put($cacheKey, $pageSessionId, now()->addDay());
+        }
+    }
+
+    /**
+     * بيتنادى من release-session (pagehide: refresh / قفل التابة). بيقفل الجلسة المفتوحة فورًا، فالدخول اللي بعده بيتسجّل
+     * كدخول جديد و"مرات الخروج" بتزيد. بيتجاهل لو الـ id مش بتاع الصفحة الحية (تابة قديمة مارضيش تطرد الحالية).
+     */
+    public function recordPageUnload(Meeting $meeting, array $actor, string $pageSessionId): void
+    {
+        $cacheKey = $this->pageSessionCacheKey($meeting, $actor);
+        $known = Cache::get($cacheKey);
+        if ($known !== null && $known !== $pageSessionId) {
+            return;
+        }
+
+        $this->recordLeave($meeting, $actor);
+        Cache::forget($cacheKey);
+    }
+
+    private function pageSessionCacheKey(Meeting $meeting, array $actor): string
+    {
+        return 'meeting_attendance_page:' . $meeting->id . ':' . $actor['key'];
     }
 
     /**
@@ -56,14 +105,14 @@ class MeetingAttendanceService
      * فاضي ومفيش تقرير). recordJoin() idempotent فالنداء المتكرر مفيهوش ضرر، واللي حالته "left" بنتجاهله عشان
      * طلب متأخر بعد زرار Leave مايفتحش جلسة جديدة.
      */
-    public function ensureJoined(Meeting $meeting, array $actor): void
+    public function ensureJoined(Meeting $meeting, array $actor, ?string $pageSessionId = null): void
     {
         $status = $actor['model']->status ?? null;
         if (!in_array($status, ['joined', 'admitted'], true)) {
             return;
         }
 
-        $this->recordJoin($meeting, $actor);
+        $this->recordJoin($meeting, $actor, $pageSessionId);
     }
 
     /** بيتنادى من leave() — بيقفل الجلسة المفتوحة الحالية (لو موجودة). */

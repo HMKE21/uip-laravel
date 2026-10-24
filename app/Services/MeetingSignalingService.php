@@ -182,7 +182,7 @@ class MeetingSignalingService
         // بند 17 (Round 7 — Attendance Tracking). راجع docblock
         // MeetingAttendanceService ليه النقطة دي (مش last_seen_at===null
         // فوق) هي المستخدمة للحضور تحديدًا.
-        $this->attendance?->recordJoin($meeting, $actor);
+        $this->attendance?->recordJoin($meeting, $actor, $sessionId);
 
         $channelData = [
             'user_id'   => $actor['key'],
@@ -528,6 +528,12 @@ class MeetingSignalingService
         \Illuminate\Support\Facades\Cache::put($key, $sessionId, now()->addSeconds(self::SESSION_TTL));
     }
 
+    /** pagehide (refresh/قفل التابة): بنقفل جلسة الحضور الحالية عشان الدخول اللي بعده يتسجّل خروج + دخول جديد. */
+    public function recordPageUnload(Meeting $meeting, array $actor, string $sessionId): void
+    {
+        $this->attendance?->recordPageUnload($meeting, $actor, $sessionId);
+    }
+
     public function releaseSession(Meeting $meeting, array $actor, ?string $sessionId): void
     {
         $key = $this->sessionKey($meeting, $actor);
@@ -539,7 +545,7 @@ class MeetingSignalingService
 
 
     /** بينج دوري من الفرونت (كل ~20-30 ثانية) — بيحدّث last_seen_at بس، من غير أي broadcast (مفيش داعي، الحالة نفسها ما اتغيرتش). */
-    public function heartbeat(array $actor, ?Meeting $meeting = null): void
+    public function heartbeat(array $actor, ?Meeting $meeting = null, ?string $sessionId = null): void
     {
         /** @var MeetingParticipant|MeetingJoinRequest $model */
         $model = $actor['model'];
@@ -551,7 +557,7 @@ class MeetingSignalingService
 
         // شبكة أمان للحضور (idempotent) — راجع MeetingAttendanceService::ensureJoined().
         if ($meeting) {
-            $this->attendance?->ensureJoined($meeting, $actor);
+            $this->attendance?->ensureJoined($meeting, $actor, $sessionId);
         }
     }
 

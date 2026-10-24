@@ -187,7 +187,7 @@ class MeetingsSignalingApiController extends Controller
             return $this->apiError($e->getMessage(), ['code' => 'session_replaced'], 409);
         }
 
-        $this->signaling->heartbeat($actor, $meeting);
+        $this->signaling->heartbeat($actor, $meeting, $request->input('session_id'));
 
         return $this->apiSuccess(null, 'Heartbeat recorded.');
     }
@@ -207,6 +207,8 @@ class MeetingsSignalingApiController extends Controller
 
         $sid = $request->input('session_id');
         if ($sid !== null && $sid !== '') {
+            // الحضور: refresh/قفل تابة = خروج حقيقي (الدخول الجديد بعده هيتسجّل دخول تاني).
+            $this->signaling->recordPageUnload($meeting, $actor, $sid);
             $this->signaling->releaseSession($meeting, $actor, $sid);
         }
 
