@@ -1,7 +1,7 @@
 <?php
 
 /**
- * "جهازي" (My PC) — مساحة الملفات الشخصية للطالب. كل قيمة بتتغير من الـ .env بدون لمس الكود.
+ * "جهازي" (My PC) — مساحة الملفات الشخصية لكل مستخدم (طالب وباقي الأدوار). كل قيمة بتتغير من الـ .env بدون لمس الكود.
  *
  *   DRIVE_DISK         اسم الـ disk في config/filesystems.php (الافتراضي 'drive' = storage/app/drive، خاص ومش متاح من الويب).
  *                      على Railway/Heroku الـ filesystem بيتمسح مع كل deploy: PERSISTENT_STORAGE_PATH بيربطه بالـ Volume، أو استخدم 's3'.
@@ -14,7 +14,7 @@
  *   DRIVE_MAX_VERSIONS    كام نسخة قديمة نحتفظ بيها لكل ملف (0 = سجل الإصدارات مقفول). الأقدم بيتمسح أوتوماتيك.
  *   DRIVE_VERSION_MAX_MB  أكبر حجم ملف نحتفظ له بنسخ قديمة (الملفات الأكبر بتتستبدل من غير سجل).
  *   DRIVE_VERSIONS_MB     سقف مساحة كل النسخ القديمة لكل طالب (مش محسوبة من الحصة؛ لما يتعدّى الأقدم بيتمسح).
- *   DRIVE_ROLES        الأدوار المسموح لها (افتراضي student؛ للتوسّع: DRIVE_ROLES=student,faculty,supervisor).
+ *   DRIVE_ROLES        الأدوار المسموح لها (افتراضي: كل الأدوار المتاحة في config/roles.php؛ للتضييق: DRIVE_ROLES=student,faculty).
  */
 return [
     'disk'             => env('DRIVE_DISK', 'drive'),
@@ -32,5 +32,5 @@ return [
     'versions_mb'      => max(1, (int) env('DRIVE_VERSIONS_MB', 300)),
     'direct'           => filter_var(env('DRIVE_DIRECT', true), FILTER_VALIDATE_BOOL),
     'direct_ttl_min'   => max(1, (int) env('DRIVE_DIRECT_TTL_MIN', 15)),
-    'roles'            => array_values(array_filter(array_map('trim', explode(',', (string) env('DRIVE_ROLES', 'student'))))),
+    'roles'            => array_values(array_filter(array_map('trim', explode(',', (string) env('DRIVE_ROLES', implode(',', (array) ((require __DIR__ . '/roles.php')['available'] ?? ['student']))))))),
 ];

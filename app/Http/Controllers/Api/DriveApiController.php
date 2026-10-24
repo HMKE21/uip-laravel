@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 
 /**
  * "جهازي" (My PC) — نظام ملفات شخصي لكل طالب. كل روت بيشتغل على user_id صاحب التوكن بس (DriveService بيقيّد كل استعلام)،
- * فأي id بتاع حد تاني بيرجّع 404. الدور لازم يكون ضمن config('drive.roles') (افتراضي student).
+ * فأي id بتاع حد تاني بيرجّع 404. الدور لازم يكون ضمن config('drive.roles') (افتراضي: كل الأدوار).
  *
  *   GET    /drive?parent_id=          محتوى مجلد (الجذر لو فاضي) + breadcrumb + الحصة
  *   GET    /drive/tree                كل المجلدات (الشجرة الجانبية)
