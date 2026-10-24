@@ -69,6 +69,27 @@ class MeetingsApiController extends Controller
     // Meetings — /api/v1/meetings
     // ---------------------------------------------------------------
 
+    /**
+     * GET /api/v1/meetings/features — مفاتيح التشغيل/الإيقاف اللي الأدمن ظبطها (Admin → Meetings Control)
+     * عشان الفرونت يخفي الأزرار المقفولة. عام (auth اختياري) لأن الضيف محتاجها برضو. مفيش بيانات حساسة هنا.
+     */
+    public function features(Request $request)
+    {
+        $A = \App\Services\MeetingAdminSettings::class;
+
+        return $this->apiSuccess([
+            'features'            => $A::featureMap(),
+            'system_enabled'      => (bool) $A::get('feature_meetings'),
+            'maintenance_message' => $this->policy->maintenanceMessage(),
+            'max_participants'    => (int) $A::get('max_mesh_participants'),
+            'max_duration_minutes' => (int) $A::get('max_duration_minutes'),
+            'require_password'    => (bool) $A::get('require_password'),
+            'force_waiting_room'  => (bool) $A::get('force_waiting_room'),
+            'allow_instant'       => (bool) $A::get('allow_instant'),
+            'allow_scheduled'     => (bool) $A::get('allow_scheduled'),
+        ]);
+    }
+
     public function index(Request $request)
     {
         $meetings = $this->meetings->forUser($this->userId($request));
@@ -103,6 +124,7 @@ class MeetingsApiController extends Controller
 
         $payload = $request->all();
         try {
+            $this->policy->assertCanCreate($this->userId($request), $this->role($request), $payload);
             $payload = array_merge($payload, $this->attachables->resolve($this->userId($request), $this->role($request), $payload));
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, 403);
@@ -165,7 +187,11 @@ class MeetingsApiController extends Controller
             }
         }
 
-        $meeting = $this->meetingService->update($meeting, $payload);
+        try {
+            $meeting = $this->meetingService->update($meeting, $payload);
+        } catch (\InvalidArgumentException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        }
 
         $this->auditLog->record($this->userId($request), 'meetings.meeting_updated', 'Meeting', $meeting->id);
 
@@ -205,6 +231,10 @@ class MeetingsApiController extends Controller
         $meeting = $this->meetings->findByUuid($uuid);
         if (!$meeting || !$this->policy->canManage($meeting, $this->userId($request), $this->meetings)) {
             return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        if (!$this->policy->systemEnabled()) {
+            return $this->apiError($this->policy->maintenanceMessage(), null, 403);
         }
 
         $meeting = $this->meetingService->start($meeting);
@@ -287,6 +317,9 @@ class MeetingsApiController extends Controller
             ? $this->users->findByEmail(mb_strtolower(trim((string) $request->input('email'))))
             : $this->users->findById($request->input('user_id'));
         if (!$invitedUser && $byEmail) {
+            if (!\App\Services\MeetingAdminSettings::on('invitations')) {
+                return $this->apiError('Invitations are disabled by the administrator.', null, 403);
+            }
             return $this->inviteGuestByEmail($request, $meeting, mb_strtolower(trim((string) $request->input('email'))));
         }
         if (!$invitedUser) {
@@ -297,7 +330,11 @@ class MeetingsApiController extends Controller
             return $this->apiError('The host is already part of this meeting.', null, 422);
         }
 
-        $invitation = $this->meetingService->invite($meeting, $this->userId($request), (int) $invitedUser->id, $request->input('message'));
+        try {
+            $invitation = $this->meetingService->invite($meeting, $this->userId($request), (int) $invitedUser->id, $request->input('message'));
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, 403);
+        }
 
         $this->auditLog->record($this->userId($request), 'meetings.invitation_sent', 'MeetingInvitation', $invitation->id);
 

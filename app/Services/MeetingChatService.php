@@ -34,7 +34,7 @@ class MeetingChatService
     /** بند 7 (settings.allow_chat اللي Round 1 حجز مكانها في config/meetings.php default_settings). */
     public function isChatEnabled(Meeting $meeting): bool
     {
-        return (bool) ($meeting->settings['allow_chat'] ?? true);
+        return \App\Services\MeetingAdminSettings::on('chat') && (bool) ($meeting->settings['allow_chat'] ?? true);
     }
 
     /** @param array{type:string, key:string, display_name:string} $actor */
@@ -64,7 +64,7 @@ class MeetingChatService
 
         $attachment = null;
         if ($file instanceof UploadedFile) {
-            if (!(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
+            if (!\App\Services\MeetingAdminSettings::on('files') || !(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
                 throw new \RuntimeException('File sharing is disabled for this meeting.');
             }
             // الحقن nullable (عشان الاختبارات اللي بتعمل new MeetingChatService($repo))، بس في الإنتاج لو الـ container
@@ -82,6 +82,9 @@ class MeetingChatService
 
         $recipientKey = $data['recipient_key'] ?? null;
         if ($recipientKey !== null) {
+            if (!\App\Services\MeetingAdminSettings::on('private_chat')) {
+                throw new \RuntimeException('Private messages are disabled by the administrator.');
+            }
             if ($recipientKey === $actor['key']) {
                 throw new \RuntimeException('You cannot send a private message to yourself.');
             }

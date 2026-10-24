@@ -686,6 +686,9 @@ Route::prefix('v1')->group(function () {
     // أي مستخدم مسجّل (أي uip_role) يقدر يستضيف/ينضم لاجتماع — مفيش قيد
     // دور هنا زي exam-system فوق. meetings/invitations لازم تتسجل قبل
     // meetings/{uuid} العام عشان "invitations" ميتفسرش كـ {uuid}.
+    // مفاتيح الميزات (Admin → Meetings Control). public + قبل meetings/{uuid} عشان "features" ميتفسرش uuid.
+    Route::get('meetings/features', [MeetingsApiController::class, 'features'])->middleware('uip.auth.optional');
+
     Route::prefix('meetings')->middleware('uip.auth')->group(function () {
         Route::get('invitations', [MeetingsApiController::class, 'myInvitations']);
 
@@ -992,6 +995,40 @@ Route::prefix('v1')->group(function () {
     // إحصائيات بس، مفيش محتوى اجتماع خاص.
     Route::prefix('admin/meetings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('monitoring', [MeetingsAnalyticsApiController::class, 'platformMonitoring']);
+
+        // Admin → Meetings Control (تحكم كامل في نظام الاجتماعات). راجع docblock AdminMeetingsControlApiController.
+        Route::prefix('control')->group(function () {
+            $c = \App\Http\Controllers\Api\AdminMeetingsControlApiController::class;
+            Route::get('overview', [$c, 'overview']);
+            Route::get('settings', [$c, 'settings']);
+            Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
+            Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
+
+            Route::get('blocked-users', [$c, 'blockedUsers']);
+            Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:60,1');
+            Route::delete('blocked-users/{id}', [$c, 'unblockUser'])->where('id', '[0-9]+');
+            Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
+
+            Route::get('audit', [$c, 'audit']);
+            Route::post('emergency/end-all-live', [$c, 'endAllLive'])->middleware('throttle:5,1');
+
+            Route::get('meetings', [$c, 'meetings']);
+            Route::prefix('meetings/{uuid}')->where(['uuid' => '[0-9a-fA-F-]{36}'])->group(function () use ($c) {
+                Route::get('/', [$c, 'show']);
+                Route::patch('/', [$c, 'update']);
+                Route::delete('/', [$c, 'destroy']);
+                Route::post('end', [$c, 'end']);
+                Route::post('cancel', [$c, 'cancel']);
+                Route::post('restore', [$c, 'restore']);
+                Route::post('lock', [$c, 'lock']);
+                Route::post('screen-share-lock', [$c, 'screenShareLock']);
+                Route::post('regenerate-link', [$c, 'regenerateLink']);
+                Route::post('announce', [$c, 'announce'])->middleware('throttle:20,1');
+                Route::post('participants/action', [$c, 'participantAction'])->middleware('throttle:120,1');
+                Route::delete('files/{fileId}', [$c, 'deleteFile'])->where('fileId', '[0-9]+');
+                Route::delete('recordings/{recordingId}', [$c, 'deleteRecording'])->where('recordingId', '[0-9]+');
+            });
+        });
     });
 
     // بند 25 batch 2 — دليل Universities

@@ -27,6 +27,9 @@ class MeetingPollService
 
     private function requireManager(Meeting $meeting, array $actor): void
     {
+        if (!\App\Services\MeetingAdminSettings::on('polls')) {
+            throw new \RuntimeException('Polls are disabled by the administrator.');
+        }
         $userId = $actor['type'] === 'participant' ? (int) str_replace('user:', '', $actor['key']) : 0;
         if (!$this->policy->canManage($meeting, $userId, $this->meetings)) {
             throw new \RuntimeException('Only the host or co-host can manage polls.');
@@ -80,6 +83,9 @@ class MeetingPollService
      */
     public function vote(Meeting $meeting, array $actor, MeetingPoll $poll, array $optionIds): array
     {
+        if (!\App\Services\MeetingAdminSettings::on('polls')) {
+            throw new \RuntimeException('Polls are disabled by the administrator.');
+        }
         if (!$poll->isOpen()) {
             throw new \RuntimeException('This poll is closed.');
         }

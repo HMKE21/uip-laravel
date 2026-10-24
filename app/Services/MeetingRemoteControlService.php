@@ -39,6 +39,9 @@ class MeetingRemoteControlService
     /** @throws \InvalidArgumentException|\RuntimeException */
     public function request(Meeting $meeting, array $controller, string $targetKey): void
     {
+        if (!\App\Services\MeetingAdminSettings::on('remote_control')) {
+            throw new \RuntimeException('Remote control is disabled by the administrator.');
+        }
         if ($controller['key'] === $targetKey) {
             throw new \InvalidArgumentException('You cannot request control of your own screen.');
         }

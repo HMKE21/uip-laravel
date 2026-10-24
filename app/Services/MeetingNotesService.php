@@ -32,6 +32,9 @@ class MeetingNotesService
 
     private function requireManager(Meeting $meeting, array $actor): void
     {
+        if (!\App\Services\MeetingAdminSettings::on('notes')) {
+            throw new \RuntimeException('Meeting notes are disabled by the administrator.');
+        }
         $userId = $actor['type'] === 'participant' ? (int) str_replace('user:', '', $actor['key']) : 0;
         if (!$this->policy->canManage($meeting, $userId, $this->meetings)) {
             throw new \RuntimeException('Only the host or co-host can edit meeting notes.');

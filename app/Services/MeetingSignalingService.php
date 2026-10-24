@@ -240,7 +240,7 @@ class MeetingSignalingService
         if (array_key_exists('screen_sharing', $data)) {
             $wantsSharing = (bool) $data['screen_sharing'];
             if ($wantsSharing && !$wasSharing && !$this->canShareScreen($meeting, $actor)) {
-                throw new \RuntimeException('Screen sharing is currently disabled by the host.');
+                throw new \RuntimeException(\App\Services\MeetingAdminSettings::on('screen_share') ? 'Screen sharing is currently disabled by the host.' : 'Screen sharing is disabled by the administrator.');
             }
             $model->screen_sharing = $wantsSharing;
         }
@@ -473,7 +473,7 @@ class MeetingSignalingService
      */
     private function isPresenceFresh($model): bool
     {
-        $ttl = (int) config('meetings.presence_stale_seconds', 90);
+        $ttl = (int) \App\Services\MeetingAdminSettings::get('presence_stale_seconds');
         if ($ttl <= 0) {
             return true;
         }
@@ -596,6 +596,10 @@ class MeetingSignalingService
     /** بند 11 — Raise Hand / Lower Hand. */
     public function raiseHand(Meeting $meeting, array $actor, bool $raised): array
     {
+        if ($raised && !\App\Services\MeetingAdminSettings::on('hand_raise')) {
+            throw new \RuntimeException('Raising a hand is disabled by the administrator.');
+        }
+
         /** @var MeetingParticipant|MeetingJoinRequest $model */
         $model = $actor['model'];
         $model->hand_raised = $raised;
@@ -626,6 +630,10 @@ class MeetingSignalingService
      */
     public function sendReaction(Meeting $meeting, array $actor, string $type, ?string $emoji = null): void
     {
+        if (!\App\Services\MeetingAdminSettings::on('reactions')) {
+            throw new \RuntimeException('Reactions are disabled by the administrator.');
+        }
+
         $knownTypes = ['thumbs_up', 'applause', 'laugh', 'heart', 'celebrate', 'other'];
         if (!in_array($type, $knownTypes, true)) {
             throw new \InvalidArgumentException('Invalid reaction type.');
@@ -646,6 +654,11 @@ class MeetingSignalingService
      */
     public function canShareScreen(Meeting $meeting, array $actor): bool
     {
+        // مفتاح الأدمن العام بيغلب كل حاجة (حتى الهوست).
+        if (!\App\Services\MeetingAdminSettings::on('screen_share')) {
+            return false;
+        }
+
         if (in_array($actor['role'], ['host', 'co_host'], true)) {
             return true;
         }

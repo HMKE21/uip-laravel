@@ -98,7 +98,7 @@ class MeetingLobbyService
             'host'                  => $meeting->host ? ['full_name' => $meeting->host->full_name] : null,
             'requires_password'     => $meeting->hasPassword(),
             'waiting_room_enabled'  => (bool) $meeting->waiting_room_enabled,
-            'allow_guests'          => (bool) $meeting->allow_guests,
+            'allow_guests'          => (bool) $meeting->allow_guests && \App\Services\MeetingAdminSettings::on('guests'),
             'joinable'              => $this->isJoinable($meeting, $authUserId),
             'is_authenticated'      => $authUserId !== null,
             'already_participant'   => $isParticipant,
@@ -122,6 +122,10 @@ class MeetingLobbyService
      */
     public function requestAccess(Meeting $meeting, ?int $authUserId, array $data): array
     {
+        if (!$this->policy->systemEnabled()) {
+            throw new \RuntimeException($this->policy->maintenanceMessage());
+        }
+
         if (!$this->isJoinable($meeting, $authUserId)) {
             throw new \RuntimeException($meeting->locked ? 'This meeting is locked by the host.' : 'This meeting is no longer available to join.');
         }
@@ -140,6 +144,10 @@ class MeetingLobbyService
         }
 
         $isGuest = $authUserId === null;
+
+        if ($isGuest && !\App\Services\MeetingAdminSettings::on('guests')) {
+            throw new \InvalidArgumentException('Guest access is disabled by the administrator. Please sign in to join.');
+        }
 
         if ($isGuest && !$meeting->allow_guests) {
             throw new \InvalidArgumentException('Guest access is not enabled for this meeting. Please sign in to join.');

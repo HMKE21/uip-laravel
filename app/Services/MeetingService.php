@@ -72,10 +72,10 @@ class MeetingService
             'meeting_code'         => $this->meetings->generateUniqueMeetingCode(),
             'join_token'           => $this->meetings->generateUniqueJoinToken(),
             'password_hash'        => !empty($data['password']) ? Hash::make($data['password']) : null,
-            'waiting_room_enabled' => $data['waiting_room_enabled'] ?? $this->policy->waitingRoomDefaultEnabled(),
-            'allow_guests'         => $data['allow_guests'] ?? $this->policy->allowGuestsDefault(),
+            'waiting_room_enabled' => \App\Services\MeetingAdminSettings::get('force_waiting_room') ? true : ($data['waiting_room_enabled'] ?? $this->policy->waitingRoomDefaultEnabled()),
+            'allow_guests'         => \App\Services\MeetingAdminSettings::on('guests') ? ($data['allow_guests'] ?? $this->policy->allowGuestsDefault()) : false,
             'max_participants'     => $maxParticipants,
-            'settings'             => array_merge(config('meetings.default_settings'), $data['settings'] ?? []),
+            'settings'             => array_merge(\App\Services\MeetingAdminSettings::defaultMeetingSettings(), $data['settings'] ?? []),
             // Round 8 (Invitations & Calendar، بند 26 — Project Integration).
             // اتحقق منها في MeetingAttachableService جوه الكنترولر قبل
             // ما توصل هنا؛ مفيش تحقق إضافي في الخدمة دي عمدًا.
@@ -107,6 +107,17 @@ class MeetingService
             // (نفس تحقق MeetingAttachableService في الكنترولر).
             'attachable_type', 'attachable_id',
         ]));
+
+        // قيود الأدمن: الـ waiting room إجباري / الضيوف مقفولين / كلمة السر إجبارية.
+        if (\App\Services\MeetingAdminSettings::get('force_waiting_room') && array_key_exists('waiting_room_enabled', $fields)) {
+            $fields['waiting_room_enabled'] = true;
+        }
+        if (!\App\Services\MeetingAdminSettings::on('guests') && array_key_exists('allow_guests', $fields)) {
+            $fields['allow_guests'] = false;
+        }
+        if (\App\Services\MeetingAdminSettings::get('require_password') && array_key_exists('password', $data) && empty($data['password'])) {
+            throw new \InvalidArgumentException('A meeting password is required by the administrator.');
+        }
 
         if (isset($data['max_participants'])) {
             $fields['max_participants'] = min((int) $data['max_participants'], $this->policy->maxMeshParticipants());
@@ -217,6 +228,9 @@ class MeetingService
 
     public function invite(Meeting $meeting, int $invitedByUserId, int $invitedUserId, ?string $message = null): MeetingInvitation
     {
+        if (!\App\Services\MeetingAdminSettings::on('invitations')) {
+            throw new \RuntimeException('Invitations are disabled by the administrator.');
+        }
         $existing = $this->meetings->findInvitation($meeting->id, $invitedUserId);
 
         $expiresAt = now()->addHours($this->policy->invitationExpiryHours());

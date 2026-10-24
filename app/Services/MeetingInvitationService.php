@@ -229,6 +229,10 @@ class MeetingInvitationService
      */
     public function bulkInvite(Meeting $meeting, int $hostUserId, string $hostRole, array $targets, ?string $message = null): array
     {
+        if (!\App\Services\MeetingAdminSettings::on('invitations')) {
+            throw new \RuntimeException('Invitations are disabled by the administrator.');
+        }
+
         if (empty($targets)) {
             throw new \InvalidArgumentException('At least one invitation target is required.');
         }

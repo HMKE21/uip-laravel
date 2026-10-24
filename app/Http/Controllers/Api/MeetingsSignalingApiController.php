@@ -407,7 +407,11 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
-        $state = $this->signaling->raiseHand($meeting, $actor, (bool) $request->input('raised'));
+        try {
+            $state = $this->signaling->raiseHand($meeting, $actor, (bool) $request->input('raised'));
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, 403);
+        }
 
         return $this->apiSuccess($state, 'Hand state updated successfully.');
     }
@@ -438,6 +442,8 @@ class MeetingsSignalingApiController extends Controller
             $this->signaling->sendReaction($meeting, $actor, $request->input('type'), $request->input('emoji'));
         } catch (\InvalidArgumentException $e) {
             return $this->apiError($e->getMessage(), null, 422);
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, 403);
         }
 
         return $this->apiSuccess(null, 'Reaction sent.');

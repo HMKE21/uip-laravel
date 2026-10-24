@@ -1,0 +1,1936 @@
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php laravel/uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php
+--- orig/uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php	1970-01-01 00:00:00.000000000 +0000
++++ laravel/uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php	2026-10-24 18:46:16.810011306 +0000
+@@ -0,0 +1,363 @@
++<?php
++
++namespace App\Http\Controllers\Api;
++
++use App\Http\Controllers\Controller;
++use App\Services\AuditLogService;
++use App\Services\MeetingAdminService;
++use App\Services\MeetingAdminSettings;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Validator;
++
++/**
++ * Admin → Meetings Control (تحكم كامل في نظام الاجتماعات من حساب الأدمن).
++ * كل المسارات تحت /api/v1/admin/meetings/control/* ومحمية بـ uip.auth + uip.admin.
++ *
++ *   GET    overview                              أرقام + حالة المفاتيح
++ *   GET    settings            PUT settings      كتالوج الإعدادات / حفظ (null = رجّع الافتراضي)
++ *   DELETE settings                              رجّع كل الإعدادات للافتراضي
++ *   GET    blocked-users  POST  DELETE {id}      حظر مستخدم من إنشاء اجتماعات
++ *   GET    users/search?q=                       بحث مستخدمين (للحظر)
++ *   GET    audit                                 سجل نشاط الاجتماعات (+ إجراءات الأدمن)
++ *   POST   emergency/end-all-live                إنهاء كل الاجتماعات الشغالة
++ *   GET    meetings                              قايمة + فلاتر
++ *   GET    meetings/{uuid}                       تفاصيل
++ *   PATCH  meetings/{uuid}                       تعديل
++ *   POST   meetings/{uuid}/end|cancel|restore|lock|screen-share-lock|regenerate-link|announce|participants/action
++ *   DELETE meetings/{uuid}  ·  files/{id}  ·  recordings/{id}
++ *
++ * الخصوصية: مفيش endpoint بيرجّع نص الشات/الملاحظات أو بيحمّل ملف/تسجيل (راجع MeetingAdminService).
++ * كل إجراء بيتسجّل في audit_logs بـ action يبدأ بـ admin.meetings.
++ */
++class AdminMeetingsControlApiController extends Controller
++{
++    public function __construct(
++        private MeetingAdminService $admin,
++        private AuditLogService $auditLog
++    ) {
++    }
++
++    private function adminId(Request $request): int
++    {
++        return (int) $request->attributes->get('uip_user_id');
++    }
++
++    private function log(Request $request, string $action, $subjectId = null, ?array $old = null, ?array $new = null, string $subjectType = 'Meeting'): void
++    {
++        $this->auditLog->record($this->adminId($request), 'admin.meetings.' . $action, $subjectType, $subjectId, $old, $new, $request->ip());
++    }
++
++    private function meetingOr404(string $uuid, bool $withTrashed = false)
++    {
++        return $this->admin->find($uuid, $withTrashed);
++    }
++
++    // ------------------------------------------------------------------
++    // Overview / Settings
++    // ------------------------------------------------------------------
++
++    public function overview()
++    {
++        return $this->apiSuccess($this->admin->overview(), 'Meetings overview retrieved successfully.');
++    }
++
++    public function settings()
++    {
++        return $this->apiSuccess(MeetingAdminSettings::snapshot());
++    }
++
++    public function updateSettings(Request $request)
++    {
++        $values = $request->input('values');
++        if (!is_array($values) || !$values) {
++            return $this->apiError('values is required.', null, 422);
++        }
++
++        $result = MeetingAdminSettings::setMany($values);
++        if ($result['errors']) {
++            return $this->apiError(reset($result['errors']), $result['errors'], 422);
++        }
++
++        if ($result['changed']) {
++            $old = array_map(fn ($c) => $c['old'], $result['changed']);
++            $new = array_map(fn ($c) => $c['new'], $result['changed']);
++            $this->log($request, 'settings_updated', null, $old, $new, 'MeetingSettings');
++        }
++
++        return $this->apiSuccess(MeetingAdminSettings::snapshot(), 'Settings saved.');
++    }
++
++    public function resetSettings(Request $request)
++    {
++        $n = MeetingAdminSettings::resetAll();
++        $this->log($request, 'settings_reset', null, ['overrides_removed' => $n], null, 'MeetingSettings');
++
++        return $this->apiSuccess(MeetingAdminSettings::snapshot(), 'All meeting settings were reset to their defaults.');
++    }
++
++    // ------------------------------------------------------------------
++    // Blocked users
++    // ------------------------------------------------------------------
++
++    public function blockedUsers()
++    {
++        return $this->apiSuccess($this->admin->blockedUsers());
++    }
++
++    public function searchUsers(Request $request)
++    {
++        return $this->apiSuccess($this->admin->searchUsers((string) $request->query('q', '')));
++    }
++
++    public function blockUser(Request $request)
++    {
++        $v = Validator::make($request->all(), ['user_id' => 'required|integer|min:1']);
++        if ($v->fails()) {
++            return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
++        }
++        $id = (int) $request->input('user_id');
++        if (!\Illuminate\Support\Facades\DB::table('users')->where('id', $id)->exists()) {
++            return $this->apiError('User not found.', null, 404);
++        }
++        if ($id === $this->adminId($request)) {
++            return $this->apiError('You cannot block yourself.', null, 422);
++        }
++
++        $ids = (array) MeetingAdminSettings::get('blocked_user_ids');
++        if (!in_array($id, $ids, true)) {
++            $ids[] = $id;
++            $res = MeetingAdminSettings::setMany(['blocked_user_ids' => $ids]);
++            if ($res['errors']) {
++                return $this->apiError(reset($res['errors']), $res['errors'], 422);
++            }
++            $this->log($request, 'user_blocked', $id, null, ['user_id' => $id], 'User');
++        }
++
++        return $this->apiSuccess($this->admin->blockedUsers(), 'User blocked from creating meetings.');
++    }
++
++    public function unblockUser(Request $request, int $id)
++    {
++        $ids = array_values(array_filter((array) MeetingAdminSettings::get('blocked_user_ids'), fn ($v) => (int) $v !== $id));
++        MeetingAdminSettings::setMany(['blocked_user_ids' => $ids ?: null]);
++        $this->log($request, 'user_unblocked', $id, ['user_id' => $id], null, 'User');
++
++        return $this->apiSuccess($this->admin->blockedUsers(), 'User unblocked.');
++    }
++
++    // ------------------------------------------------------------------
++    // Audit / Emergency
++    // ------------------------------------------------------------------
++
++    public function audit(Request $request)
++    {
++        return $this->apiSuccess($this->admin->audit($request->query()));
++    }
++
++    public function endAllLive(Request $request)
++    {
++        if (!$request->boolean('confirm')) {
++            return $this->apiError('Confirmation required (confirm=true).', null, 422);
++        }
++        $n = $this->admin->endAllLive();
++        $this->log($request, 'end_all_live', null, null, ['ended' => $n], 'MeetingSystem');
++
++        return $this->apiSuccess(['ended' => $n], $n . ' live meeting(s) ended.');
++    }
++
++    // ------------------------------------------------------------------
++    // Meetings
++    // ------------------------------------------------------------------
++
++    public function meetings(Request $request)
++    {
++        return $this->apiSuccess($this->admin->list($request->query()));
++    }
++
++    public function show(string $uuid)
++    {
++        $m = $this->meetingOr404($uuid);
++        if (!$m) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++
++        return $this->apiSuccess($this->admin->details($m));
++    }
++
++    public function update(Request $request, string $uuid)
++    {
++        $m = $this->meetingOr404($uuid);
++        if (!$m || $m->trashed()) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++
++        $v = Validator::make($request->all(), [
++            'title'                => 'sometimes|required|string|max:200',
++            'description'          => 'nullable|string|max:5000',
++            'scheduled_start_at'   => 'nullable|date',
++            'duration_minutes'     => 'nullable|integer|min:5|max:1440',
++            'max_participants'     => 'nullable|integer|min:2|max:500',
++            'waiting_room_enabled' => 'sometimes|boolean',
++            'allow_guests'         => 'sometimes|boolean',
++            'password'             => 'nullable|string|min:4|max:100',
++            'clear_password'       => 'sometimes|boolean',
++            'settings'             => 'nullable|array',
++        ]);
++        if ($v->fails()) {
++            return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
++        }
++
++        $before = array_intersect_key($m->toArray(), array_flip(['title', 'duration_minutes', 'max_participants', 'waiting_room_enabled', 'allow_guests', 'settings']));
++        $m = $this->admin->update($m, $request->all());
++        $this->log($request, 'meeting_updated', $m->id, $before, array_diff_key($request->except(['password']), ['password' => 1]));
++
++        return $this->apiSuccess($this->admin->details($m), 'Meeting updated.');
++    }
++
++    private function simpleAction(Request $request, string $uuid, string $log, callable $fn, string $message, bool $withTrashed = false)
++    {
++        $m = $this->meetingOr404($uuid, $withTrashed);
++        if (!$m) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++        try {
++            $fn($m);
++        } catch (\InvalidArgumentException $e) {
++            return $this->apiError($e->getMessage(), null, 422);
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 409);
++        }
++        $this->log($request, $log, $m->id);
++
++        return $this->apiSuccess($this->admin->details($m->fresh() ?? $m), $message);
++    }
++
++    public function end(Request $request, string $uuid)
++    {
++        return $this->simpleAction($request, $uuid, 'meeting_ended', fn ($m) => $this->admin->end($m), 'Meeting ended.');
++    }
++
++    public function cancel(Request $request, string $uuid)
++    {
++        return $this->simpleAction($request, $uuid, 'meeting_cancelled', fn ($m) => $this->admin->cancel($m), 'Meeting cancelled.');
++    }
++
++    public function destroy(Request $request, string $uuid)
++    {
++        $m = $this->meetingOr404($uuid);
++        if (!$m || $m->trashed()) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++        $this->admin->delete($m);
++        $this->log($request, 'meeting_deleted', $m->id);
++
++        return $this->apiSuccess(null, 'Meeting deleted.');
++    }
++
++    public function restore(Request $request, string $uuid)
++    {
++        $m = $this->meetingOr404($uuid, true);
++        if (!$m || !$m->trashed()) {
++            return $this->apiError('Deleted meeting not found.', null, 404);
++        }
++        $this->admin->restore($m);
++        $this->log($request, 'meeting_restored', $m->id);
++
++        return $this->apiSuccess($this->admin->details($m), 'Meeting restored.');
++    }
++
++    public function lock(Request $request, string $uuid)
++    {
++        $locked = $request->boolean('locked', true);
++
++        return $this->simpleAction($request, $uuid, $locked ? 'meeting_locked' : 'meeting_unlocked',
++            fn ($m) => $this->admin->setLock($m, $this->adminId($request), $locked), $locked ? 'Meeting locked.' : 'Meeting unlocked.');
++    }
++
++    public function screenShareLock(Request $request, string $uuid)
++    {
++        $locked = $request->boolean('locked', true);
++
++        return $this->simpleAction($request, $uuid, $locked ? 'screen_share_locked' : 'screen_share_unlocked',
++            fn ($m) => $this->admin->setScreenShareLock($m, $this->adminId($request), $locked), $locked ? 'Screen sharing disabled.' : 'Screen sharing enabled.');
++    }
++
++    public function regenerateLink(Request $request, string $uuid)
++    {
++        return $this->simpleAction($request, $uuid, 'link_regenerated', fn ($m) => $this->admin->regenerateLink($m), 'Join link regenerated. The old link no longer works.');
++    }
++
++    public function announce(Request $request, string $uuid)
++    {
++        $v = Validator::make($request->all(), ['message' => 'required|string|max:500']);
++        if ($v->fails()) {
++            return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
++        }
++
++        return $this->simpleAction($request, $uuid, 'announcement_sent', fn ($m) => $this->admin->announce($m, (string) $request->input('message')), 'Announcement sent to the meeting chat.');
++    }
++
++    public function participantAction(Request $request, string $uuid)
++    {
++        $v = Validator::make($request->all(), [
++            'key'    => ['required', 'string', 'max:40', 'regex:/^(user|guest):[0-9]+$/'],
++            'action' => 'required|string|in:mute,disable-camera,remove,promote,demote,make-host,stop-screen-share,allow-screen-share,deny-screen-share,reset-screen-share',
++        ]);
++        if ($v->fails()) {
++            return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
++        }
++
++        $m = $this->meetingOr404($uuid);
++        if (!$m || $m->trashed()) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++
++        try {
++            $this->admin->participantAction($m, $this->adminId($request), (string) $request->input('key'), (string) $request->input('action'));
++        } catch (\InvalidArgumentException $e) {
++            return $this->apiError($e->getMessage(), null, 422);
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 409);
++        }
++
++        $this->log($request, 'participant_' . str_replace('-', '_', (string) $request->input('action')), $m->id, null, ['target' => $request->input('key')]);
++
++        return $this->apiSuccess($this->admin->details($m->fresh() ?? $m), 'Done.');
++    }
++
++    // ------------------------------------------------------------------
++    // Files / Recordings
++    // ------------------------------------------------------------------
++
++    public function deleteFile(Request $request, string $uuid, int $fileId)
++    {
++        $m = $this->meetingOr404($uuid, true);
++        if (!$m) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++        try {
++            $file = $this->admin->deleteFile($m, $fileId);
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 404);
++        }
++        $this->log($request, 'file_deleted', $m->id, ['file_id' => $file->id, 'name' => $file->original_name]);
++
++        return $this->apiSuccess($this->admin->details($m), 'File deleted.');
++    }
++
++    public function deleteRecording(Request $request, string $uuid, int $recordingId)
++    {
++        $m = $this->meetingOr404($uuid, true);
++        if (!$m) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++        try {
++            $rec = $this->admin->deleteRecording($m, $recordingId);
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 404);
++        }
++        $this->log($request, 'recording_deleted', $m->id, ['recording_id' => $rec->id, 'kind' => $rec->kind]);
++
++        return $this->apiSuccess($this->admin->details($m), 'Recording deleted.');
++    }
++}
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Http/Controllers/Api/MeetingsApiController.php laravel/uip-laravel-main/app/Http/Controllers/Api/MeetingsApiController.php
+--- orig/uip-laravel-main/app/Http/Controllers/Api/MeetingsApiController.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Http/Controllers/Api/MeetingsApiController.php	2026-10-24 18:46:35.063887005 +0000
+@@ -69,6 +69,27 @@
+     // Meetings — /api/v1/meetings
+     // ---------------------------------------------------------------
+ 
++    /**
++     * GET /api/v1/meetings/features — مفاتيح التشغيل/الإيقاف اللي الأدمن ظبطها (Admin → Meetings Control)
++     * عشان الفرونت يخفي الأزرار المقفولة. عام (auth اختياري) لأن الضيف محتاجها برضو. مفيش بيانات حساسة هنا.
++     */
++    public function features(Request $request)
++    {
++        $A = \App\Services\MeetingAdminSettings::class;
++
++        return $this->apiSuccess([
++            'features'            => $A::featureMap(),
++            'system_enabled'      => (bool) $A::get('feature_meetings'),
++            'maintenance_message' => $this->policy->maintenanceMessage(),
++            'max_participants'    => (int) $A::get('max_mesh_participants'),
++            'max_duration_minutes' => (int) $A::get('max_duration_minutes'),
++            'require_password'    => (bool) $A::get('require_password'),
++            'force_waiting_room'  => (bool) $A::get('force_waiting_room'),
++            'allow_instant'       => (bool) $A::get('allow_instant'),
++            'allow_scheduled'     => (bool) $A::get('allow_scheduled'),
++        ]);
++    }
++
+     public function index(Request $request)
+     {
+         $meetings = $this->meetings->forUser($this->userId($request));
+@@ -103,6 +124,7 @@
+ 
+         $payload = $request->all();
+         try {
++            $this->policy->assertCanCreate($this->userId($request), $this->role($request), $payload);
+             $payload = array_merge($payload, $this->attachables->resolve($this->userId($request), $this->role($request), $payload));
+         } catch (\RuntimeException $e) {
+             return $this->apiError($e->getMessage(), null, 403);
+@@ -165,7 +187,11 @@
+             }
+         }
+ 
+-        $meeting = $this->meetingService->update($meeting, $payload);
++        try {
++            $meeting = $this->meetingService->update($meeting, $payload);
++        } catch (\InvalidArgumentException $e) {
++            return $this->apiError($e->getMessage(), null, 422);
++        }
+ 
+         $this->auditLog->record($this->userId($request), 'meetings.meeting_updated', 'Meeting', $meeting->id);
+ 
+@@ -207,6 +233,10 @@
+             return $this->apiError('Meeting not found.', null, 404);
+         }
+ 
++        if (!$this->policy->systemEnabled()) {
++            return $this->apiError($this->policy->maintenanceMessage(), null, 403);
++        }
++
+         $meeting = $this->meetingService->start($meeting);
+ 
+         return $this->apiSuccess($this->present($meeting, true), 'Meeting started successfully.');
+@@ -287,6 +317,9 @@
+             ? $this->users->findByEmail(mb_strtolower(trim((string) $request->input('email'))))
+             : $this->users->findById($request->input('user_id'));
+         if (!$invitedUser && $byEmail) {
++            if (!\App\Services\MeetingAdminSettings::on('invitations')) {
++                return $this->apiError('Invitations are disabled by the administrator.', null, 403);
++            }
+             return $this->inviteGuestByEmail($request, $meeting, mb_strtolower(trim((string) $request->input('email'))));
+         }
+         if (!$invitedUser) {
+@@ -297,7 +330,11 @@
+             return $this->apiError('The host is already part of this meeting.', null, 422);
+         }
+ 
+-        $invitation = $this->meetingService->invite($meeting, $this->userId($request), (int) $invitedUser->id, $request->input('message'));
++        try {
++            $invitation = $this->meetingService->invite($meeting, $this->userId($request), (int) $invitedUser->id, $request->input('message'));
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 403);
++        }
+ 
+         $this->auditLog->record($this->userId($request), 'meetings.invitation_sent', 'MeetingInvitation', $invitation->id);
+ 
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Http/Controllers/Api/MeetingsSignalingApiController.php laravel/uip-laravel-main/app/Http/Controllers/Api/MeetingsSignalingApiController.php
+--- orig/uip-laravel-main/app/Http/Controllers/Api/MeetingsSignalingApiController.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Http/Controllers/Api/MeetingsSignalingApiController.php	2026-10-24 18:44:39.917466263 +0000
+@@ -407,7 +407,11 @@
+             return $actor;
+         }
+ 
+-        $state = $this->signaling->raiseHand($meeting, $actor, (bool) $request->input('raised'));
++        try {
++            $state = $this->signaling->raiseHand($meeting, $actor, (bool) $request->input('raised'));
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 403);
++        }
+ 
+         return $this->apiSuccess($state, 'Hand state updated successfully.');
+     }
+@@ -438,6 +442,8 @@
+             $this->signaling->sendReaction($meeting, $actor, $request->input('type'), $request->input('emoji'));
+         } catch (\InvalidArgumentException $e) {
+             return $this->apiError($e->getMessage(), null, 422);
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 403);
+         }
+ 
+         return $this->apiSuccess(null, 'Reaction sent.');
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingAdminService.php laravel/uip-laravel-main/app/Services/MeetingAdminService.php
+--- orig/uip-laravel-main/app/Services/MeetingAdminService.php	1970-01-01 00:00:00.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingAdminService.php	2026-10-24 18:45:46.778011992 +0000
+@@ -0,0 +1,527 @@
++<?php
++
++namespace App\Services;
++
++use App\Models\AuditLog;
++use App\Models\Meeting;
++use App\Models\MeetingActionItem;
++use App\Models\MeetingChatMessage;
++use App\Models\MeetingFile;
++use App\Models\MeetingInvitation;
++use App\Models\MeetingJoinRequest;
++use App\Models\MeetingParticipant;
++use App\Models\MeetingPoll;
++use App\Models\MeetingRecording;
++use App\Repositories\MeetingRepository;
++use Illuminate\Support\Facades\DB;
++
++/**
++ * Admin → Meetings Control. منطق الأدمن على مستوى المنصة كلها: قايمة الاجتماعات،
++ * تفاصيل اجتماع، إجراءات إجبارية (إنهاء/إلغاء/حذف/قفل/طرد/كتم ...)، ومراقبة المحتوى
++ * المرفوع (ملفات/تسجيلات) بالـ metadata بس.
++ *
++ * الخصوصية (بند 39 في الـ spec: "Admins should NOT automatically have access to
++ * private meeting content"): الخدمة دي عمدًا **مش** بترجّع نص الشات ولا نص الملاحظات
++ * ولا بتحمّل ملفات/تسجيلات. الأدمن يقدر يشوف إن فيه ملف/تسجيل (الاسم/الحجم/مين رفعه)
++ * ويحذفه، لكن مش يقراه.
++ */
++class MeetingAdminService
++{
++    public function __construct(
++        private MeetingRepository $meetings,
++        private MeetingService $meetingService,
++        private MeetingHostControlService $hostControl,
++        private MeetingSignalingService $signaling,
++        private MeetingChatService $chat,
++        private FileUploadService $uploads
++    ) {
++    }
++
++    // ------------------------------------------------------------------
++    // نظرة عامة
++    // ------------------------------------------------------------------
++
++    public function overview(): array
++    {
++        $now = now();
++
++        $byStatus = Meeting::select('status', DB::raw('count(*) as c'))->groupBy('status')->pluck('c', 'status')->all();
++
++        $liveParticipants = MeetingParticipant::where('status', 'joined')->where('connection_state', 'connected')->count()
++            + MeetingJoinRequest::whereNull('user_id')->where('status', 'admitted')->where('connection_state', 'connected')->count();
++
++        $fileCount = MeetingFile::count();
++        $fileBytes = (int) MeetingFile::sum('size_bytes');
++
++        return [
++            'system_enabled'      => (bool) MeetingAdminSettings::get('feature_meetings'),
++            'maintenance_message' => (string) MeetingAdminSettings::get('maintenance_message'),
++            'features'            => MeetingAdminSettings::featureMap(),
++            'meetings_by_status'  => [
++                'scheduled' => (int) ($byStatus['scheduled'] ?? 0),
++                'lobby'     => (int) ($byStatus['lobby'] ?? 0),
++                'live'      => (int) ($byStatus['live'] ?? 0),
++                'ended'     => (int) ($byStatus['ended'] ?? 0),
++                'cancelled' => (int) ($byStatus['cancelled'] ?? 0),
++            ],
++            'deleted_meetings'    => Meeting::onlyTrashed()->count(),
++            'live_participants'   => $liveParticipants,
++            'upcoming_24h'        => Meeting::where('status', 'scheduled')->whereBetween('scheduled_start_at', [$now, $now->copy()->addDay()])->count(),
++            'pending_join_requests' => MeetingJoinRequest::where('status', 'pending')->count(),
++            'files'               => ['count' => $fileCount, 'bytes' => $fileBytes],
++            'chat_messages_today' => MeetingChatMessage::where('type', '!=', 'system')->where('created_at', '>=', $now->copy()->startOfDay())->count(),
++            'blocked_users'       => count((array) MeetingAdminSettings::get('blocked_user_ids')),
++            'monitoring'          => app(MeetingAnalyticsService::class)->platformMonitoring(),
++        ];
++    }
++
++    // ------------------------------------------------------------------
++    // قايمة الاجتماعات
++    // ------------------------------------------------------------------
++
++    /**
++     * @param array $f status?, type?, q?, host_id?, from?, to?, sort?, dir?, page?, per_page?
++     * @return array{items:array,meta:array}
++     */
++    public function list(array $f): array
++    {
++        $status = $f['status'] ?? null;
++        $q = $status === 'deleted' ? Meeting::onlyTrashed() : Meeting::query();
++        $q->with('host:id,full_name,email');
++
++        if ($status && $status !== 'deleted' && $status !== 'all') {
++            $q->where('status', $status);
++        }
++        if (!empty($f['type'])) {
++            $q->where('type', $f['type']);
++        }
++        if (!empty($f['host_id'])) {
++            $q->where('host_user_id', (int) $f['host_id']);
++        }
++        if (!empty($f['from'])) {
++            $q->where('created_at', '>=', $f['from']);
++        }
++        if (!empty($f['to'])) {
++            $q->where('created_at', '<=', $f['to'] . ' 23:59:59');
++        }
++        if (!empty($f['q'])) {
++            $term = '%' . str_replace(['%', '_'], ['\\%', '\\_'], trim((string) $f['q'])) . '%';
++            $q->where(function ($w) use ($term) {
++                $w->where('title', 'like', $term)
++                  ->orWhere('meeting_code', 'like', $term)
++                  ->orWhere('uuid', 'like', $term)
++                  ->orWhereHas('host', fn ($h) => $h->where('full_name', 'like', $term)->orWhere('email', 'like', $term));
++            });
++        }
++
++        $sortable = ['created_at', 'scheduled_start_at', 'started_at', 'title', 'status'];
++        $sort = in_array($f['sort'] ?? '', $sortable, true) ? $f['sort'] : 'created_at';
++        $dir = ($f['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
++        $q->orderBy($sort, $dir)->orderByDesc('id');
++
++        $perPage = max(5, min(100, (int) ($f['per_page'] ?? 20)));
++        $page = $q->paginate($perPage, ['*'], 'page', max(1, (int) ($f['page'] ?? 1)));
++
++        $ids = $page->pluck('id')->all();
++        $live = $this->liveCounts($ids);
++
++        return [
++            'items' => $page->getCollection()->map(fn (Meeting $m) => $this->row($m, $live[$m->id] ?? 0))->all(),
++            'meta'  => ['page' => $page->currentPage(), 'per_page' => $page->perPage(), 'total' => $page->total(), 'last_page' => $page->lastPage()],
++        ];
++    }
++
++    /** @return array<int,int> meeting_id => عدد الحاضرين دلوقتي */
++    private function liveCounts(array $ids): array
++    {
++        if (!$ids) {
++            return [];
++        }
++        $out = [];
++        foreach (MeetingParticipant::whereIn('meeting_id', $ids)->where('status', 'joined')->where('connection_state', 'connected')
++            ->select('meeting_id', DB::raw('count(*) c'))->groupBy('meeting_id')->get() as $r) {
++            $out[$r->meeting_id] = ($out[$r->meeting_id] ?? 0) + (int) $r->c;
++        }
++        foreach (MeetingJoinRequest::whereIn('meeting_id', $ids)->whereNull('user_id')->where('status', 'admitted')->where('connection_state', 'connected')
++            ->select('meeting_id', DB::raw('count(*) c'))->groupBy('meeting_id')->get() as $r) {
++            $out[$r->meeting_id] = ($out[$r->meeting_id] ?? 0) + (int) $r->c;
++        }
++
++        return $out;
++    }
++
++    private function row(Meeting $m, int $liveCount = 0): array
++    {
++        return [
++            'uuid'                  => $m->uuid,
++            'title'                 => $m->title,
++            'description'           => $m->description,
++            'meeting_code'          => $m->meeting_code,
++            'type'                  => $m->type,
++            'status'                => $m->status,
++            'host'                  => $m->host ? ['id' => (int) $m->host->id, 'name' => $m->host->full_name, 'email' => $m->host->email] : null,
++            'scheduled_start_at'    => $m->scheduled_start_at,
++            'duration_minutes'      => $m->duration_minutes,
++            'started_at'            => $m->started_at,
++            'ended_at'              => $m->ended_at,
++            'cancelled_at'          => $m->cancelled_at,
++            'created_at'            => $m->created_at,
++            'deleted_at'            => $m->deleted_at,
++            'live_participants'     => $liveCount,
++            'max_participants'      => $m->max_participants,
++            'waiting_room_enabled'  => (bool) $m->waiting_room_enabled,
++            'allow_guests'          => (bool) $m->allow_guests,
++            'has_password'          => $m->hasPassword(),
++            'locked'                => (bool) $m->locked,
++            'screen_sharing_locked' => (bool) $m->screen_sharing_locked,
++            'settings'              => $m->settings ?? [],
++            'attachable_type'       => $m->attachable_type,
++            'attachable_id'         => $m->attachable_id,
++        ];
++    }
++
++    // ------------------------------------------------------------------
++    // تفاصيل اجتماع
++    // ------------------------------------------------------------------
++
++    public function find(string $uuid, bool $withTrashed = true): ?Meeting
++    {
++        $q = $withTrashed ? Meeting::withTrashed() : Meeting::query();
++
++        return $q->where('uuid', $uuid)->first();
++    }
++
++    public function details(Meeting $m): array
++    {
++        $m->loadMissing('host:id,full_name,email');
++
++        $participants = MeetingParticipant::with('user:id,full_name,email')->where('meeting_id', $m->id)->orderBy('id')->get()
++            ->map(fn (MeetingParticipant $p) => [
++                'key'                  => 'user:' . $p->user_id,
++                'type'                 => 'user',
++                'user_id'              => (int) $p->user_id,
++                'name'                 => $p->user->full_name ?? ('User #' . $p->user_id),
++                'email'                => $p->user->email ?? null,
++                'role'                 => $p->role,
++                'status'               => $p->status,
++                'joined_at'            => $p->joined_at,
++                'left_at'              => $p->left_at,
++                'mic_enabled'          => (bool) $p->mic_enabled,
++                'camera_enabled'       => (bool) $p->camera_enabled,
++                'screen_sharing'       => (bool) $p->screen_sharing,
++                'hand_raised'          => (bool) $p->hand_raised,
++                'screen_share_allowed' => $p->screen_share_allowed,
++                'connection_state'     => $p->connection_state,
++                'last_seen_at'         => $p->last_seen_at,
++            ])->all();
++
++        $guests = MeetingJoinRequest::where('meeting_id', $m->id)->whereNull('user_id')->orderBy('id')->get()
++            ->map(fn (MeetingJoinRequest $g) => [
++                'key'                  => 'guest:' . $g->id,
++                'type'                 => 'guest',
++                'user_id'              => null,
++                'name'                 => (string) $g->guest_name,
++                'email'                => null,
++                'role'                 => 'guest',
++                'status'               => $g->status,
++                'joined_at'            => $g->decided_at,
++                'left_at'              => $g->left_at,
++                'mic_enabled'          => (bool) $g->mic_enabled,
++                'camera_enabled'       => (bool) $g->camera_enabled,
++                'screen_sharing'       => (bool) $g->screen_sharing,
++                'hand_raised'          => (bool) $g->hand_raised,
++                'screen_share_allowed' => $g->screen_share_allowed,
++                'connection_state'     => $g->connection_state,
++                'last_seen_at'         => $g->last_seen_at,
++            ])->all();
++
++        $files = MeetingFile::where('meeting_id', $m->id)->orderByDesc('id')->get()
++            ->map(fn (MeetingFile $f) => [
++                'id' => (int) $f->id, 'name' => $f->original_name, 'extension' => $f->extension, 'mime_type' => $f->mime_type,
++                'size_bytes' => (int) $f->size_bytes, 'uploaded_by' => $f->uploader_display_name, 'created_at' => $f->created_at,
++            ])->all();
++
++        $recordings = MeetingRecording::where('meeting_id', $m->id)->orderByDesc('id')->get()
++            ->map(fn (MeetingRecording $r) => [
++                'id' => (int) $r->id, 'kind' => $r->kind, 'status' => $r->status, 'started_by' => $r->started_by_display_name,
++                'started_at' => $r->started_at, 'stopped_at' => $r->stopped_at, 'duration_seconds' => $r->duration_seconds,
++                'size_bytes' => (int) $r->size_bytes, 'name' => $r->original_name,
++            ])->all();
++
++        $polls = MeetingPoll::withCount('options')->where('meeting_id', $m->id)->orderByDesc('id')->get()
++            ->map(fn (MeetingPoll $p) => [
++                'id' => (int) $p->id, 'question' => $p->question, 'status' => $p->status, 'poll_type' => $p->poll_type,
++                'is_anonymous' => (bool) $p->is_anonymous, 'options' => (int) $p->options_count, 'votes' => (int) $p->votes()->count(),
++            ])->all();
++
++        $invitations = MeetingInvitation::where('meeting_id', $m->id)->select('status', DB::raw('count(*) c'))->groupBy('status')->pluck('c', 'status')->all();
++
++        $audit = AuditLog::where('subject_type', 'Meeting')->where('subject_id', $m->id)->orderByDesc('id')->limit(50)->get()
++            ->map(fn (AuditLog $a) => $this->auditRow($a))->all();
++
++        $live = $this->liveCounts([$m->id]);
++
++        return [
++            'meeting'      => $this->row($m, $live[$m->id] ?? 0),
++            'participants' => $participants,
++            'guests'       => $guests,
++            'counts'       => [
++                'chat_messages'    => MeetingChatMessage::where('meeting_id', $m->id)->where('type', '!=', 'system')->count(),
++                'action_items'     => MeetingActionItem::where('meeting_id', $m->id)->count(),
++                'pending_requests' => MeetingJoinRequest::where('meeting_id', $m->id)->where('status', 'pending')->count(),
++                'invitations'      => $invitations,
++            ],
++            'files'        => $files,
++            'recordings'   => $recordings,
++            'polls'        => $polls,
++            'audit'        => $audit,
++        ];
++    }
++
++    private function auditRow(AuditLog $a): array
++    {
++        return [
++            'id' => (int) $a->id, 'user_id' => $a->user_id, 'action' => $a->action, 'subject_type' => $a->subject_type,
++            'subject_id' => $a->subject_id, 'old_values' => $a->old_values, 'new_values' => $a->new_values,
++            'ip_address' => $a->ip_address, 'created_at' => $a->created_at,
++        ];
++    }
++
++    /** @return array{items:array,meta:array} سجل نشاط كل الميتنج (action يبدأ بـ meetings. أو admin.meetings.) */
++    public function audit(array $f): array
++    {
++        $q = AuditLog::where(fn ($w) => $w->where('action', 'like', 'meetings.%')->orWhere('action', 'like', 'admin.meetings.%'));
++        if (!empty($f['action'])) {
++            $q->where('action', 'like', str_replace(['%', '_'], ['\\%', '\\_'], (string) $f['action']) . '%');
++        }
++        if (!empty($f['user_id'])) {
++            $q->where('user_id', (int) $f['user_id']);
++        }
++        $q->orderByDesc('id');
++        $perPage = max(10, min(100, (int) ($f['per_page'] ?? 30)));
++        $page = $q->paginate($perPage, ['*'], 'page', max(1, (int) ($f['page'] ?? 1)));
++
++        $userIds = $page->pluck('user_id')->filter()->unique()->all();
++        $names = $userIds ? DB::table('users')->whereIn('id', $userIds)->pluck('full_name', 'id')->all() : [];
++
++        return [
++            'items' => $page->getCollection()->map(fn (AuditLog $a) => $this->auditRow($a) + ['user_name' => $names[$a->user_id] ?? null])->all(),
++            'meta'  => ['page' => $page->currentPage(), 'per_page' => $page->perPage(), 'total' => $page->total(), 'last_page' => $page->lastPage()],
++        ];
++    }
++
++    // ------------------------------------------------------------------
++    // تعديل / إجراءات إجبارية
++    // ------------------------------------------------------------------
++
++    /** @param array $d title, description, scheduled_start_at, duration_minutes, max_participants, waiting_room_enabled, allow_guests, settings, password, clear_password */
++    public function update(Meeting $m, array $d): Meeting
++    {
++        $fields = array_intersect_key($d, array_flip(['title', 'description', 'scheduled_start_at', 'duration_minutes', 'max_participants', 'waiting_room_enabled', 'allow_guests']));
++
++        if (!empty($d['clear_password'])) {
++            $fields['password_hash'] = null;
++        } elseif (!empty($d['password'])) {
++            $fields['password_hash'] = \Illuminate\Support\Facades\Hash::make($d['password']);
++        }
++
++        if (isset($d['settings']) && is_array($d['settings'])) {
++            $allowed = ['mute_on_entry', 'camera_on_entry', 'allow_chat', 'allow_file_sharing', 'recording_enabled'];
++            $fields['settings'] = array_merge($m->settings ?? [], array_map('boolval', array_intersect_key($d['settings'], array_flip($allowed))));
++        }
++
++        $m->fill($fields)->save();
++
++        return $m;
++    }
++
++    /** @throws \RuntimeException الاجتماع مش في حالة تسمح. */
++    public function end(Meeting $m): Meeting
++    {
++        if (!in_array($m->status, ['lobby', 'live'], true)) {
++            throw new \RuntimeException('Only a live meeting can be ended.');
++        }
++
++        return $this->meetingService->end($m);
++    }
++
++    /** @throws \RuntimeException */
++    public function cancel(Meeting $m): Meeting
++    {
++        if ($m->status !== 'scheduled') {
++            throw new \RuntimeException('Only a scheduled meeting can be cancelled. End it instead if it is live.');
++        }
++
++        return $this->meetingService->cancel($m);
++    }
++
++    public function delete(Meeting $m): void
++    {
++        if (in_array($m->status, ['lobby', 'live'], true)) {
++            $this->meetingService->end($m);
++        }
++        $this->meetingService->delete($m);
++    }
++
++    public function restore(Meeting $m): Meeting
++    {
++        $m->restore();
++
++        return $m;
++    }
++
++    /** @return int عدد الاجتماعات اللي اتنهت */
++    public function endAllLive(): int
++    {
++        $n = 0;
++        foreach (Meeting::whereIn('status', ['lobby', 'live'])->get() as $m) {
++            try {
++                $this->meetingService->end($m);
++                $n++;
++            } catch (\Throwable $e) {
++                report($e);
++            }
++        }
++
++        return $n;
++    }
++
++    public function setLock(Meeting $m, int $adminId, bool $locked): bool
++    {
++        return $this->hostControl->asAdmin()->setLock($m, $adminId, $locked);
++    }
++
++    public function setScreenShareLock(Meeting $m, int $adminId, bool $locked): bool
++    {
++        return $this->signaling->setScreenSharingLock($m, $this->adminActor($adminId), $locked);
++    }
++
++    public function regenerateLink(Meeting $m): Meeting
++    {
++        $m->join_token = $this->meetings->generateUniqueJoinToken();
++        $m->save();
++
++        return $m;
++    }
++
++    public function announce(Meeting $m, string $message): void
++    {
++        $this->chat->postSystemMessage($m, '[Administrator] ' . trim($message));
++    }
++
++    /**
++     * @param string $action mute|disable-camera|remove|promote|demote|make-host|stop-screen-share|allow-screen-share|deny-screen-share|reset-screen-share
++     * @throws \RuntimeException|\InvalidArgumentException
++     */
++    public function participantAction(Meeting $m, int $adminId, string $key, string $action): void
++    {
++        $hc = $this->hostControl->asAdmin();
++
++        switch ($action) {
++            case 'mute':
++                $hc->mute($m, $adminId, $key);
++                break;
++            case 'disable-camera':
++                $hc->disableCamera($m, $adminId, $key);
++                break;
++            case 'remove':
++                $hc->remove($m, $adminId, $key);
++                break;
++            case 'promote':
++                $hc->promote($m, $adminId, $key);
++                break;
++            case 'demote':
++                $hc->demote($m, $adminId, $key);
++                break;
++            case 'make-host':
++                $hc->transferHost($m, $adminId, $key);
++                break;
++            case 'stop-screen-share':
++                $this->signaling->stopParticipantScreenShare($m, $this->adminActor($adminId), $key);
++                break;
++            case 'allow-screen-share':
++                $this->signaling->setParticipantScreenSharePolicy($m, $this->adminActor($adminId), $key, true);
++                break;
++            case 'deny-screen-share':
++                $this->signaling->setParticipantScreenSharePolicy($m, $this->adminActor($adminId), $key, false);
++                break;
++            case 'reset-screen-share':
++                $this->signaling->setParticipantScreenSharePolicy($m, $this->adminActor($adminId), $key, null);
++                break;
++            default:
++                throw new \InvalidArgumentException('Unknown participant action.');
++        }
++    }
++
++    /** actor وهمي بدور host لخدمات الـ signaling اللي بتتطلب role فقط. */
++    private function adminActor(int $adminId): array
++    {
++        return ['type' => 'admin', 'key' => 'admin:' . $adminId, 'display_name' => 'Administrator', 'role' => 'host', 'model' => null];
++    }
++
++    // ------------------------------------------------------------------
++    // ملفات / تسجيلات (حذف بس — مفيش قراءة محتوى)
++    // ------------------------------------------------------------------
++
++    public function deleteFile(Meeting $m, int $fileId): MeetingFile
++    {
++        $file = MeetingFile::where('meeting_id', $m->id)->where('id', $fileId)->first();
++        if (!$file) {
++            throw new \RuntimeException('File not found.');
++        }
++        if (!empty($file->stored_path)) {
++            $this->uploads->delete($file->stored_path);
++        }
++        $file->delete();
++        event(new \App\Events\Meetings\MeetingFileRemoved($m->uuid, (int) $file->id));
++
++        return $file;
++    }
++
++    public function deleteRecording(Meeting $m, int $recordingId): MeetingRecording
++    {
++        $rec = MeetingRecording::where('meeting_id', $m->id)->where('id', $recordingId)->first();
++        if (!$rec) {
++            throw new \RuntimeException('Recording not found.');
++        }
++        if (!empty($rec->stored_path)) {
++            $this->uploads->delete($rec->stored_path);
++        }
++        $rec->delete();
++
++        return $rec;
++    }
++
++    // ------------------------------------------------------------------
++    // المستخدمين المحظورين من إنشاء اجتماعات
++    // ------------------------------------------------------------------
++
++    public function blockedUsers(): array
++    {
++        $ids = (array) MeetingAdminSettings::get('blocked_user_ids');
++        if (!$ids) {
++            return [];
++        }
++        $rows = DB::table('users')->whereIn('id', $ids)->get(['id', 'full_name', 'email'])->keyBy('id');
++
++        return array_map(fn ($id) => [
++            'id'    => (int) $id,
++            'name'  => $rows[$id]->full_name ?? ('User #' . $id),
++            'email' => $rows[$id]->email ?? null,
++        ], $ids);
++    }
++
++    public function searchUsers(string $q): array
++    {
++        $q = trim($q);
++        if (mb_strlen($q) < 2) {
++            return [];
++        }
++        $term = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%';
++
++        return DB::table('users')
++            ->where(fn ($w) => $w->where('full_name', 'like', $term)->orWhere('email', 'like', $term))
++            ->orderBy('full_name')->limit(15)->get(['id', 'full_name', 'email'])
++            ->map(fn ($u) => ['id' => (int) $u->id, 'name' => $u->full_name, 'email' => $u->email])->all();
++    }
++}
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingAdminSettings.php laravel/uip-laravel-main/app/Services/MeetingAdminSettings.php
+--- orig/uip-laravel-main/app/Services/MeetingAdminSettings.php	1970-01-01 00:00:00.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingAdminSettings.php	2026-10-24 18:43:10.786015560 +0000
+@@ -0,0 +1,384 @@
++<?php
++
++namespace App\Services;
++
++use Illuminate\Support\Facades\DB;
++
++/**
++ * Admin → Meetings Control: كتالوج واحد لكل إعداد في نظام الاجتماعات يقدر الأدمن يغيّره
++ * وقت التشغيل (من غير deploy). القيمة بتتخزن في جدول `settings` (scope=global) بمفتاح
++ * `meeting_<key>` — نفس المفاتيح اللي MeetingPolicyService كانت بتقراها قبل كده
++ * (meeting_default_duration_minutes ...) فأي قيمة متخزنة قديمة بتفضل شغالة.
++ * لو مفيش override بنرجع للقيمة الافتراضية (config/meetings.php أو الافتراضي المكتوب هنا).
++ *
++ * الأنواع: bool | int | string | list_int | list_str
++ * القوائم بتتخزن JSON.
++ */
++class MeetingAdminSettings
++{
++    public const PREFIX = 'meeting_';
++
++    /** @var array<string,string>|null */
++    private static ?array $cache = null;
++    private static int $cacheAt = 0;
++
++    /** مجموعات العرض في لوحة الأدمن (بالترتيب). */
++    public const GROUPS = ['system', 'creation', 'limits', 'access', 'features', 'defaults', 'recording'];
++
++    /**
++     * @return array<string, array{group:string,type:string,default:mixed,min?:int,max?:int,max_length?:int}>
++     */
++    public static function catalog(): array
++    {
++        return [
++            // -- النظام ----------------------------------------------------
++            'feature_meetings'     => ['group' => 'system', 'type' => 'bool', 'default' => true],
++            'maintenance_message'  => ['group' => 'system', 'type' => 'string', 'default' => '', 'max_length' => 300],
++
++            // -- الإنشاء ---------------------------------------------------
++            'allow_instant'                 => ['group' => 'creation', 'type' => 'bool', 'default' => true],
++            'allow_scheduled'               => ['group' => 'creation', 'type' => 'bool', 'default' => true],
++            'creator_roles'                 => ['group' => 'creation', 'type' => 'list_str', 'default' => []],
++            'blocked_user_ids'              => ['group' => 'creation', 'type' => 'list_int', 'default' => []],
++            'max_active_meetings_per_user'  => ['group' => 'creation', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 1000],
++            'max_scheduled_meetings_per_user' => ['group' => 'creation', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 5000],
++            'max_schedule_ahead_days'       => ['group' => 'creation', 'type' => 'int', 'default' => 0, 'min' => 0, 'max' => 3650],
++            'require_password'              => ['group' => 'creation', 'type' => 'bool', 'default' => false],
++
++            // -- الحدود ----------------------------------------------------
++            'default_duration_minutes' => ['group' => 'limits', 'type' => 'int', 'default' => (int) config('meetings.default_duration_minutes', 60), 'min' => 5, 'max' => 1440],
++            'max_duration_minutes'     => ['group' => 'limits', 'type' => 'int', 'default' => (int) config('meetings.max_duration_minutes', 480), 'min' => 5, 'max' => 1440],
++            'max_mesh_participants'     => ['group' => 'limits', 'type' => 'int', 'default' => (int) config('meetings.max_mesh_participants', 8), 'min' => 2, 'max' => 500],
++            'presence_stale_seconds'   => ['group' => 'limits', 'type' => 'int', 'default' => (int) config('meetings.presence_stale_seconds', 90), 'min' => 30, 'max' => 900],
++
++            // -- الدخول والدعوات -------------------------------------------
++            'waiting_room_default'       => ['group' => 'access', 'type' => 'bool', 'default' => (bool) config('meetings.waiting_room_default_enabled', true)],
++            'force_waiting_room'         => ['group' => 'access', 'type' => 'bool', 'default' => false],
++            'allow_guests_default'       => ['group' => 'access', 'type' => 'bool', 'default' => (bool) config('meetings.allow_guests_default', true)],
++            'guest_session_ttl_minutes'  => ['group' => 'access', 'type' => 'int', 'default' => (int) config('meetings.guest_session_ttl_minutes', 480), 'min' => 5, 'max' => 1440],
++            'invitation_expiry_hours'    => ['group' => 'access', 'type' => 'int', 'default' => (int) config('meetings.invitation_expiry_hours', 72), 'min' => 1, 'max' => 720],
++            'reminder_minutes_before'    => ['group' => 'access', 'type' => 'int', 'default' => (int) config('meetings.reminder_minutes_before', 10), 'min' => 1, 'max' => 1440],
++
++            // -- مفاتيح الميزات (kill switches) ----------------------------
++            'feature_guests'         => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_invitations'    => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_chat'           => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_private_chat'   => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_files'          => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_recording'      => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_polls'          => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_notes'          => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_screen_share'   => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_remote_control' => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_reactions'      => ['group' => 'features', 'type' => 'bool', 'default' => true],
++            'feature_hand_raise'     => ['group' => 'features', 'type' => 'bool', 'default' => true],
++
++            // -- افتراضيات الاجتماع الجديد ---------------------------------
++            'default_mute_on_entry'      => ['group' => 'defaults', 'type' => 'bool', 'default' => (bool) config('meetings.default_settings.mute_on_entry', false)],
++            'default_camera_on_entry'    => ['group' => 'defaults', 'type' => 'bool', 'default' => (bool) config('meetings.default_settings.camera_on_entry', true)],
++            'default_allow_chat'         => ['group' => 'defaults', 'type' => 'bool', 'default' => (bool) config('meetings.default_settings.allow_chat', true)],
++            'default_allow_file_sharing' => ['group' => 'defaults', 'type' => 'bool', 'default' => (bool) config('meetings.default_settings.allow_file_sharing', true)],
++            'default_recording_enabled'  => ['group' => 'defaults', 'type' => 'bool', 'default' => (bool) config('meetings.default_settings.recording_enabled', true)],
++
++            // -- التسجيل ---------------------------------------------------
++            'recording_max_kb'         => ['group' => 'recording', 'type' => 'int', 'default' => (int) config('meetings.recording_max_kb', 512000), 'min' => 1024, 'max' => 5242880],
++            'recording_process_inline' => ['group' => 'recording', 'type' => 'bool', 'default' => (bool) config('meetings.recording_process_inline', true)],
++        ];
++    }
++
++    /** مفاتيح الميزات اللي الفرونت بيستخدمها لإخفاء الأزرار (اسم قصير => مفتاح الكتالوج). */
++    public const FEATURES = [
++        'meetings'       => 'feature_meetings',
++        'guests'         => 'feature_guests',
++        'invitations'    => 'feature_invitations',
++        'chat'           => 'feature_chat',
++        'private_chat'   => 'feature_private_chat',
++        'files'          => 'feature_files',
++        'recording'      => 'feature_recording',
++        'polls'          => 'feature_polls',
++        'notes'          => 'feature_notes',
++        'screen_share'   => 'feature_screen_share',
++        'remote_control' => 'feature_remote_control',
++        'reactions'      => 'feature_reactions',
++        'hand_raise'     => 'feature_hand_raise',
++    ];
++
++    // ------------------------------------------------------------------
++    // القراءة
++    // ------------------------------------------------------------------
++
++    /** كل الـ overrides المتخزنة (key بدون البادئة => string). كاش 3 ثواني عشان الـ workers الطويلة. */
++    private static function stored(): array
++    {
++        if (self::$cache !== null && (time() - self::$cacheAt) < 3) {
++            return self::$cache;
++        }
++
++        $out = [];
++        try {
++            $rows = DB::table('settings')
++                ->where('scope', 'global')
++                ->whereNull('user_id')
++                ->where('key', 'like', self::PREFIX . '%')
++                ->get(['key', 'value']);
++            foreach ($rows as $row) {
++                $out[substr($row->key, strlen(self::PREFIX))] = $row->value;
++            }
++        } catch (\Throwable $e) {
++            // جدول settings مش موجود لسه (أول migration مثلًا) -> الافتراضي.
++        }
++
++        self::$cache = $out;
++        self::$cacheAt = time();
++
++        return $out;
++    }
++
++    public static function flush(): void
++    {
++        self::$cache = null;
++        self::$cacheAt = 0;
++    }
++
++    public static function isOverridden(string $key): bool
++    {
++        $stored = self::stored();
++
++        return isset($stored[$key]) && $stored[$key] !== '';
++    }
++
++    /** @return bool|int|string|array القيمة الحالية (override لو موجود، وإلا الافتراضي). */
++    public static function get(string $key)
++    {
++        $def = self::catalog()[$key] ?? null;
++        if ($def === null) {
++            throw new \InvalidArgumentException('Unknown meeting setting: ' . $key);
++        }
++
++        $stored = self::stored();
++        if (!isset($stored[$key]) || ($stored[$key] === '' && $def['type'] !== 'string')) {
++            return $def['default'];
++        }
++
++        return self::decode($def['type'], (string) $stored[$key], $def['default']);
++    }
++
++    public static function on(string $feature): bool
++    {
++        $key = self::FEATURES[$feature] ?? ('feature_' . $feature);
++
++        return (bool) self::get($key);
++    }
++
++    /** @return array<string,bool> */
++    public static function featureMap(): array
++    {
++        $out = [];
++        foreach (array_keys(self::FEATURES) as $name) {
++            $out[$name] = self::on($name);
++        }
++
++        return $out;
++    }
++
++    /** الإعدادات اللي بتترص جوه meetings.settings وقت الإنشاء. */
++    public static function defaultMeetingSettings(): array
++    {
++        return array_merge((array) config('meetings.default_settings', []), [
++            'mute_on_entry'      => (bool) self::get('default_mute_on_entry'),
++            'camera_on_entry'    => (bool) self::get('default_camera_on_entry'),
++            'allow_chat'         => (bool) self::get('default_allow_chat'),
++            'allow_file_sharing' => (bool) self::get('default_allow_file_sharing'),
++            'recording_enabled'  => (bool) self::get('default_recording_enabled'),
++        ]);
++    }
++
++    // ------------------------------------------------------------------
++    // الكتابة
++    // ------------------------------------------------------------------
++
++    /**
++     * يحفظ مجموعة قيم. null = رجّع الافتراضي (يمسح الـ override).
++     *
++     * @param array<string,mixed> $values
++     * @return array{changed:array<string,array{old:mixed,new:mixed}>, errors:array<string,string>}
++     */
++    public static function setMany(array $values): array
++    {
++        $catalog = self::catalog();
++        $errors = [];
++        $clean = [];
++
++        foreach ($values as $key => $raw) {
++            if (!isset($catalog[$key])) {
++                $errors[$key] = 'Unknown setting.';
++                continue;
++            }
++            if ($raw === null) {
++                $clean[$key] = null;
++                continue;
++            }
++            [$ok, $val, $err] = self::coerce($catalog[$key], $raw);
++            if (!$ok) {
++                $errors[$key] = $err;
++                continue;
++            }
++            $clean[$key] = $val;
++        }
++
++        // قيود تقاطعية (على القيم النهائية بعد الدمج).
++        $final = [];
++        foreach (['default_duration_minutes', 'max_duration_minutes'] as $k) {
++            $final[$k] = array_key_exists($k, $clean) ? ($clean[$k] ?? $catalog[$k]['default']) : self::get($k);
++        }
++        if ($final['default_duration_minutes'] > $final['max_duration_minutes']) {
++            $errors['default_duration_minutes'] = 'Default duration cannot exceed the maximum duration.';
++        }
++
++        if ($errors) {
++            return ['changed' => [], 'errors' => $errors];
++        }
++
++        $changed = [];
++        foreach ($clean as $key => $val) {
++            $old = self::get($key);
++            if ($val === null) {
++                DB::table('settings')->where('scope', 'global')->whereNull('user_id')->where('key', self::PREFIX . $key)->delete();
++            } else {
++                app(\App\Repositories\SettingRepository::class)->set(self::PREFIX . $key, self::encode($catalog[$key]['type'], $val));
++            }
++            self::flush();
++            $new = self::get($key);
++            if ($old !== $new) {
++                $changed[$key] = ['old' => $old, 'new' => $new];
++            }
++        }
++        self::flush();
++
++        return ['changed' => $changed, 'errors' => []];
++    }
++
++    /** يمسح كل الـ overrides (يرجّع كل حاجة للافتراضي). @return int عدد الصفوف اللي اتمسحت */
++    public static function resetAll(): int
++    {
++        $n = DB::table('settings')->where('scope', 'global')->whereNull('user_id')->where('key', 'like', self::PREFIX . '%')->delete();
++        self::flush();
++
++        return (int) $n;
++    }
++
++    // ------------------------------------------------------------------
++    // Snapshot للوحة الأدمن
++    // ------------------------------------------------------------------
++
++    public static function snapshot(): array
++    {
++        $values = [];
++        foreach (self::catalog() as $key => $def) {
++            $values[$key] = [
++                'group'      => $def['group'],
++                'type'       => $def['type'],
++                'value'      => self::get($key),
++                'default'    => $def['default'],
++                'overridden' => self::isOverridden($key),
++                'min'        => $def['min'] ?? null,
++                'max'        => $def['max'] ?? null,
++                'max_length' => $def['max_length'] ?? null,
++            ];
++        }
++
++        return [
++            'groups'          => self::GROUPS,
++            'values'          => $values,
++            'available_roles' => array_values((array) config('roles.available', [])),
++        ];
++    }
++
++    // ------------------------------------------------------------------
++    // ترميز/فك ترميز/تحقق
++    // ------------------------------------------------------------------
++
++    private static function encode(string $type, $val): string
++    {
++        return match ($type) {
++            'bool'      => $val ? '1' : '0',
++            'int'       => (string) (int) $val,
++            'string'    => (string) $val,
++            default     => json_encode(array_values((array) $val), JSON_UNESCAPED_UNICODE),
++        };
++    }
++
++    private static function decode(string $type, string $raw, $default)
++    {
++        switch ($type) {
++            case 'bool':
++                return in_array(strtolower($raw), ['1', 'true', 'on', 'yes'], true);
++            case 'int':
++                return is_numeric($raw) ? (int) $raw : $default;
++            case 'string':
++                return $raw;
++            case 'list_int':
++                $arr = json_decode($raw, true);
++
++                return is_array($arr) ? array_values(array_unique(array_map('intval', $arr))) : $default;
++            default:
++                $arr = json_decode($raw, true);
++
++                return is_array($arr) ? array_values(array_unique(array_map('strval', $arr))) : $default;
++        }
++    }
++
++    /** @return array{0:bool,1:mixed,2:string} */
++    private static function coerce(array $def, $raw): array
++    {
++        switch ($def['type']) {
++            case 'bool':
++                $b = filter_var($raw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
++
++                return $b === null ? [false, null, 'Must be true or false.'] : [true, $b, ''];
++            case 'int':
++                if (!is_numeric($raw) || (string) (int) $raw !== (string) (int) $raw) {
++                    return [false, null, 'Must be a whole number.'];
++                }
++                $n = (int) $raw;
++                if (isset($def['min']) && $n < $def['min']) {
++                    return [false, null, 'Minimum is ' . $def['min'] . '.'];
++                }
++                if (isset($def['max']) && $n > $def['max']) {
++                    return [false, null, 'Maximum is ' . $def['max'] . '.'];
++                }
++
++                return [true, $n, ''];
++            case 'string':
++                $s = trim((string) $raw);
++                if (isset($def['max_length']) && mb_strlen($s) > $def['max_length']) {
++                    return [false, null, 'Maximum length is ' . $def['max_length'] . '.'];
++                }
++
++                return [true, $s, ''];
++            case 'list_int':
++                if (!is_array($raw)) {
++                    return [false, null, 'Must be a list.'];
++                }
++                $ids = array_values(array_unique(array_filter(array_map('intval', $raw), fn ($v) => $v > 0)));
++                if (count($ids) > 5000) {
++                    return [false, null, 'Too many entries.'];
++                }
++
++                return [true, $ids, ''];
++            default: // list_str (حاليًا creator_roles بس)
++                if (!is_array($raw)) {
++                    return [false, null, 'Must be a list.'];
++                }
++                $allowed = (array) config('roles.available', []);
++                $vals = array_values(array_unique(array_map('strval', $raw)));
++                foreach ($vals as $v) {
++                    if ($allowed && !in_array($v, $allowed, true)) {
++                        return [false, null, 'Unknown role: ' . $v];
++                    }
++                }
++
++                return [true, $vals, ''];
++        }
++    }
++}
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingChatService.php laravel/uip-laravel-main/app/Services/MeetingChatService.php
+--- orig/uip-laravel-main/app/Services/MeetingChatService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingChatService.php	2026-10-24 18:44:27.445157697 +0000
+@@ -34,7 +34,7 @@
+     /** بند 7 (settings.allow_chat اللي Round 1 حجز مكانها في config/meetings.php default_settings). */
+     public function isChatEnabled(Meeting $meeting): bool
+     {
+-        return (bool) ($meeting->settings['allow_chat'] ?? true);
++        return \App\Services\MeetingAdminSettings::on('chat') && (bool) ($meeting->settings['allow_chat'] ?? true);
+     }
+ 
+     /** @param array{type:string, key:string, display_name:string} $actor */
+@@ -64,7 +64,7 @@
+ 
+         $attachment = null;
+         if ($file instanceof UploadedFile) {
+-            if (!(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
++            if (!\App\Services\MeetingAdminSettings::on('files') || !(bool) ($meeting->settings['allow_file_sharing'] ?? true)) {
+                 throw new \RuntimeException('File sharing is disabled for this meeting.');
+             }
+             // الحقن nullable (عشان الاختبارات اللي بتعمل new MeetingChatService($repo))، بس في الإنتاج لو الـ container
+@@ -82,6 +82,9 @@
+ 
+         $recipientKey = $data['recipient_key'] ?? null;
+         if ($recipientKey !== null) {
++            if (!\App\Services\MeetingAdminSettings::on('private_chat')) {
++                throw new \RuntimeException('Private messages are disabled by the administrator.');
++            }
+             if ($recipientKey === $actor['key']) {
+                 throw new \RuntimeException('You cannot send a private message to yourself.');
+             }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingFileService.php laravel/uip-laravel-main/app/Services/MeetingFileService.php
+--- orig/uip-laravel-main/app/Services/MeetingFileService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingFileService.php	2026-10-24 18:44:27.445588904 +0000
+@@ -33,7 +33,7 @@
+ 
+     public function isFileSharingEnabled(Meeting $meeting): bool
+     {
+-        return (bool) ($meeting->settings['allow_file_sharing'] ?? true);
++        return \App\Services\MeetingAdminSettings::on('files') && (bool) ($meeting->settings['allow_file_sharing'] ?? true);
+     }
+ 
+     /** @return MeetingFile[] */
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingHostControlService.php laravel/uip-laravel-main/app/Services/MeetingHostControlService.php
+--- orig/uip-laravel-main/app/Services/MeetingHostControlService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingHostControlService.php	2026-10-24 18:44:39.918021310 +0000
+@@ -52,9 +52,23 @@
+     ) {
+     }
+ 
++    /** Admin → Meetings Control: نسخة من الخدمة بتتخطى فحص هوست/co-host، والأحداث بتظهر باسم "Administrator". */
++    private bool $adminMode = false;
++
++    public function asAdmin(): static
++    {
++        $clone = clone $this;
++        $clone->adminMode = true;
++
++        return $clone;
++    }
++
+     /** @throws \RuntimeException actor مش هوست ولا co-host. */
+     private function requireManager(Meeting $meeting, int $actorUserId): void
+     {
++        if ($this->adminMode) {
++            return;
++        }
+         if (!$this->policy->canManage($meeting, $actorUserId, $this->meetings)) {
+             throw new \RuntimeException('Only the host or co-host can perform this action.');
+         }
+@@ -63,6 +77,9 @@
+     /** @throws \RuntimeException actor مش الهوست الأساسي. */
+     private function requirePrimaryHost(Meeting $meeting, int $actorUserId): void
+     {
++        if ($this->adminMode) {
++            return;
++        }
+         if (!$this->policy->isHost($meeting, $actorUserId)) {
+             throw new \RuntimeException('Only the host can perform this action.');
+         }
+@@ -71,6 +88,10 @@
+     /** @return array{key:string, display_name:string} هوية الـ actor (الهوست/co-host) نفسه لغرض الأحداث/رسائل النظام. */
+     private function actorIdentity(Meeting $meeting, int $userId): array
+     {
++        if ($this->adminMode) {
++            return ['key' => 'admin:' . $userId, 'display_name' => 'Administrator'];
++        }
++
+         $participant = $this->meetings->findParticipant($meeting->id, $userId);
+ 
+         return [
+@@ -185,7 +206,7 @@
+         if ($target['role'] === 'host') {
+             throw new \RuntimeException('The host cannot be removed from the meeting.');
+         }
+-        if ($target['role'] === 'co_host' && !$this->policy->isHost($meeting, $actorUserId)) {
++        if ($target['role'] === 'co_host' && !$this->adminMode && !$this->policy->isHost($meeting, $actorUserId)) {
+             throw new \RuntimeException('Only the host can remove a moderator.');
+         }
+ 
+@@ -282,7 +303,7 @@
+         $newHostParticipant->role = 'host';
+         $newHostParticipant->save();
+ 
+-        $oldHostParticipant = $this->meetings->findParticipant($meeting->id, $actorUserId);
++        $oldHostParticipant = $this->meetings->findParticipant($meeting->id, $this->adminMode ? (int) $meeting->host_user_id : $actorUserId);
+         if ($oldHostParticipant) {
+             $oldHostParticipant->role = 'co_host';
+             $oldHostParticipant->save();
+@@ -291,7 +312,7 @@
+         $meeting->host_user_id = $newHostParticipant->user_id;
+         $meeting->save();
+ 
+-        event(new MeetingHostTransferred($meeting->uuid, 'user:' . $actorUserId, $targetKey, $target['display_name']));
++        event(new MeetingHostTransferred($meeting->uuid, $this->adminMode ? 'admin:' . $actorUserId : 'user:' . $actorUserId, $targetKey, $target['display_name']));
+         $this->chat?->postSystemMessage($meeting, $target['display_name'] . ' is now the host');
+     }
+ }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingInvitationService.php laravel/uip-laravel-main/app/Services/MeetingInvitationService.php
+--- orig/uip-laravel-main/app/Services/MeetingInvitationService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingInvitationService.php	2026-10-24 18:44:27.449519693 +0000
+@@ -229,6 +229,10 @@
+      */
+     public function bulkInvite(Meeting $meeting, int $hostUserId, string $hostRole, array $targets, ?string $message = null): array
+     {
++        if (!\App\Services\MeetingAdminSettings::on('invitations')) {
++            throw new \RuntimeException('Invitations are disabled by the administrator.');
++        }
++
+         if (empty($targets)) {
+             throw new \InvalidArgumentException('At least one invitation target is required.');
+         }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingLobbyService.php laravel/uip-laravel-main/app/Services/MeetingLobbyService.php
+--- orig/uip-laravel-main/app/Services/MeetingLobbyService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingLobbyService.php	2026-10-24 18:44:27.449028855 +0000
+@@ -98,7 +98,7 @@
+             'host'                  => $meeting->host ? ['full_name' => $meeting->host->full_name] : null,
+             'requires_password'     => $meeting->hasPassword(),
+             'waiting_room_enabled'  => (bool) $meeting->waiting_room_enabled,
+-            'allow_guests'          => (bool) $meeting->allow_guests,
++            'allow_guests'          => (bool) $meeting->allow_guests && \App\Services\MeetingAdminSettings::on('guests'),
+             'joinable'              => $this->isJoinable($meeting, $authUserId),
+             'is_authenticated'      => $authUserId !== null,
+             'already_participant'   => $isParticipant,
+@@ -122,6 +122,10 @@
+      */
+     public function requestAccess(Meeting $meeting, ?int $authUserId, array $data): array
+     {
++        if (!$this->policy->systemEnabled()) {
++            throw new \RuntimeException($this->policy->maintenanceMessage());
++        }
++
+         if (!$this->isJoinable($meeting, $authUserId)) {
+             throw new \RuntimeException($meeting->locked ? 'This meeting is locked by the host.' : 'This meeting is no longer available to join.');
+         }
+@@ -141,6 +145,10 @@
+ 
+         $isGuest = $authUserId === null;
+ 
++        if ($isGuest && !\App\Services\MeetingAdminSettings::on('guests')) {
++            throw new \InvalidArgumentException('Guest access is disabled by the administrator. Please sign in to join.');
++        }
++
+         if ($isGuest && !$meeting->allow_guests) {
+             throw new \InvalidArgumentException('Guest access is not enabled for this meeting. Please sign in to join.');
+         }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingNotesService.php laravel/uip-laravel-main/app/Services/MeetingNotesService.php
+--- orig/uip-laravel-main/app/Services/MeetingNotesService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingNotesService.php	2026-10-24 18:44:27.447074827 +0000
+@@ -32,6 +32,9 @@
+ 
+     private function requireManager(Meeting $meeting, array $actor): void
+     {
++        if (!\App\Services\MeetingAdminSettings::on('notes')) {
++            throw new \RuntimeException('Meeting notes are disabled by the administrator.');
++        }
+         $userId = $actor['type'] === 'participant' ? (int) str_replace('user:', '', $actor['key']) : 0;
+         if (!$this->policy->canManage($meeting, $userId, $this->meetings)) {
+             throw new \RuntimeException('Only the host or co-host can edit meeting notes.');
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingPolicyService.php laravel/uip-laravel-main/app/Services/MeetingPolicyService.php
+--- orig/uip-laravel-main/app/Services/MeetingPolicyService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingPolicyService.php	2026-10-24 18:43:23.766630128 +0000
+@@ -24,44 +24,128 @@
+ 
+     public function defaultDurationMinutes(): int
+     {
+-        return (int) $this->settings->get('meeting_default_duration_minutes', 'global', null, (string) config('meetings.default_duration_minutes'));
++        return (int) \App\Services\MeetingAdminSettings::get('default_duration_minutes');
+     }
+ 
+     public function maxDurationMinutes(): int
+     {
+-        return (int) $this->settings->get('meeting_max_duration_minutes', 'global', null, (string) config('meetings.max_duration_minutes'));
++        return (int) \App\Services\MeetingAdminSettings::get('max_duration_minutes');
+     }
+ 
+     public function maxMeshParticipants(): int
+     {
+-        return (int) $this->settings->get('meeting_max_mesh_participants', 'global', null, (string) config('meetings.max_mesh_participants'));
++        return (int) \App\Services\MeetingAdminSettings::get('max_mesh_participants');
+     }
+ 
+     public function waitingRoomDefaultEnabled(): bool
+     {
+-        return $this->settings->get('meeting_waiting_room_default', 'global', null, config('meetings.waiting_room_default_enabled') ? '1' : '0') === '1';
++        return (bool) \App\Services\MeetingAdminSettings::get('waiting_room_default');
+     }
+ 
+     public function allowGuestsDefault(): bool
+     {
+-        return $this->settings->get('meeting_allow_guests_default', 'global', null, config('meetings.allow_guests_default') ? '1' : '0') === '1';
++        return (bool) \App\Services\MeetingAdminSettings::get('allow_guests_default');
+     }
+ 
+     public function invitationExpiryHours(): int
+     {
+-        return (int) $this->settings->get('meeting_invitation_expiry_hours', 'global', null, (string) config('meetings.invitation_expiry_hours'));
++        return (int) \App\Services\MeetingAdminSettings::get('invitation_expiry_hours');
+     }
+ 
+     /** Round 2 — بند 23 (Guest Access). راجع docblock config/meetings.php. */
+     public function guestSessionTtlMinutes(): int
+     {
+-        return (int) $this->settings->get('meeting_guest_session_ttl_minutes', 'global', null, (string) config('meetings.guest_session_ttl_minutes'));
++        return (int) \App\Services\MeetingAdminSettings::get('guest_session_ttl_minutes');
+     }
+ 
+     /** Round 3 — بند 12 ("Support configurable reminders"). كام دقيقة قبل الميعاد يتبعت إشعار "starting soon". */
+     public function reminderMinutesBefore(): int
+     {
+-        return (int) $this->settings->get('meeting_reminder_minutes_before', 'global', null, (string) config('meetings.reminder_minutes_before'));
++        return (int) \App\Services\MeetingAdminSettings::get('reminder_minutes_before');
++    }
++
++    /** Master switch (Admin → Meetings Control). */
++    public function systemEnabled(): bool
++    {
++        return (bool) \App\Services\MeetingAdminSettings::get('feature_meetings');
++    }
++
++    public function maintenanceMessage(): string
++    {
++        $m = trim((string) \App\Services\MeetingAdminSettings::get('maintenance_message'));
++
++        return $m !== '' ? $m : 'Meetings are temporarily disabled by the administrator.';
++    }
++
++    /**
++     * يتنادى قبل إنشاء أي اجتماع.
++     * @param array $data نفس payload الإنشاء (type, scheduled_start_at, password ...)
++     * @throws \RuntimeException النظام مقفول / اليوزر محظور / دوره مش مسموح / عدّى حد / النوع متقفل.
++     * @throws \InvalidArgumentException كلمة السر إجبارية ومش مبعوتة.
++     */
++    public function assertCanCreate(int $userId, ?string $role, array $data): void
++    {
++        $A = \App\Services\MeetingAdminSettings::class;
++
++        if (!$this->systemEnabled()) {
++            throw new \RuntimeException($this->maintenanceMessage());
++        }
++
++        // الأدمن نفسه مش بيتحظر ومش بيتقيّد بقيود الإنشاء.
++        if ($role === 'admin') {
++            return;
++        }
++
++        if (in_array($userId, (array) $A::get('blocked_user_ids'), true)) {
++            throw new \RuntimeException('You are not allowed to create meetings. Please contact the administrator.');
++        }
++
++        $roles = (array) $A::get('creator_roles');
++        if ($roles && !in_array((string) $role, $roles, true)) {
++            throw new \RuntimeException('Your account type is not allowed to create meetings.');
++        }
++
++        $type = $data['type'] ?? 'instant';
++        if ($type === 'instant' && !$A::get('allow_instant')) {
++            throw new \RuntimeException('Instant meetings are disabled by the administrator.');
++        }
++        if ($type === 'scheduled' && !$A::get('allow_scheduled')) {
++            throw new \RuntimeException('Scheduled meetings are disabled by the administrator.');
++        }
++
++        $maxActive = (int) $A::get('max_active_meetings_per_user');
++        if ($maxActive > 0 && $type === 'instant') {
++            $open = Meeting::where('host_user_id', $userId)
++                ->where(fn ($q) => $q->whereIn('status', ['lobby', 'live'])->orWhere(fn ($q2) => $q2->where('type', 'instant')->where('status', 'scheduled')))
++                ->count();
++            if ($open >= $maxActive) {
++                throw new \RuntimeException('You have reached the maximum number of open meetings (' . $maxActive . '). End one first.');
++            }
++        }
++
++        $maxScheduled = (int) $A::get('max_scheduled_meetings_per_user');
++        if ($maxScheduled > 0 && $type === 'scheduled') {
++            $n = Meeting::where('host_user_id', $userId)->where('type', 'scheduled')->where('status', 'scheduled')->count();
++            if ($n >= $maxScheduled) {
++                throw new \RuntimeException('You have reached the maximum number of scheduled meetings (' . $maxScheduled . ').');
++            }
++        }
++
++        $aheadDays = (int) $A::get('max_schedule_ahead_days');
++        if ($aheadDays > 0 && $type === 'scheduled' && !empty($data['scheduled_start_at'])) {
++            try {
++                $start = \Illuminate\Support\Carbon::parse($data['scheduled_start_at']);
++                if ($start->gt(now()->addDays($aheadDays))) {
++                    throw new \RuntimeException('Meetings can only be scheduled up to ' . $aheadDays . ' days ahead.');
++                }
++            } catch (\Carbon\Exceptions\InvalidFormatException $e) {
++                // التاريخ الغلط بيتمسك في الـ validation الأصلي.
++            }
++        }
++
++        if ($A::get('require_password') && empty($data['password'])) {
++            throw new \InvalidArgumentException('A meeting password is required by the administrator.');
++        }
+     }
+ 
+     // -- قرارات الصلاحية ------------------------------------------------
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingPollService.php laravel/uip-laravel-main/app/Services/MeetingPollService.php
+--- orig/uip-laravel-main/app/Services/MeetingPollService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingPollService.php	2026-10-24 18:44:27.446634476 +0000
+@@ -27,6 +27,9 @@
+ 
+     private function requireManager(Meeting $meeting, array $actor): void
+     {
++        if (!\App\Services\MeetingAdminSettings::on('polls')) {
++            throw new \RuntimeException('Polls are disabled by the administrator.');
++        }
+         $userId = $actor['type'] === 'participant' ? (int) str_replace('user:', '', $actor['key']) : 0;
+         if (!$this->policy->canManage($meeting, $userId, $this->meetings)) {
+             throw new \RuntimeException('Only the host or co-host can manage polls.');
+@@ -80,6 +83,9 @@
+      */
+     public function vote(Meeting $meeting, array $actor, MeetingPoll $poll, array $optionIds): array
+     {
++        if (!\App\Services\MeetingAdminSettings::on('polls')) {
++            throw new \RuntimeException('Polls are disabled by the administrator.');
++        }
+         if (!$poll->isOpen()) {
+             throw new \RuntimeException('This poll is closed.');
+         }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingRecordingService.php laravel/uip-laravel-main/app/Services/MeetingRecordingService.php
+--- orig/uip-laravel-main/app/Services/MeetingRecordingService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingRecordingService.php	2026-10-24 18:44:27.446103281 +0000
+@@ -46,7 +46,7 @@
+ 
+     public function isRecordingEnabled(Meeting $meeting): bool
+     {
+-        return (bool) ($meeting->settings['recording_enabled'] ?? true);
++        return \App\Services\MeetingAdminSettings::on('recording') && (bool) ($meeting->settings['recording_enabled'] ?? true);
+     }
+ 
+     /**
+@@ -144,7 +144,7 @@
+                 $file,
+                 'meeting-recordings',
+                 $meeting->uuid,
+-                (int) config('meetings.recording_max_kb', 512000),
++                (int) \App\Services\MeetingAdminSettings::get('recording_max_kb'),
+                 self::ALLOWED_EXTENSIONS
+             );
+         } catch (\RuntimeException $e) {
+@@ -176,7 +176,7 @@
+ 
+         // The "processing" step is only a metadata confirmation (the file is already stored), so by default it runs inline:
+         // the recording becomes "completed" immediately and never depends on a queue worker being alive on the host.
+-        if (config('meetings.recording_process_inline', true)) {
++        if (\App\Services\MeetingAdminSettings::get('recording_process_inline')) {
+             $this->finalize($recording);
+             $recording->refresh();
+         } else {
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingRemoteControlService.php laravel/uip-laravel-main/app/Services/MeetingRemoteControlService.php
+--- orig/uip-laravel-main/app/Services/MeetingRemoteControlService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingRemoteControlService.php	2026-10-24 18:44:27.447399077 +0000
+@@ -39,6 +39,9 @@
+     /** @throws \InvalidArgumentException|\RuntimeException */
+     public function request(Meeting $meeting, array $controller, string $targetKey): void
+     {
++        if (!\App\Services\MeetingAdminSettings::on('remote_control')) {
++            throw new \RuntimeException('Remote control is disabled by the administrator.');
++        }
+         if ($controller['key'] === $targetKey) {
+             throw new \InvalidArgumentException('You cannot request control of your own screen.');
+         }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingService.php laravel/uip-laravel-main/app/Services/MeetingService.php
+--- orig/uip-laravel-main/app/Services/MeetingService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingService.php	2026-10-24 18:44:27.444475153 +0000
+@@ -72,10 +72,10 @@
+             'meeting_code'         => $this->meetings->generateUniqueMeetingCode(),
+             'join_token'           => $this->meetings->generateUniqueJoinToken(),
+             'password_hash'        => !empty($data['password']) ? Hash::make($data['password']) : null,
+-            'waiting_room_enabled' => $data['waiting_room_enabled'] ?? $this->policy->waitingRoomDefaultEnabled(),
+-            'allow_guests'         => $data['allow_guests'] ?? $this->policy->allowGuestsDefault(),
++            'waiting_room_enabled' => \App\Services\MeetingAdminSettings::get('force_waiting_room') ? true : ($data['waiting_room_enabled'] ?? $this->policy->waitingRoomDefaultEnabled()),
++            'allow_guests'         => \App\Services\MeetingAdminSettings::on('guests') ? ($data['allow_guests'] ?? $this->policy->allowGuestsDefault()) : false,
+             'max_participants'     => $maxParticipants,
+-            'settings'             => array_merge(config('meetings.default_settings'), $data['settings'] ?? []),
++            'settings'             => array_merge(\App\Services\MeetingAdminSettings::defaultMeetingSettings(), $data['settings'] ?? []),
+             // Round 8 (Invitations & Calendar، بند 26 — Project Integration).
+             // اتحقق منها في MeetingAttachableService جوه الكنترولر قبل
+             // ما توصل هنا؛ مفيش تحقق إضافي في الخدمة دي عمدًا.
+@@ -108,6 +108,17 @@
+             'attachable_type', 'attachable_id',
+         ]));
+ 
++        // قيود الأدمن: الـ waiting room إجباري / الضيوف مقفولين / كلمة السر إجبارية.
++        if (\App\Services\MeetingAdminSettings::get('force_waiting_room') && array_key_exists('waiting_room_enabled', $fields)) {
++            $fields['waiting_room_enabled'] = true;
++        }
++        if (!\App\Services\MeetingAdminSettings::on('guests') && array_key_exists('allow_guests', $fields)) {
++            $fields['allow_guests'] = false;
++        }
++        if (\App\Services\MeetingAdminSettings::get('require_password') && array_key_exists('password', $data) && empty($data['password'])) {
++            throw new \InvalidArgumentException('A meeting password is required by the administrator.');
++        }
++
+         if (isset($data['max_participants'])) {
+             $fields['max_participants'] = min((int) $data['max_participants'], $this->policy->maxMeshParticipants());
+         }
+@@ -217,6 +228,9 @@
+ 
+     public function invite(Meeting $meeting, int $invitedByUserId, int $invitedUserId, ?string $message = null): MeetingInvitation
+     {
++        if (!\App\Services\MeetingAdminSettings::on('invitations')) {
++            throw new \RuntimeException('Invitations are disabled by the administrator.');
++        }
+         $existing = $this->meetings->findInvitation($meeting->id, $invitedUserId);
+ 
+         $expiresAt = now()->addHours($this->policy->invitationExpiryHours());
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/app/Services/MeetingSignalingService.php laravel/uip-laravel-main/app/Services/MeetingSignalingService.php
+--- orig/uip-laravel-main/app/Services/MeetingSignalingService.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/app/Services/MeetingSignalingService.php	2026-10-24 18:44:27.448465283 +0000
+@@ -240,7 +240,7 @@
+         if (array_key_exists('screen_sharing', $data)) {
+             $wantsSharing = (bool) $data['screen_sharing'];
+             if ($wantsSharing && !$wasSharing && !$this->canShareScreen($meeting, $actor)) {
+-                throw new \RuntimeException('Screen sharing is currently disabled by the host.');
++                throw new \RuntimeException(\App\Services\MeetingAdminSettings::on('screen_share') ? 'Screen sharing is currently disabled by the host.' : 'Screen sharing is disabled by the administrator.');
+             }
+             $model->screen_sharing = $wantsSharing;
+         }
+@@ -473,7 +473,7 @@
+      */
+     private function isPresenceFresh($model): bool
+     {
+-        $ttl = (int) config('meetings.presence_stale_seconds', 90);
++        $ttl = (int) \App\Services\MeetingAdminSettings::get('presence_stale_seconds');
+         if ($ttl <= 0) {
+             return true;
+         }
+@@ -596,6 +596,10 @@
+     /** بند 11 — Raise Hand / Lower Hand. */
+     public function raiseHand(Meeting $meeting, array $actor, bool $raised): array
+     {
++        if ($raised && !\App\Services\MeetingAdminSettings::on('hand_raise')) {
++            throw new \RuntimeException('Raising a hand is disabled by the administrator.');
++        }
++
+         /** @var MeetingParticipant|MeetingJoinRequest $model */
+         $model = $actor['model'];
+         $model->hand_raised = $raised;
+@@ -626,6 +630,10 @@
+      */
+     public function sendReaction(Meeting $meeting, array $actor, string $type, ?string $emoji = null): void
+     {
++        if (!\App\Services\MeetingAdminSettings::on('reactions')) {
++            throw new \RuntimeException('Reactions are disabled by the administrator.');
++        }
++
+         $knownTypes = ['thumbs_up', 'applause', 'laugh', 'heart', 'celebrate', 'other'];
+         if (!in_array($type, $knownTypes, true)) {
+             throw new \InvalidArgumentException('Invalid reaction type.');
+@@ -646,6 +654,11 @@
+      */
+     public function canShareScreen(Meeting $meeting, array $actor): bool
+     {
++        // مفتاح الأدمن العام بيغلب كل حاجة (حتى الهوست).
++        if (!\App\Services\MeetingAdminSettings::on('screen_share')) {
++            return false;
++        }
++
+         if (in_array($actor['role'], ['host', 'co_host'], true)) {
+             return true;
+         }
+diff -ruN -x vendor -x storage -x .git orig/uip-laravel-main/routes/api.php laravel/uip-laravel-main/routes/api.php
+--- orig/uip-laravel-main/routes/api.php	2026-10-24 18:34:02.000000000 +0000
++++ laravel/uip-laravel-main/routes/api.php	2026-10-24 18:46:35.066359269 +0000
+@@ -686,6 +686,9 @@
+     // أي مستخدم مسجّل (أي uip_role) يقدر يستضيف/ينضم لاجتماع — مفيش قيد
+     // دور هنا زي exam-system فوق. meetings/invitations لازم تتسجل قبل
+     // meetings/{uuid} العام عشان "invitations" ميتفسرش كـ {uuid}.
++    // مفاتيح الميزات (Admin → Meetings Control). public + قبل meetings/{uuid} عشان "features" ميتفسرش uuid.
++    Route::get('meetings/features', [MeetingsApiController::class, 'features'])->middleware('uip.auth.optional');
++
+     Route::prefix('meetings')->middleware('uip.auth')->group(function () {
+         Route::get('invitations', [MeetingsApiController::class, 'myInvitations']);
+ 
+@@ -992,6 +995,40 @@
+     // إحصائيات بس، مفيش محتوى اجتماع خاص.
+     Route::prefix('admin/meetings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+         Route::get('monitoring', [MeetingsAnalyticsApiController::class, 'platformMonitoring']);
++
++        // Admin → Meetings Control (تحكم كامل في نظام الاجتماعات). راجع docblock AdminMeetingsControlApiController.
++        Route::prefix('control')->group(function () {
++            $c = \App\Http\Controllers\Api\AdminMeetingsControlApiController::class;
++            Route::get('overview', [$c, 'overview']);
++            Route::get('settings', [$c, 'settings']);
++            Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
++            Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
++
++            Route::get('blocked-users', [$c, 'blockedUsers']);
++            Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:60,1');
++            Route::delete('blocked-users/{id}', [$c, 'unblockUser'])->where('id', '[0-9]+');
++            Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
++
++            Route::get('audit', [$c, 'audit']);
++            Route::post('emergency/end-all-live', [$c, 'endAllLive'])->middleware('throttle:5,1');
++
++            Route::get('meetings', [$c, 'meetings']);
++            Route::prefix('meetings/{uuid}')->where(['uuid' => '[0-9a-fA-F-]{36}'])->group(function () use ($c) {
++                Route::get('/', [$c, 'show']);
++                Route::patch('/', [$c, 'update']);
++                Route::delete('/', [$c, 'destroy']);
++                Route::post('end', [$c, 'end']);
++                Route::post('cancel', [$c, 'cancel']);
++                Route::post('restore', [$c, 'restore']);
++                Route::post('lock', [$c, 'lock']);
++                Route::post('screen-share-lock', [$c, 'screenShareLock']);
++                Route::post('regenerate-link', [$c, 'regenerateLink']);
++                Route::post('announce', [$c, 'announce'])->middleware('throttle:20,1');
++                Route::post('participants/action', [$c, 'participantAction'])->middleware('throttle:120,1');
++                Route::delete('files/{fileId}', [$c, 'deleteFile'])->where('fileId', '[0-9]+');
++                Route::delete('recordings/{recordingId}', [$c, 'deleteRecording'])->where('recordingId', '[0-9]+');
++            });
++        });
+     });
+ 
+     // بند 25 batch 2 — دليل Universities

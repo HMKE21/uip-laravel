@@ -46,7 +46,7 @@ class MeetingRecordingService
 
     public function isRecordingEnabled(Meeting $meeting): bool
     {
-        return (bool) ($meeting->settings['recording_enabled'] ?? true);
+        return \App\Services\MeetingAdminSettings::on('recording') && (bool) ($meeting->settings['recording_enabled'] ?? true);
     }
 
     /**
@@ -144,7 +144,7 @@ class MeetingRecordingService
                 $file,
                 'meeting-recordings',
                 $meeting->uuid,
-                (int) config('meetings.recording_max_kb', 512000),
+                (int) \App\Services\MeetingAdminSettings::get('recording_max_kb'),
                 self::ALLOWED_EXTENSIONS
             );
         } catch (\RuntimeException $e) {
@@ -176,7 +176,7 @@ class MeetingRecordingService
 
         // The "processing" step is only a metadata confirmation (the file is already stored), so by default it runs inline:
         // the recording becomes "completed" immediately and never depends on a queue worker being alive on the host.
-        if (config('meetings.recording_process_inline', true)) {
+        if (\App\Services\MeetingAdminSettings::get('recording_process_inline')) {
             $this->finalize($recording);
             $recording->refresh();
         } else {

@@ -33,7 +33,7 @@ class MeetingFileService
 
     public function isFileSharingEnabled(Meeting $meeting): bool
     {
-        return (bool) ($meeting->settings['allow_file_sharing'] ?? true);
+        return \App\Services\MeetingAdminSettings::on('files') && (bool) ($meeting->settings['allow_file_sharing'] ?? true);
     }
 
     /** @return MeetingFile[] */

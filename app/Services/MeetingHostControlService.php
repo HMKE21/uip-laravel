@@ -52,9 +52,23 @@ class MeetingHostControlService
     ) {
     }
 
+    /** Admin → Meetings Control: نسخة من الخدمة بتتخطى فحص هوست/co-host، والأحداث بتظهر باسم "Administrator". */
+    private bool $adminMode = false;
+
+    public function asAdmin(): static
+    {
+        $clone = clone $this;
+        $clone->adminMode = true;
+
+        return $clone;
+    }
+
     /** @throws \RuntimeException actor مش هوست ولا co-host. */
     private function requireManager(Meeting $meeting, int $actorUserId): void
     {
+        if ($this->adminMode) {
+            return;
+        }
         if (!$this->policy->canManage($meeting, $actorUserId, $this->meetings)) {
             throw new \RuntimeException('Only the host or co-host can perform this action.');
         }
@@ -63,6 +77,9 @@ class MeetingHostControlService
     /** @throws \RuntimeException actor مش الهوست الأساسي. */
     private function requirePrimaryHost(Meeting $meeting, int $actorUserId): void
     {
+        if ($this->adminMode) {
+            return;
+        }
         if (!$this->policy->isHost($meeting, $actorUserId)) {
             throw new \RuntimeException('Only the host can perform this action.');
         }
@@ -71,6 +88,10 @@ class MeetingHostControlService
     /** @return array{key:string, display_name:string} هوية الـ actor (الهوست/co-host) نفسه لغرض الأحداث/رسائل النظام. */
     private function actorIdentity(Meeting $meeting, int $userId): array
     {
+        if ($this->adminMode) {
+            return ['key' => 'admin:' . $userId, 'display_name' => 'Administrator'];
+        }
+
         $participant = $this->meetings->findParticipant($meeting->id, $userId);
 
         return [
@@ -185,7 +206,7 @@ class MeetingHostControlService
         if ($target['role'] === 'host') {
             throw new \RuntimeException('The host cannot be removed from the meeting.');
         }
-        if ($target['role'] === 'co_host' && !$this->policy->isHost($meeting, $actorUserId)) {
+        if ($target['role'] === 'co_host' && !$this->adminMode && !$this->policy->isHost($meeting, $actorUserId)) {
             throw new \RuntimeException('Only the host can remove a moderator.');
         }
 
@@ -282,7 +303,7 @@ class MeetingHostControlService
         $newHostParticipant->role = 'host';
         $newHostParticipant->save();
 
-        $oldHostParticipant = $this->meetings->findParticipant($meeting->id, $actorUserId);
+        $oldHostParticipant = $this->meetings->findParticipant($meeting->id, $this->adminMode ? (int) $meeting->host_user_id : $actorUserId);
         if ($oldHostParticipant) {
             $oldHostParticipant->role = 'co_host';
             $oldHostParticipant->save();
@@ -291,7 +312,7 @@ class MeetingHostControlService
         $meeting->host_user_id = $newHostParticipant->user_id;
         $meeting->save();
 
-        event(new MeetingHostTransferred($meeting->uuid, 'user:' . $actorUserId, $targetKey, $target['display_name']));
+        event(new MeetingHostTransferred($meeting->uuid, $this->adminMode ? 'admin:' . $actorUserId : 'user:' . $actorUserId, $targetKey, $target['display_name']));
         $this->chat?->postSystemMessage($meeting, $target['display_name'] . ' is now the host');
     }
 }
