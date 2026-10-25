@@ -49,6 +49,45 @@ class MediaProbeService
     }
 
     /**
+     * تسجيلات الصوت من MediaRecorder (webm/ogg) بتتخزن من غير مدة ولا فهرس seek: ffprobe بيرجّع N/A والمتصفح عند المستلم
+     * بيضطر ينزّل الملف كله ويعمل seek وهمي عشان يعرف طوله، فالتشغيل بيتقطع/بيتنطط. هنا بنعيد تغليف الصوت بدون أي
+     * إعادة ترميز (-c:a copy، ثواني وبدون فقد جودة) فيطلع الملف بمدة وفهرس صحيحين، وبنرجّع المدة بالثواني.
+     * Fail-open: لو ffmpeg مش موجود أو فشل، الملف الأصلي بيفضل زي ما هو وبنرجّع null.
+     */
+    public function normalizeAudio(string $absolutePath): ?int
+    {
+        if (!is_file($absolutePath) || !$this->available()) {
+            return null;
+        }
+        $ext = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION));
+        $format = ['webm' => 'webm', 'weba' => 'webm', 'ogg' => 'ogg', 'opus' => 'ogg'][$ext] ?? null;
+        if ($format === null) {
+            return $this->duration($absolutePath);
+        }
+
+        $tmp = $absolutePath . '.fix.' . $ext;
+        $command = sprintf(
+            'timeout %d %s -v error -y -i %s -vn -c:a copy -f %s %s 2>&1',
+            max(1, $this->timeout()),
+            escapeshellcmd($this->ffmpegBinary()),
+            escapeshellarg($absolutePath),
+            $format,
+            escapeshellarg($tmp)
+        );
+        exec($command, $output, $exitCode);
+
+        if ($exitCode === 0 && is_file($tmp) && filesize($tmp) > 0 && $this->duration($tmp) !== null) {
+            @rename($tmp, $absolutePath);
+            clearstatcache(true, $absolutePath);
+        } else {
+            @unlink($tmp);
+            Log::warning('ffmpeg audio remux failed for attachment', ['file' => basename($absolutePath), 'output' => implode(' | ', $output)]);
+        }
+
+        return $this->duration($absolutePath);
+    }
+
+    /**
      * بيسحب فريم JPEG واحد من فيديو عشان يستخدم كصورة مصغّرة له في
      * المعرض. بيرجع مسار الصورة نسبي لـ public/ (نفس اتفاق
      * FileUploadService::store()'s stored_path)، أو null على أي فشل.

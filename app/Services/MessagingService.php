@@ -709,6 +709,19 @@ class MessagingService
             }
         }
 
+        // صوت (رسائل صوتية): إعادة تغليف بدون إعادة ترميز عشان الملف يبقى له مدة وفهرس seek — من غيرهم المستلم كان
+        // بينزّل الملف كله ويعمل seek وهمي لكل رسالة صوتية، وده اللي بيخلي التشغيل تقيل ومتقطع.
+        $storedSize = $stored['size_bytes'];
+        if ($kind === 'audio') {
+            try {
+                $duration = app(\App\Services\MediaProbeService::class)->normalizeAudio($absolutePath);
+                clearstatcache(true, $absolutePath);
+                $storedSize = @filesize($absolutePath) ?: $storedSize;
+            } catch (\Throwable $e) {
+                \Log::warning('Audio normalize failed for chat attachment', ['error' => $e->getMessage()]);
+            }
+        }
+
         // "مرة واحدة / تايمر" مسموحة للصور والفيديو بس.
         $viewMode = in_array($viewMode, ['once', 'timer'], true) && in_array($kind, ['image', 'video'], true) ? $viewMode : null;
         $viewSeconds = $viewMode === 'timer' ? max(1, min(60, $viewSeconds ?: 10)) : null;
@@ -724,7 +737,7 @@ class MessagingService
             'original_name'    => $stored['original_name'],
             'mime_type'        => $stored['mime_type'],
             'extension'        => $stored['extension'],
-            'size_bytes'       => $stored['size_bytes'],
+            'size_bytes'       => $storedSize,
             'width'            => $width,
             'height'           => $height,
             'duration_seconds' => $duration,
