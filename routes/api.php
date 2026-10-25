@@ -85,6 +85,7 @@ use App\Http\Controllers\Api\ConversationTrashController;
 use App\Http\Controllers\Api\AccountPrivacyApiController;
 use App\Http\Controllers\Api\ChatWallpapersApiController;
 use App\Http\Controllers\Api\DesktopSettingsApiController;
+use App\Http\Controllers\Api\DesktopVirtualModeApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
 use App\Http\Controllers\Api\AiCodeAssistController;
@@ -1973,6 +1974,9 @@ Route::prefix('v1')->group(function () {
     Route::prefix('desktop')->middleware('uip.auth')->group(function () {
         // هل "جهازي" مفتوح للحساب ده؟ (مفتاح الأدمن + الدور + حالة المستخدم). بيرد 200 دايمًا والواجهة بتقرر تعرض الشاشة أو رسالة الإغلاق.
         Route::get('/access', [DesktopSettingsApiController::class, 'access'])->middleware('throttle:120,1');
+        // "الوضع الافتراضي" (UIP OS): اختيار الطالب يشتغل على المنصة كلها من جوّه سطح المكتب. برّه uip.drive عن قصد (راجع الكنترولر).
+        Route::get('/virtual-mode', [DesktopVirtualModeApiController::class, 'show'])->middleware('throttle:120,1');
+        Route::put('/virtual-mode', [DesktopVirtualModeApiController::class, 'update'])->middleware('throttle:60,1');
         Route::middleware('uip.drive')->group(function () {
         Route::get('/settings', [DesktopSettingsApiController::class, 'show'])->middleware('throttle:120,1');
         Route::put('/settings', [DesktopSettingsApiController::class, 'update'])->middleware('throttle:120,1');
