@@ -313,6 +313,12 @@ class MessagingService
 
         $this->assertNotRateLimited($userId);
 
+        // رسالة "مرة واحدة / تايمر" ممنوع تتحوّل (forward) — وإلا الحماية تبقى بلا معنى.
+        if (!empty($options['forwarded_from_id'])
+            && DB::table('message_attachments')->where('message_id', (int) $options['forwarded_from_id'])->whereNotNull('view_mode')->exists()) {
+            throw new \RuntimeException('View-once media cannot be forwarded.');
+        }
+
         // عزل الضوضاء (اختياري لكل ملف): بنعالج الملفات المؤقتة قبل الـ transaction عشان ffmpeg ما يمسكش lock على الرسالة.
         // $options['denoise'] = مصفوفة flags بنفس ترتيب attachments. الفشل = الملف الأصلي بيتبعت (fail-open) والـ client بيتبلّغ.
         $noise = ['requested' => 0, 'applied' => 0, 'reason' => null];
@@ -360,8 +366,8 @@ class MessagingService
                 if (count($options['attachments']) > $maxAttachments) {
                     throw new \RuntimeException("You can attach at most {$maxAttachments} files per message.");
                 }
-                foreach ($options['attachments'] as $file) {
-                    $this->storeAttachment((int) $message->id, $userId, $conversationId, $file);
+                foreach (array_values($options['attachments']) as $i => $file) {
+                    $this->storeAttachment((int) $message->id, $userId, $conversationId, $file, $options['view_modes'][$i] ?? null, (int) ($options['view_seconds'][$i] ?? 0));
                 }
             }
 
@@ -619,6 +625,27 @@ class MessagingService
 
     private function shapeAttachment(array $a): array
     {
+        // View-once / timer media: the real file URL is NEVER sent to the client. It can only be fetched once, through
+        // GET /messaging/attachments/{id}/view-once (which deletes the file from the server right after sending it).
+        if (!empty($a['view_mode'])) {
+            return [
+                'id'               => (int) $a['id'],
+                'kind'             => $a['kind'],
+                'url'              => null,
+                'thumbnail_url'    => null,
+                'original_name'    => $a['kind'] === 'video' ? 'view-once-video' : 'view-once-photo',
+                'mime_type'        => null,
+                'extension'        => null,
+                'size_bytes'       => 0,
+                'width'            => null,
+                'height'           => null,
+                'duration_seconds' => null,
+                'waveform'         => null,
+                'view_mode'        => $a['view_mode'],
+                'view_seconds'     => $a['view_seconds'] !== null ? (int) $a['view_seconds'] : null,
+                'consumed'         => !empty($a['viewed_at']),
+            ];
+        }
         return [
             'id'               => (int) $a['id'],
             'kind'             => $a['kind'],
@@ -659,7 +686,7 @@ class MessagingService
     }
 
     /** بيخزّن ملف واحد مرفوع (UploadedFile) عبر FileUploadService (فئة 'messages')، وبيسجّله كصف message_attachments. */
-    private function storeAttachment(int $messageId, $uploaderId, int $conversationId, UploadedFile $file): void
+    private function storeAttachment(int $messageId, $uploaderId, int $conversationId, UploadedFile $file, $viewMode = null, int $viewSeconds = 0): void
     {
         // ملف اترفع بالأجزاء له سقفه الخاص (messaging.chunked.max_bytes) بدل سقف السياسة العام.
         $absoluteMaxKb = $file instanceof \App\Support\ChunkedUploadedFile ? (int) floor((int) config('messaging.chunked.max_bytes') / 1024) : null;
@@ -682,7 +709,13 @@ class MessagingService
             }
         }
 
+        // "مرة واحدة / تايمر" مسموحة للصور والفيديو بس.
+        $viewMode = in_array($viewMode, ['once', 'timer'], true) && in_array($kind, ['image', 'video'], true) ? $viewMode : null;
+        $viewSeconds = $viewMode === 'timer' ? max(1, min(60, $viewSeconds ?: 10)) : null;
+
         DB::table('message_attachments')->insert([
+            'view_mode'        => $viewMode,
+            'view_seconds'     => $viewSeconds,
             'message_id'       => $messageId,
             'uploader_id'      => $uploaderId,
             'kind'             => $kind,
@@ -1555,6 +1588,40 @@ class MessagingService
             return null;
         }
         return (array) $row;
+    }
+
+    /**
+     * "مرة واحدة / تايمر": بيحجز المرفق لأول مستلم يفتحه (UPDATE ذرّي) ويرجّع بياناته عشان الكنترولر يبعت الملف ويمسحه.
+     * المرسل نفسه مايقدرش يفتحه، ولا أي حد بعد أول فتح.
+     * @return array|null null = مش موجود/مش مسموح، ['row'=>..., 'gone'=>true] لو اتفتح قبل كده
+     */
+    public function claimViewOnce(int $attachmentId, $userId): ?array
+    {
+        $row = $this->attachmentAuthorized($attachmentId, $userId);
+        if (!$row || empty($row['view_mode'])) {
+            return null;
+        }
+        if ((string) $row['uploader_id'] === (string) $userId) {
+            return null; // المرسل مالوش فتح
+        }
+        $claimed = DB::table('message_attachments')
+            ->where('id', $attachmentId)
+            ->whereNull('viewed_at')
+            ->update(['viewed_at' => now(), 'viewed_by' => $userId]);
+        if ($claimed !== 1) {
+            return ['row' => $row, 'gone' => true];
+        }
+        return ['row' => $row, 'gone' => false];
+    }
+
+    /** بيمسح ملفات مرفق "مرة واحدة" من السيرفر بعد ما اتسلّم (الصف بيفضل علشان يظهر "اتفتحت"). */
+    public function purgeViewOnceFiles(array $row): void
+    {
+        foreach (['stored_path', 'thumbnail_path'] as $k) {
+            if (!empty($row[$k])) {
+                $this->uploads->delete($row[$k]);
+            }
+        }
     }
 
     /** حذف مرفق — صاحب الرسالة أو owner/admin بس. */

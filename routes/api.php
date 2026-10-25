@@ -2110,6 +2110,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/presence/lookup', [MessagingController::class, 'presence']);
 
         Route::get('/attachments/{id}/download', [MessagingController::class, 'downloadAttachment']);
+        Route::get('/attachments/{id}/view-once', [MessagingController::class, 'viewOnceAttachment'])->where('id', '[0-9]+');
         Route::delete('/attachments/{id}', [MessagingController::class, 'deleteAttachment']);
     });
 

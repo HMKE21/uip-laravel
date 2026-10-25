@@ -192,6 +192,9 @@ class MessagingController extends Controller
                 'mentioned_user_ids'  => (array) $request->input('mentioned_user_ids', []),
                 'attachments'         => $files,
                 // denoise[] = '1'/'0' لكل ملف بنفس ترتيب attachments[] (عزل الضوضاء بعد الرفع).
+                // view_mode[] = 'once'|'timer'|'' و view_seconds[] لكل ملف بنفس ترتيب attachments[] (صور/فيديو بس).
+                'view_modes'          => array_values((array) $request->input('view_mode', [])),
+                'view_seconds'        => array_values((array) $request->input('view_seconds', [])),
                 'denoise'             => array_map(fn ($v) => filter_var($v, FILTER_VALIDATE_BOOLEAN), array_values((array) $request->input('denoise', []))),
             ]);
             foreach ($uploadedIds as $uploadedId) {
@@ -422,6 +425,37 @@ class MessagingController extends Controller
         }
 
         return response()->download($path, $row['original_name'], ['X-Content-Type-Options' => 'nosniff']);
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/view-once  (header X-View-Claim: 1)
+     * بيسلّم ملف "مرة واحدة / تايمر" لأول مستلم بس وبعدين يمسحه من السيرفر. التايمر بيتعدّ في الواجهة (X-View-Seconds).
+     */
+    public function viewOnceAttachment(Request $request, $id)
+    {
+        if ($request->header('X-View-Claim') !== '1') {
+            return $this->apiError('Bad request.', null, 400); // يمنع الـ prefetch / فتح الرابط من المتصفح بالغلط
+        }
+        $claim = $this->messaging->claimViewOnce((int) $id, $this->uid($request));
+        if (!$claim) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        if ($claim['gone']) {
+            return $this->apiError('This media was already opened and is no longer available.', ['consumed' => true], 410);
+        }
+        $row = $claim['row'];
+        $path = public_path(ltrim((string) $row['stored_path'], '/'));
+        if (!is_file($path)) {
+            return $this->apiError('This media is no longer available.', ['consumed' => true], 410);
+        }
+        $this->messaging->purgeViewOnceFiles(['thumbnail_path' => $row['thumbnail_path'] ?? null]);
+        return response()->download($path, 'view-once.' . ($row['extension'] ?: 'bin'), [
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'no-store, private',
+            'X-View-Seconds'         => (string) ((int) ($row['view_seconds'] ?? 0)),
+            'X-View-Mode'            => (string) $row['view_mode'],
+            'Content-Type'           => (string) ($row['mime_type'] ?: 'application/octet-stream'),
+        ])->deleteFileAfterSend(true);
     }
 
     /** DELETE /api/v1/messaging/attachments/{id} */

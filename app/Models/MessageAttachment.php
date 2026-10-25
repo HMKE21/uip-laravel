@@ -27,6 +27,10 @@ class MessageAttachment extends Model
         'duration_seconds',
         'waveform_json',
         'is_encrypted',
+        'view_mode',
+        'view_seconds',
+        'viewed_at',
+        'viewed_by',
     ];
 
     protected $casts = [
