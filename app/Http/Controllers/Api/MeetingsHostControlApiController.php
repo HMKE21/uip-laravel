@@ -92,6 +92,83 @@ class MeetingsHostControlApiController extends Controller
         });
     }
 
+    /** Live chat policy: { chat_enabled?: bool, chat_history?: 'keep'|'hide' }. */
+    public function chatSettings(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'chat_enabled' => 'sometimes|boolean',
+            'chat_history' => 'sometimes|in:keep,hide',
+        ]);
+        if ($validator->fails()) {
+            return $this->apiError($validator->errors()->first(), $validator->errors()->toArray(), 422);
+        }
+
+        return $this->handle(function () use ($request, $meeting) {
+            $state = $this->hostControl->setChatSettings($meeting, $this->userId($request), $request->only(['chat_enabled', 'chat_history']));
+            $this->auditLog->record($this->userId($request), 'meetings.chat_settings_changed', 'Meeting', $meeting->id);
+
+            return $this->apiSuccess($state, 'Chat settings updated successfully.');
+        });
+    }
+
+    /** Silence / un-silence one person in the chat. */
+    public function chatMute(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        $validator = Validator::make($request->all(), $this->targetKeyValidator(['muted' => 'required|boolean']));
+        if ($validator->fails()) {
+            return $this->apiError($validator->errors()->first(), $validator->errors()->toArray(), 422);
+        }
+
+        return $this->handle(function () use ($request, $meeting) {
+            $state = $this->hostControl->setChatMuted($meeting, $this->userId($request), $request->input('participant_key'), (bool) $request->input('muted'));
+            $this->auditLog->record($this->userId($request), 'meetings.chat_participant_muted', 'Meeting', $meeting->id);
+
+            return $this->apiSuccess($state, 'Chat permission updated successfully.');
+        });
+    }
+
+    /** Wipe the public chat for everyone. */
+    public function chatClear(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        return $this->handle(function () use ($request, $meeting) {
+            $count = $this->hostControl->clearChat($meeting, $this->userId($request));
+            $this->auditLog->record($this->userId($request), 'meetings.chat_cleared', 'Meeting', $meeting->id);
+
+            return $this->apiSuccess(['deleted' => $count], 'Chat cleared successfully.');
+        });
+    }
+
+    /** Mute every participant except moderators. */
+    public function muteAll(Request $request, string $uuid)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        return $this->handle(function () use ($request, $meeting) {
+            $count = $this->hostControl->muteAll($meeting, $this->userId($request));
+            $this->auditLog->record($this->userId($request), 'meetings.all_muted', 'Meeting', $meeting->id);
+
+            return $this->apiSuccess(['muted' => $count], 'Everyone has been muted.');
+        });
+    }
+
     /** بند 5/10 — "Mute participant". */
     public function mute(Request $request, string $uuid)
     {

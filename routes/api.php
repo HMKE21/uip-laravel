@@ -771,6 +771,11 @@ Route::prefix('v1')->group(function () {
         Route::post('{uuid}/host-controls/promote', [MeetingsHostControlApiController::class, 'promote']);
         Route::post('{uuid}/host-controls/demote', [MeetingsHostControlApiController::class, 'demote']);
         Route::post('{uuid}/host-controls/transfer-host', [MeetingsHostControlApiController::class, 'transferHost']);
+        // Chat moderation + mute everyone.
+        Route::post('{uuid}/host-controls/chat-settings', [MeetingsHostControlApiController::class, 'chatSettings']);
+        Route::post('{uuid}/host-controls/chat-mute', [MeetingsHostControlApiController::class, 'chatMute']);
+        Route::post('{uuid}/host-controls/chat-clear', [MeetingsHostControlApiController::class, 'chatClear']);
+        Route::post('{uuid}/host-controls/mute-all', [MeetingsHostControlApiController::class, 'muteAll']);
 
         // Round 7 (Collaboration Extras، بند 17 — Attendance Tracking).
         // uip.auth العادي (زي host-controls) — "authorized users"
@@ -846,6 +851,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/', [MeetingsChatApiController::class, 'index']);
         Route::post('/', [MeetingsChatApiController::class, 'store']);
         Route::post('{messageId}/react', [MeetingsChatApiController::class, 'react'])->where('messageId', '[0-9]+');
+        Route::delete('{messageId}', [MeetingsChatApiController::class, 'destroy'])->where('messageId', '[0-9]+');
     });
 
     // Round 7 (Collaboration Extras، بند 19 — File Sharing). زي مجموعة

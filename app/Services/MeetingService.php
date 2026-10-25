@@ -75,7 +75,7 @@ class MeetingService
             'waiting_room_enabled' => \App\Services\MeetingAdminSettings::get('force_waiting_room') ? true : ($data['waiting_room_enabled'] ?? $this->policy->waitingRoomDefaultEnabled()),
             'allow_guests'         => \App\Services\MeetingAdminSettings::on('guests') ? ($data['allow_guests'] ?? $this->policy->allowGuestsDefault()) : false,
             'max_participants'     => $maxParticipants,
-            'settings'             => array_merge(\App\Services\MeetingAdminSettings::defaultMeetingSettings(), $data['settings'] ?? []),
+            'settings'             => self::cleanSettings(array_merge(\App\Services\MeetingAdminSettings::defaultMeetingSettings(), $data['settings'] ?? [])),
             // Round 8 (Invitations & Calendar، بند 26 — Project Integration).
             // اتحقق منها في MeetingAttachableService جوه الكنترولر قبل
             // ما توصل هنا؛ مفيش تحقق إضافي في الخدمة دي عمدًا.
@@ -128,7 +128,7 @@ class MeetingService
         }
 
         if (isset($fields['settings'])) {
-            $fields['settings'] = array_merge($meeting->settings ?? [], $fields['settings']);
+            $fields['settings'] = self::cleanSettings(array_merge($meeting->settings ?? [], $fields['settings']));
         }
 
         // بند 12 — "Meeting rescheduled": بنقارن قبل ما نحفظ، مش بعده
@@ -427,5 +427,16 @@ class MeetingService
         }
 
         return $invitation;
+    }
+
+    /** Host-chosen chat history policy must be exactly "keep" or "hide"; the muted list is only ever written by host controls. */
+    private static function cleanSettings(array $settings): array
+    {
+        $settings['chat_history'] = ($settings['chat_history'] ?? 'keep') === 'hide' ? 'hide' : 'keep';
+        if (isset($settings['chat_muted_keys']) && !is_array($settings['chat_muted_keys'])) {
+            unset($settings['chat_muted_keys']);
+        }
+
+        return $settings;
     }
 }

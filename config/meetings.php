@@ -63,6 +63,8 @@ return [
         'mute_on_entry'   => false,
         'camera_on_entry' => true,
         'allow_chat'      => true,
+        // What people who join LATER can read: 'keep' = the whole chat so far, 'hide' = only what is said after they enter.
+        'chat_history'    => 'keep',
         // Round 7 (بند 19 — File Sharing). زي allow_chat بالظبط —
         // MeetingFileService::isFileSharingEnabled() بيقراها.
         'allow_file_sharing' => true,

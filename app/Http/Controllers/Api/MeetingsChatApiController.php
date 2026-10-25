@@ -75,7 +75,11 @@ class MeetingsChatApiController extends Controller
         $afterId = $request->filled('after_id') ? (int) $request->input('after_id') : null;
 
         return $this->apiSuccess(
-            ['messages' => $this->chat->listFor($meeting, $actor, $afterId)],
+            [
+                'messages' => $this->chat->listFor($meeting, $actor, $afterId),
+                // live chat policy (on/off, history for late joiners, who is silenced) so the room starts in the right state
+                'settings' => $this->chat->chatSettings($meeting),
+            ],
             'Messages retrieved successfully.'
         );
     }
@@ -145,5 +149,29 @@ class MeetingsChatApiController extends Controller
         }
 
         return $this->apiSuccess($result, 'Reaction updated successfully.');
+    }
+
+    /** Delete a message for everyone: its sender, or a host/co-host (public messages). */
+    public function destroy(Request $request, string $uuid, string $messageId)
+    {
+        $meeting = $this->findMeeting($uuid);
+        if (!$meeting) {
+            return $this->apiError('Meeting not found.', null, 404);
+        }
+
+        $actor = $this->resolveActorOr403($request, $meeting);
+        if ($actor instanceof \Illuminate\Http\JsonResponse) {
+            return $actor;
+        }
+
+        try {
+            $result = $this->chat->deleteMessage($meeting, $actor, (int) $messageId);
+        } catch (\RuntimeException $e) {
+            $status = str_contains($e->getMessage(), 'not found') ? 404 : 403;
+
+            return $this->apiError($e->getMessage(), null, $status);
+        }
+
+        return $this->apiSuccess($result, 'Message deleted successfully.');
     }
 }

@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Events\Meetings\ChatSettingsChanged;
 use App\Events\Meetings\MeetingHostTransferred;
+use App\Events\Meetings\MeetingMuteAll;
 use App\Events\Meetings\MeetingLockChanged;
 use App\Events\Meetings\ParticipantCameraDisabledByHost;
 use App\Events\Meetings\ParticipantMediaStateChanged;
@@ -187,6 +189,127 @@ class MeetingHostControlService
         event(new ParticipantCameraDisabledByHost($meeting->uuid, $targetKey, $actor['key'], $actor['display_name']));
 
         return ['camera_enabled' => false];
+    }
+
+    // -----------------------------------------------------------------
+    // Chat moderation + "mute everyone"
+    // -----------------------------------------------------------------
+
+    /**
+     * Live chat policy. Any of: chat_enabled (bool), chat_history ('keep'|'hide' — what people who join LATER can read).
+     *
+     * @param array{chat_enabled?:bool, chat_history?:string} $changes
+     * @return array{chat_enabled:bool, chat_history:string, muted_keys:array<int,string>}
+     */
+    public function setChatSettings(Meeting $meeting, int $actorUserId, array $changes): array
+    {
+        $this->requireManager($meeting, $actorUserId);
+        $actor = $this->actorIdentity($meeting, $actorUserId);
+
+        $settings = $meeting->settings ?? [];
+        $notes = [];
+
+        if (array_key_exists('chat_enabled', $changes) && $changes['chat_enabled'] !== null) {
+            $on = (bool) $changes['chat_enabled'];
+            if ($on !== (bool) ($settings['allow_chat'] ?? true)) {
+                $notes[] = $on ? 'turned the chat on' : 'turned the chat off';
+            }
+            $settings['allow_chat'] = $on;
+        }
+        if (array_key_exists('chat_history', $changes) && $changes['chat_history'] !== null) {
+            if (!in_array($changes['chat_history'], ['keep', 'hide'], true)) {
+                throw new \RuntimeException('Chat history must be "keep" or "hide".');
+            }
+            if ($changes['chat_history'] !== ($settings['chat_history'] ?? 'keep')) {
+                $notes[] = $changes['chat_history'] === 'hide'
+                    ? 'hid earlier chat from people who join from now on'
+                    : 'let people who join from now on read earlier chat';
+            }
+            $settings['chat_history'] = $changes['chat_history'];
+        }
+
+        $meeting->settings = $settings;
+        $meeting->save();
+
+        $state = $this->chat ? $this->chat->chatSettings($meeting) : [
+            'chat_enabled' => (bool) ($settings['allow_chat'] ?? true),
+            'chat_history' => $settings['chat_history'] ?? 'keep',
+            'muted_keys'   => (array) ($settings['chat_muted_keys'] ?? []),
+        ];
+        event(new ChatSettingsChanged($meeting->uuid, $state));
+
+        foreach ($notes as $note) {
+            $this->chat?->postSystemMessage($meeting, $actor['display_name'] . ' ' . $note);
+        }
+
+        return $state;
+    }
+
+    /**
+     * Silence (or un-silence) one person in the chat. They stay in the meeting and keep reading; they just can't post.
+     *
+     * @throws \RuntimeException target is a host/co-host, or isn't in the meeting
+     */
+    public function setChatMuted(Meeting $meeting, int $actorUserId, string $targetKey, bool $muted): array
+    {
+        $this->requireManager($meeting, $actorUserId);
+        $target = $this->signaling->resolveTargetActor($meeting, $targetKey);
+
+        if ($target['type'] === 'participant'
+            && $this->policy->canManage($meeting, (int) $target['model']->user_id, $this->meetings)) {
+            throw new \RuntimeException('You cannot restrict the host or a co-host.');
+        }
+
+        $settings = $meeting->settings ?? [];
+        $keys = array_values(array_filter((array) ($settings['chat_muted_keys'] ?? []), 'is_string'));
+        $keys = $muted ? array_values(array_unique(array_merge($keys, [$targetKey]))) : array_values(array_diff($keys, [$targetKey]));
+        $settings['chat_muted_keys'] = $keys;
+        $meeting->settings = $settings;
+        $meeting->save();
+
+        $state = $this->chat ? $this->chat->chatSettings($meeting) : [
+            'chat_enabled' => (bool) ($settings['allow_chat'] ?? true),
+            'chat_history' => $settings['chat_history'] ?? 'keep',
+            'muted_keys'   => $keys,
+        ];
+        event(new ChatSettingsChanged($meeting->uuid, $state));
+
+        return $state;
+    }
+
+    /** Wipe the public chat for everybody. */
+    public function clearChat(Meeting $meeting, int $actorUserId): int
+    {
+        $this->requireManager($meeting, $actorUserId);
+        $actor = $this->actorIdentity($meeting, $actorUserId);
+
+        if (!$this->chat) {
+            throw new \RuntimeException('Chat is not available.');
+        }
+        $count = $this->chat->clearPublic($meeting, $actor['display_name']);
+        $this->chat->postSystemMessage($meeting, $actor['display_name'] . ' cleared the chat');
+
+        return $count;
+    }
+
+    /** Mute every participant except the host/co-hosts. Each client then switches its own microphone off. */
+    public function muteAll(Meeting $meeting, int $actorUserId): int
+    {
+        $this->requireManager($meeting, $actorUserId);
+        $actor = $this->actorIdentity($meeting, $actorUserId);
+
+        $count = \App\Models\MeetingParticipant::where('meeting_id', $meeting->id)
+            ->where('status', 'joined')
+            ->where('role', '!=', 'co_host')
+            ->where('user_id', '!=', (int) $meeting->host_user_id)
+            ->update(['mic_enabled' => false]);
+        $count += \App\Models\MeetingJoinRequest::where('meeting_id', $meeting->id)
+            ->where('status', 'admitted')
+            ->update(['mic_enabled' => false]);
+
+        event(new MeetingMuteAll($meeting->uuid, $actor['key'], $actor['display_name']));
+
+        return $count;
     }
 
     // -----------------------------------------------------------------

@@ -302,21 +302,39 @@ class MeetingRepository
      *         التحديث اللحظي عبر الـ WebSocket، الـ endpoint ده لتحميل
      *         التاريخ الأول/بعد إعادة اتصال بس.
      */
-    public function chatMessagesVisibleTo($meetingId, string $actorKey, ?int $afterId = null, int $limit = 200): array
+    public function chatMessagesVisibleTo($meetingId, string $actorKey, ?int $afterId = null, int $limit = 200, ?int $publicAfterId = null): array
     {
         $query = MeetingChatMessage::with('reactions')
             ->where('meeting_id', $meetingId)
-            ->where(function ($q) use ($actorKey) {
-                $q->whereNull('recipient_key')
+            ->where(function ($q) use ($actorKey, $publicAfterId) {
+                $q->where(function ($pub) use ($publicAfterId) {
+                    $pub->whereNull('recipient_key');
+                    // "hide history" policy: a public message is only visible when it was posted after the viewer first entered.
+                    if ($publicAfterId !== null) {
+                        $pub->where('id', '>', $publicAfterId);
+                    }
+                })
                     ->orWhere('recipient_key', $actorKey)
                     ->orWhere('sender_key', $actorKey);
             });
 
         if ($afterId !== null) {
-            $query->where('id', '>', $afterId);
+            return $query->where('id', '>', $afterId)->orderBy('id')->limit($limit)->get()->all();
         }
 
-        return $query->orderBy('id')->limit($limit)->get()->all();
+        // Opening the chat: the NEWEST `limit` messages (oldest-first), not the oldest ones — a long meeting must not lose its tail.
+        return array_reverse($query->orderByDesc('id')->limit($limit)->get()->all());
+    }
+
+    /** Public (not private) chat messages of a meeting — used by "clear chat". */
+    public function publicChatMessages($meetingId): \Illuminate\Database\Eloquent\Collection
+    {
+        return MeetingChatMessage::where('meeting_id', $meetingId)->whereNull('recipient_key')->get();
+    }
+
+    public function deleteChatMessage(MeetingChatMessage $message): void
+    {
+        $message->delete();
     }
 
     public function findChatReaction($messageId, string $actorKey, string $emoji): ?MeetingChatMessageReaction

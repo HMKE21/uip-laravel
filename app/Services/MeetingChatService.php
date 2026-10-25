@@ -2,12 +2,15 @@
 
 namespace App\Services;
 
+use App\Events\Meetings\ChatCleared;
+use App\Events\Meetings\ChatMessageDeleted;
 use App\Events\Meetings\ChatMessageReactionChanged;
 use App\Events\Meetings\ChatMessageSent;
 use App\Models\Meeting;
 use App\Models\MeetingChatMessage;
 use App\Repositories\MeetingRepository;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Meetings & Collaboration Platform — Round 5 (Live Collaboration): بند
@@ -37,6 +40,39 @@ class MeetingChatService
         return \App\Services\MeetingAdminSettings::on('chat') && (bool) ($meeting->settings['allow_chat'] ?? true);
     }
 
+    /** "keep" = people who join later can read what was said before them; "hide" = they start with an empty chat. */
+    public function chatHistoryMode(Meeting $meeting): string
+    {
+        return ($meeting->settings['chat_history'] ?? 'keep') === 'hide' ? 'hide' : 'keep';
+    }
+
+    /** @return array<int,string> actor keys the host has silenced in chat */
+    public function mutedKeys(Meeting $meeting): array
+    {
+        return array_values(array_unique(array_filter((array) ($meeting->settings['chat_muted_keys'] ?? []), 'is_string')));
+    }
+
+    /** Everything the front end needs to know about the chat policy (sent with the history and with every live change). */
+    public function chatSettings(Meeting $meeting): array
+    {
+        return [
+            'chat_enabled' => $this->isChatEnabled($meeting),
+            'chat_history' => $this->chatHistoryMode($meeting),
+            'muted_keys'   => $this->mutedKeys($meeting),
+        ];
+    }
+
+    /** Host / co-host of this meeting (a guest is never a moderator). */
+    public function actorIsModerator(Meeting $meeting, array $actor): bool
+    {
+        if (($actor['type'] ?? null) !== 'participant') {
+            return false;
+        }
+        $userId = (int) ($actor['model']->user_id ?? 0);
+
+        return $userId > 0 && app(MeetingPolicyService::class)->canManage($meeting, $userId, $this->meetings);
+    }
+
     /** @param array{type:string, key:string, display_name:string} $actor */
     private function actorSenderType(array $actor): string
     {
@@ -54,6 +90,10 @@ class MeetingChatService
     {
         if (!$this->isChatEnabled($meeting)) {
             throw new \RuntimeException('Chat is disabled for this meeting.');
+        }
+
+        if (in_array($actor['key'], $this->mutedKeys($meeting), true) && !$this->actorIsModerator($meeting, $actor)) {
+            throw new \RuntimeException('The host has turned off your chat.');
         }
 
         $file = $data['file'] ?? null;
@@ -143,21 +183,107 @@ class MeetingChatService
         return $message;
     }
 
-    private function broadcast(Meeting $meeting, MeetingChatMessage $message): void
+    /** Channel a message travels on: the room's presence channel (public) or the recipient's personal inbox (private). */
+    private function channelFor(Meeting $meeting, MeetingChatMessage $message): string
     {
-        $channelName = $message->recipient_key === null
+        return $message->recipient_key === null
             ? 'presence-meeting.' . $meeting->uuid
             : 'private-meeting.' . $meeting->uuid . '.inbox.' . str_replace(':', '-', $message->recipient_key);
-
-        event(new ChatMessageSent($channelName, $this->present($message)));
     }
 
-    /** بند 7: history عند فتح شاشة الاجتماع/بعد إعادة اتصال — راجع docblock MeetingRepository::chatMessagesVisibleTo(). */
+    private function broadcast(Meeting $meeting, MeetingChatMessage $message): void
+    {
+        event(new ChatMessageSent($this->channelFor($meeting, $message), $this->present($message)));
+    }
+
+    /**
+     * بند 7: history عند فتح شاشة الاجتماع/بعد إعادة اتصال.
+     *
+     * History policy: the first time someone opens the chat we remember the newest message id that already existed
+     * (`chat_from_message_id`, never moved afterwards). With the host's "hide history" choice a person only gets public
+     * messages newer than that mark, so late joiners start clean, while a refresh / re-join keeps what they had already seen.
+     */
     public function listFor(Meeting $meeting, array $actor, ?int $afterId = null): array
     {
-        $messages = $this->meetings->chatMessagesVisibleTo($meeting->id, $actor['key'], $afterId);
+        $floor = null;
+        $mark = $this->entryMark($meeting, $actor);
+        if ($mark !== null && $this->chatHistoryMode($meeting) === 'hide') {
+            $floor = $mark;
+        }
+
+        $messages = $this->meetings->chatMessagesVisibleTo($meeting->id, $actor['key'], $afterId, 200, $floor);
 
         return array_map(fn (MeetingChatMessage $m) => $this->present($m), $messages);
+    }
+
+    /** First-entry mark of this actor (lazily stored). Null when the column isn't migrated yet — then nothing is hidden. */
+    private function entryMark(Meeting $meeting, array $actor): ?int
+    {
+        $model = $actor['model'] ?? null;
+        if (!$model || !Schema::hasColumn($model->getTable(), 'chat_from_message_id')) {
+            return null;
+        }
+        if ($model->chat_from_message_id === null) {
+            $model->chat_from_message_id = (int) MeetingChatMessage::where('meeting_id', $meeting->id)->max('id');
+            $model->save();
+        }
+
+        return (int) $model->chat_from_message_id;
+    }
+
+    /**
+     * Delete one message for EVERYONE. Allowed for its sender, and for a host/co-host on any public message (including system
+     * lines). A private message can only be removed by whoever sent it — a moderator can't even see it, so it isn't theirs to touch.
+     *
+     * @throws \RuntimeException message missing / not allowed
+     */
+    public function deleteMessage(Meeting $meeting, array $actor, int $messageId): array
+    {
+        $message = $this->meetings->findChatMessage($meeting->id, $messageId);
+        if (!$message) {
+            throw new \RuntimeException('Message not found.');
+        }
+
+        $own = $message->sender_key === $actor['key'];
+        $moderates = !$message->isPrivate() && $this->actorIsModerator($meeting, $actor);
+        if (!$own && !$moderates) {
+            throw new \RuntimeException('You can only delete your own messages.');
+        }
+
+        $channelName = $this->channelFor($meeting, $message);
+        $this->removeAttachmentFile($message);
+        $this->meetings->deleteChatMessage($message);
+
+        event(new ChatMessageDeleted($channelName, $messageId, $actor['key'], $actor['display_name']));
+
+        return ['id' => $messageId];
+    }
+
+    /** Wipe the public chat (host/co-host only — the caller checks). Private messages are left alone. */
+    public function clearPublic(Meeting $meeting, string $byDisplayName): int
+    {
+        $count = 0;
+        foreach ($this->meetings->publicChatMessages($meeting->id) as $message) {
+            $this->removeAttachmentFile($message);
+            $this->meetings->deleteChatMessage($message);
+            $count++;
+        }
+        event(new ChatCleared($meeting->uuid, $byDisplayName));
+
+        return $count;
+    }
+
+    private function removeAttachmentFile(MeetingChatMessage $message): void
+    {
+        $path = $message->attachment['stored_path'] ?? null;
+        if (!$path) {
+            return;
+        }
+        try {
+            ($this->uploads ?? app(FileUploadService::class))->delete((string) $path);
+        } catch (\Throwable $e) {
+            // the row is what matters; an orphaned file must never block a delete
+        }
     }
 
     /**
