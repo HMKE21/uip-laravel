@@ -81,9 +81,14 @@ class MessagingController extends Controller
     public function startDirect(Request $request)
     {
         return $this->handle(function () use ($request) {
+            $email = (string) $request->input('recipient_email', '');
+            // recipient_id: used by the Stories "viewed by" list (it only knows ids). Same rules apply: blocks / group-messaging limits are enforced in startConversation().
+            if ($email === '' && $request->filled('recipient_id')) {
+                $email = (string) \Illuminate\Support\Facades\DB::table('users')->where('id', (int) $request->input('recipient_id'))->value('email');
+            }
             $id = $this->messaging->startConversation(
                 $this->uid($request),
-                (string) $request->input('recipient_email', ''),
+                $email,
                 (string) $request->input('body', '')
             );
             $thread = $this->messaging->threadForUser($id, $this->uid($request));
