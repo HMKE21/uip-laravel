@@ -264,7 +264,10 @@ Route::prefix('v1')->group(function () {
 
     // "جهازي" (My PC) — نظام ملفات شخصي معزول لكل طالب. راجع docblock الـ DriveApiController.
     // الروتس الثابتة (tree/search/trash/...) قبل nodes/{id} عشان Laravel ميطابقهاش كـ {id}.
-    Route::prefix('drive')->middleware('uip.auth')->group(function () {
+    // Realtime (Reverb): handshake for the person's own private channel — the browser keeps ONE socket open for everything.
+    Route::post('realtime/auth', [\App\Http\Controllers\Api\RealtimeAuthController::class, 'auth'])->middleware(['uip.auth', 'throttle:240,1']);
+
+    Route::prefix('drive')->middleware(['uip.auth', 'uip.realtime:drive'])->group(function () {
         Route::get('/', [DriveApiController::class, 'index']);
         Route::get('/tree', [DriveApiController::class, 'tree']);
         Route::get('/search', [DriveApiController::class, 'search']);
@@ -1922,7 +1925,7 @@ Route::prefix('v1')->group(function () {
     // (كنترولر موحّد، نفس نمط messaging). ملحوظة ترتيب الراوتس: /read-all
     // و /read و /bulk لازم يتسجلوا قبل /{id} عشان Laravel ميحاولش يفسّر
     // "read-all"/"read"/"bulk" كإنهم {id}.
-    Route::prefix('notifications')->middleware(['uip.auth', 'uip.can:write:notifications.manage'])->group(function () {
+    Route::prefix('notifications')->middleware(['uip.auth', 'uip.can:write:notifications.manage', 'uip.realtime:notifications'])->group(function () {
         Route::get('/', [NotificationsApiController::class, 'index']);
         Route::get('/counts', [NotificationsApiController::class, 'counts']);
         Route::post('/read-all', [NotificationsApiController::class, 'markAllRead']);
@@ -1999,7 +2002,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/status', [ChatSafetyApiController::class, 'updateStatus'])->where('id', '[0-9]+');
     });
 
-    Route::prefix('messaging')->middleware(['uip.auth', 'uip.can:messaging.use'])->group(function () {
+    Route::prefix('messaging')->middleware(['uip.auth', 'uip.can:messaging.use', 'uip.realtime:messaging'])->group(function () {
         Route::get('/inbox', [MessagingController::class, 'inbox']);
         // الاستوري (Status) — نص/صورة/فيديو بتختفي بعد مدة. ثابتة قبل /conversations/{id} فمفيش تعارض.
         Route::get('/stories', [StoriesApiController::class, 'index']);

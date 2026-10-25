@@ -101,6 +101,16 @@ class NotificationService
             'portal'   => \App\Repositories\NotificationRepository::portalFor($type, $linkUrl),
         ]);
 
+        // لحظي (Reverb): الإشعار يظهر في الجرس/مركز الإشعارات في نفس الثانية بدون انتظار الـ polling.
+        \App\Support\Realtime::toUsers([(int) $userId], 'notification', [
+            'id'       => (int) $notification->id,
+            'type'     => $type,
+            'title'    => mb_substr($title, 0, 120),
+            'body'     => $body !== null ? mb_substr($body, 0, 140) : null,
+            'link_url' => $linkUrl,
+            'priority' => $priority,
+        ]);
+
         // Push للموبايل — بعد ما الرد يتبعت (مفيش تأخير)، وأي فشل مبيكسرش الإشعار الداخلي.
         try {
             \App\Jobs\SendPushNotificationJob::dispatchAfterResponse((int) $notification->id);
