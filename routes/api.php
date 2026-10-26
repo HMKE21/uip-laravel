@@ -800,9 +800,9 @@ Route::prefix('v1')->group(function () {
     // فعلي هنا لأن الـ prefix مختلف، بس نفس منطق الترتيب المتبع أعلى).
     Route::prefix('meetings/join')->middleware('uip.auth.optional')->group(function () {
         // throttle: كود الاجتماع (10 أرقام) بقى مقبول هنا كمان، فلازم نحدّ التخمين.
-        Route::get('{joinToken}/info', [MeetingsLobbyApiController::class, 'info'])->middleware('throttle:40,1');
-        Route::post('{joinToken}/verify-password', [MeetingsLobbyApiController::class, 'verifyPassword'])->middleware('throttle:20,1');
-        Route::post('{joinToken}/request', [MeetingsLobbyApiController::class, 'requestAccess'])->middleware('throttle:20,1');
+        Route::get('{joinToken}/info', [MeetingsLobbyApiController::class, 'info'])->middleware('throttle:meeting-join-info');
+        Route::post('{joinToken}/verify-password', [MeetingsLobbyApiController::class, 'verifyPassword'])->middleware('throttle:meeting-join-verify');
+        Route::post('{joinToken}/request', [MeetingsLobbyApiController::class, 'requestAccess'])->middleware('throttle:meeting-join-request');
         Route::get('{joinToken}/request/{requestId}/status', [MeetingsLobbyApiController::class, 'requestStatus'])->where('requestId', '[0-9]+');
     });
 
@@ -2247,8 +2247,8 @@ Route::prefix('v1')->group(function () {
     Route::prefix('public')->group(function () {
         Route::get('/landing', [PublicApiController::class, 'landing']);
         Route::get('/site-info', [PublicApiController::class, 'siteInfo']);
-        Route::get('/visits', [PublicApiController::class, 'visits'])->middleware('throttle:120,1');
-        Route::post('/visits', [PublicApiController::class, 'recordVisit'])->middleware('throttle:20,1');
+        Route::get('/visits', [PublicApiController::class, 'visits'])->middleware('throttle:public-visits-read');
+        Route::post('/visits', [PublicApiController::class, 'recordVisit'])->middleware('throttle:public-visits-write');
         Route::get('/verify-certificate', [PublicApiController::class, 'verifyCertificate']);
         // رابط مشاركة ملف/مجلد من "جهازي" — من غير تسجيل دخول؛ الصلاحية = معرفة الـ token (راجع DriveShareService).
         Route::prefix('drive-share/{token}')->where(['token' => '[A-Za-z0-9]{8,64}'])->middleware('throttle:120,1')->group(function () {
