@@ -9,12 +9,12 @@
 **الطريقة الأسهل (من غير .env):** Admin ← Platform Policy ← **Push notifications (Firebase)** ← الصق محتوى ملف الـ service account كله ← Save. بيتخزّن مشفّر في الداتابيز ويشتغل فورًا من غير redeploy، وبياخد الأولوية على الـ `.env`. (الـ Project ID اختياري.)
 
 **أو من الـ .env:**
-1. Firebase Console → مشروع `uip-v1` → ⚙️ Project settings → **Service accounts** → **Generate new private key**.
+1. Firebase Console → مشروع `uip-nub` → ⚙️ Project settings → **Service accounts** → **Generate new private key**.
 2. ارفع ملف الـ JSON على السيرفر **برّه** مجلد `public` (مثلًا `storage/app/firebase-service-account.json`) وماترفعوش على GitHub.
 3. في `.env`:
    ```
    FCM_CREDENTIALS_PATH=/المسار/الكامل/firebase-service-account.json
-   FCM_PROJECT_ID=uip-v1
+   FCM_PROJECT_ID=uip-nub
    ```
    (لو الاستضافة مفيهاش ملفات: حط محتوى الملف أو base64 بتاعه في `FCM_CREDENTIALS_JSON`.)
 4. تأكد إن **Firebase Cloud Messaging API (V1)** مفعّلة في Google Cloud للمشروع (بتبقى مفعّلة افتراضيًا).

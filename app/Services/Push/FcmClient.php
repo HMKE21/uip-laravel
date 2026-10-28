@@ -16,7 +16,7 @@ use App\Support\PlatformPolicy;
  *   2) من الـ .env:
  *   FCM_CREDENTIALS_PATH=/مسار/كامل/firebase-service-account.json     (أو)
  *   FCM_CREDENTIALS_JSON=<محتوى الملف نفسه، أو base64 له>
- *   FCM_PROJECT_ID=uip-v1            (اختياري — بياخده من الملف لو فاضي)
+ *   FCM_PROJECT_ID=uip-nub            (اختياري — بياخده من الملف لو فاضي)
  * لو مفيش credentials: isConfigured() بترجع false وكل الإرسال بيتجاهل بهدوء.
  */
 class FcmClient
