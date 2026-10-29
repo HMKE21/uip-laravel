@@ -42,6 +42,21 @@ class ChatWallpapersApiController extends Controller
     {
         $rows = UserChatWallpaper::where('user_id', $this->uid($request))->orderBy('id')->get();
 
+        // الملفات على قرص الحاوية؛ لو الاستضافة صفّرت القرص (redeploy من غير Volume) الصف يفضل والصورة تبان فاضية.
+        // نشيل الصفوف اللي ملفها اختفى عشان الواجهة متعرضش مربعات فاضية (والشخص يرفع صورته تاني).
+        $rows = $rows->filter(function ($w) {
+            $rel = ltrim(str_replace('\\', '/', (string) $w->stored_path), '/');
+            if ($rel !== '' && !str_contains($rel, '..') && is_file(public_path($rel))) {
+                return true;
+            }
+            try {
+                $w->delete();
+            } catch (\Throwable $e) {
+                // نسيبه؛ هيتجرّب في الطلب الجاي
+            }
+            return false;
+        })->values();
+
         return $this->apiSuccess(
             ['wallpapers' => $rows->map(fn ($w) => $this->present($w))->values()->all()],
             'Chat wallpapers retrieved successfully.'
