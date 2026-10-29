@@ -116,6 +116,10 @@ class CallService
 
         if ($busy) {
             $this->close($this->find($id), 'busy', 'busy');
+        } else {
+            // رنّة على موبايل المستلم حتى لو التطبيق مقفول + تنبيه لحظي (Reverb) لو متفتح، من غير ما ننتظر الـ polling.
+            \App\Jobs\SendCallPushJob::send($id, 'ring', $this->messagesLink($peerId, $conversationId));
+            $this->broadcastCall($userId, $peerId, $id, 'ringing');
         }
         return $this->present($this->find($id), $userId);
     }
@@ -140,6 +144,8 @@ class CallService
         if (!$ok) {
             throw new \RuntimeException('This call is no longer available.');
         }
+        \App\Jobs\SendCallPushJob::send($callId, 'stop');
+        $this->broadcastCall((int) $call->caller_id, (int) $call->callee_id, $callId, 'active');
         return $this->present($this->find($callId), $userId);
     }
 
@@ -450,7 +456,34 @@ class CallService
         if (in_array($outcome, ['missed', 'cancelled', 'busy'], true)) {
             $this->notifyMissed($call);
         }
+        if ($call->status === 'ringing' && $status !== 'busy') {
+            \App\Jobs\SendCallPushJob::send((int) $call->id, 'stop');   // الرنّة تقف على كل أجهزة المستلم
+        }
+        $this->broadcastCall((int) $call->caller_id, (int) $call->callee_id, (int) $call->id, $status);
         return true;
+    }
+
+    /** تنبيه لحظي للطرفين (topic 'call'): الفرونت بيعمل poll فوري بدل ما يستنى الدورة الجاية. */
+    private function broadcastCall(int $callerId, int $calleeId, int $callId, string $status): void
+    {
+        try {
+            \App\Support\Realtime::toUsers([$callerId, $calleeId], 'call', ['call_id' => $callId, 'status' => $status]);
+        } catch (\Throwable $e) {
+            // تحسين بس
+        }
+    }
+
+    /** لينك المحادثة عند المستلم (نفس منطق notifyMissed / MessagingService::messagesLinkFor). */
+    private function messagesLink(int $userId, int $conversationId): string
+    {
+        try {
+            $role = app(RoleService::class)->primaryRoleFor($userId);
+            $home = (string) config("roles.home_route.{$role}", '');
+            $prefix = $home !== '' ? explode('/', trim($home, '/'))[0] : str_replace('_', '-', (string) $role);
+            return "/{$prefix}/messages/{$conversationId}";
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     private function logMessage(object $call, string $outcome, ?int $duration): void

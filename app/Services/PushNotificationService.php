@@ -145,6 +145,85 @@ class PushNotificationService
         }
     }
 
+    /**
+     * رنّة مكالمة واردة على كل أجهزة المستلم (data-only high priority → UipMessagingService بيرسم إشعار full-screen برنّة).
+     * بتتخطى كتم الفئات وساعات الهدوء (المكالمة urgent زي الواتس). مبتحاولش لو المكالمة مبقتش ringing.
+     */
+    public function ringCall(int $callId, string $link = ''): int
+    {
+        try {
+            if (!$this->fcm->isConfigured()) {
+                return 0;
+            }
+            $call = DB::table('calls')->where('id', $callId)->first();
+            if (!$call || $call->status !== 'ringing') {
+                return 0;
+            }
+            $calleeId = (int) $call->callee_id;
+            $active = DB::table('users')->where('id', $calleeId)->whereNull('deleted_at')->where('status', 'active')->exists();
+            if (!$active) {
+                return 0;
+            }
+            $devices = DB::table('push_devices')->where('user_id', $calleeId)->orderByDesc('last_seen_at')->limit(self::MAX_DEVICES_PER_USER)->get(['id', 'token']);
+            if ($devices->isEmpty()) {
+                return 0;
+            }
+            $caller = DB::table('users')->where('id', (int) $call->caller_id)->first(['full_name']);
+            $ring = max(10, (int) config('calls.ring_seconds', 45));
+            $elapsed = max(0, now()->getTimestamp() - \Illuminate\Support\Carbon::parse($call->created_at)->getTimestamp());
+            $data = [
+                'type'         => 'incoming_call',
+                'call_id'      => (int) $call->id,
+                'call_type'    => (string) $call->type,
+                'caller_name'  => (string) ($caller->full_name ?? ''),
+                'link_url'     => $this->safeLink($link),
+                'ring_seconds' => max(5, $ring - $elapsed),
+                'lang'         => (DB::table('users')->where('id', $calleeId)->value('preferred_language') ?? 'ar') === 'en' ? 'en' : 'ar',
+            ];
+            $sent = 0;
+            foreach ($devices as $d) {
+                $r = $this->fcm->sendData($d->token, $data, ['ttl' => max(10, $ring - $elapsed) . 's', 'timeout' => 4]);
+                if ($r === FcmClient::OK) {
+                    $sent++;
+                } elseif ($r === FcmClient::INVALID_TOKEN) {
+                    DB::table('push_devices')->where('id', $d->id)->delete();
+                }
+            }
+            return $sent;
+        } catch (\Throwable $e) {
+            Log::warning('PushNotificationService::ringCall failed', ['error' => $e->getMessage(), 'call_id' => $callId]);
+            return 0;
+        }
+    }
+
+    /** يوقّف الرنّة على أجهزة المستلم (اتردّ عليها من جهاز تاني / المتصل قفل / فاتت / اترفضت). */
+    public function stopCallRing(int $callId): int
+    {
+        try {
+            if (!$this->fcm->isConfigured()) {
+                return 0;
+            }
+            $call = DB::table('calls')->where('id', $callId)->first(['id', 'callee_id']);
+            if (!$call) {
+                return 0;
+            }
+            $devices = DB::table('push_devices')->where('user_id', (int) $call->callee_id)->orderByDesc('last_seen_at')->limit(self::MAX_DEVICES_PER_USER)->get(['id', 'token']);
+            $sent = 0;
+            foreach ($devices as $d) {
+                $r = $this->fcm->sendData($d->token, ['type' => 'call_cancel', 'call_id' => (int) $call->id], ['ttl' => '60s', 'timeout' => 4]);
+                if ($r === FcmClient::OK) {
+                    $sent++;
+                } elseif ($r === FcmClient::INVALID_TOKEN) {
+                    DB::table('push_devices')->where('id', $d->id)->delete();
+                }
+            }
+            return $sent;
+        } catch (\Throwable $e) {
+            Log::warning('PushNotificationService::stopCallRing failed', ['error' => $e->getMessage(), 'call_id' => $callId]);
+            return 0;
+        }
+    }
+
     /** لينك داخلي بس (يبدأ بـ / وليس //)، غير كده مبيتبعتش عشان التطبيق مايفتحش عناوين خارجية. */
     private function safeLink(?string $link): string
     {

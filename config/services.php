@@ -61,6 +61,8 @@ return [
         'credentials_path' => env('FCM_CREDENTIALS_PATH', ''),
         'credentials_json' => env('FCM_CREDENTIALS_JSON', ''),
         'project_id'       => env('FCM_PROJECT_ID', ''),
+        // true = الـ push يتبعت جوّه نفس الطلب (بدل بعد الرد). استخدمه لو الاستضافة (FrankenPHP/Octane/worker) مبتشغّلش dispatchAfterResponse.
+        'sync'             => (bool) env('FCM_SYNC', false),
     ],
 
     'slack' => [

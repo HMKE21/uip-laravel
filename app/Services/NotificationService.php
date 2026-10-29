@@ -113,7 +113,11 @@ class NotificationService
 
         // Push للموبايل — بعد ما الرد يتبعت (مفيش تأخير)، وأي فشل مبيكسرش الإشعار الداخلي.
         try {
-            \App\Jobs\SendPushNotificationJob::dispatchAfterResponse((int) $notification->id);
+            if (config('services.fcm.sync')) {
+                \App\Jobs\SendPushNotificationJob::dispatchSync((int) $notification->id);   // FCM_SYNC=true: جوّه نفس الطلب
+            } else {
+                \App\Jobs\SendPushNotificationJob::dispatchAfterResponse((int) $notification->id);
+            }
         } catch (\Throwable $e) {
             // تجاهل عمدًا
         }

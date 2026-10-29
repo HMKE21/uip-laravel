@@ -30,3 +30,10 @@
 - التوكن بيتسجّل عند تسجيل الدخول وبيتمسح عند تسجيل الخروج؛ لو الجهاز اتنقل لحساب تاني الصف بيتنقل لليوزر الجديد.
 - توكنات الأجهزة اللي اتمسح منها التطبيق بتتشال تلقائيًا أول ما Firebase يرفضها.
 - بعض موبايلات (Xiaomi/Oppo/Vivo/Huawei) بتأخّر أو بتمنع إشعارات التطبيقات المقفولة: من إعدادات الموبايل شغّل Autostart وشيل قيود البطارية عن التطبيق.
+
+## المكالمات + التسليم اللحظي (تحديث)
+- بداية أي مكالمة بتبعت **Push data-only (HIGH)** لأجهزة المستلم (`PushNotificationService::ringCall`) والتطبيق (`UipMessagingService`) بيرسم إشعار رنّة full-screen. قبول/رفض/إلغاء/فوات المكالمة بيبعت `call_cancel` فالرنّة تقف على كل الأجهزة. كمان بيطلع ping لحظي (`topic=call`) على Reverb.
+- لازم تبني APK جديد (`npm run android:sync`) — سكريبت `patch-android.mjs` بيضيف الـ service والـ receiver وصلاحية `USE_FULL_SCREEN_INTENT` وتبعية `firebase-messaging`.
+- لو الاستضافة مبتشغّلش `dispatchAfterResponse` (FrankenPHP/Octane): حط `FCM_SYNC=true` في الـ env.
+- أي رد 400 من FCM مش بسبب التوكن بقى بيتسجّل في اللوج (`FCM: send rejected`) من غير ما يمسح توكن الجهاز.
+- تشخيص: `php artisan push:test <user_id>` ثم راجع `storage/logs` لو مفيش وصول.

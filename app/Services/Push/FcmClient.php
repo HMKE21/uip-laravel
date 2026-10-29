@@ -137,7 +137,7 @@ class FcmClient
      * @param array<string,scalar|null> $data قيم نصية بس (شرط FCM)
      * @return string self::OK | self::INVALID_TOKEN (امسح التوكن) | self::FAILED
      */
-    /** @param array{channel_id?:string,tag?:string,color?:string,ttl?:string,icon?:string,count?:int,ticker?:string} $opts */
+    /** @param array{channel_id?:string,tag?:string,color?:string,ttl?:string,icon?:string,count?:int,ticker?:string,timeout?:int} $opts */
     public function send(string $token, string $title, string $body, array $data = [], array $opts = []): string
     {
         $creds = $this->credentials();
@@ -170,9 +170,37 @@ class FcmClient
             ],
         ]];
 
+        return $this->post($creds['project_id'], $access, $payload, (int) ($opts['timeout'] ?? 8));
+    }
+
+    /**
+     * رسالة data-only بأولوية HIGH (من غير notification): بتصحّي خدمة FCM في التطبيق حتى لو مقفول، والتطبيق نفسه (UipMessagingService)
+     * هو اللي بيرسم الإشعار — بنستخدمها لرنّة المكالمة (full-screen) وإلغائها. المفاتيح والقيم نصية بس.
+     * @param array<string,scalar|null> $data
+     * @param array{ttl?:string,timeout?:int} $opts
+     * @return string self::OK | self::INVALID_TOKEN | self::FAILED
+     */
+    public function sendData(string $token, array $data, array $opts = []): string
+    {
+        $creds = $this->credentials();
+        $access = $this->accessToken();
+        if (!$creds || !$access) {
+            Cache::forget('fcm_access_token:' . md5($creds['client_email'] ?? ''));
+            return self::FAILED;
+        }
+        $payload = ['message' => [
+            'token'   => $token,
+            'data'    => array_map(fn ($v) => (string) $v, $data),
+            'android' => ['priority' => 'HIGH', 'ttl' => ($opts['ttl'] ?? '60s')],
+        ]];
+        return $this->post($creds['project_id'], $access, $payload, (int) ($opts['timeout'] ?? 5));
+    }
+
+    private function post(string $projectId, string $access, array $payload, int $timeout): string
+    {
         try {
-            $res = Http::withToken($access)->timeout(8)->connectTimeout(4)
-                ->post("https://fcm.googleapis.com/v1/projects/{$creds['project_id']}/messages:send", $payload);
+            $res = Http::withToken($access)->timeout($timeout)->connectTimeout(min(4, $timeout))
+                ->post("https://fcm.googleapis.com/v1/projects/{$projectId}/messages:send", $payload);
         } catch (\Throwable $e) {
             Log::warning('FCM: send failed', ['error' => $e->getMessage()]);
             return self::FAILED;
@@ -182,14 +210,20 @@ class FcmClient
             return self::OK;
         }
         if ($res->status() === 401) {
-            Cache::forget('fcm_access_token:' . md5($creds['client_email']));
+            $creds = $this->credentials();
+            Cache::forget('fcm_access_token:' . md5($creds['client_email'] ?? ''));
         }
         $status = (string) $res->json('error.status');
         $code = '';
         foreach ((array) $res->json('error.details', []) as $d) {
             $code = (string) ($d['errorCode'] ?? $code);
         }
-        if ($res->status() === 404 || $code === 'UNREGISTERED' || ($res->status() === 400 && $status === 'INVALID_ARGUMENT' && $code !== 'SENDER_ID_MISMATCH')) {
+        // التوكن بس هو اللي يتمسح: 404/UNREGISTERED، أو 400 والغلط فعلًا في message.token. أي 400 تاني (حقل غلط في الـ payload مثلًا)
+        // كان بيمسح كل توكنات الأجهزة بصمت ومفيش إشعار بعدها يوصل — دلوقتي بيتسجّل في اللوج والتوكن يفضل.
+        $body = (string) $res->body();
+        $badToken = $res->status() === 400 && $status === 'INVALID_ARGUMENT' && $code !== 'SENDER_ID_MISMATCH'
+            && (stripos($body, 'message.token') !== false || stripos($body, 'registration token') !== false);
+        if ($res->status() === 404 || $code === 'UNREGISTERED' || $badToken) {
             return self::INVALID_TOKEN;
         }
         Log::warning('FCM: send rejected', ['status' => $res->status(), 'body' => mb_substr($res->body(), 0, 300)]);
