@@ -2012,6 +2012,13 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/status', [ChatSafetyApiController::class, 'updateStatus'])->where('id', '[0-9]+');
     });
 
+    // رابط موقّع نسبي (signed:relative) لوسائط الشات — بيتولّد من GET /messaging/attachments/{id}/link بعد فحص العضوية، وبيموت
+    // بعد upload.signed_media_ttl. بره uip.auth عمدًا (<video> والتطبيق الأصلي مابيبعتوش Authorization)؛ التوقيع + عضوية u بتتفحص جوه.
+    Route::get('/messaging/media/{id}/{variant}', [MessagingController::class, 'signedMedia'])
+        ->where(['id' => '[0-9]+', 'variant' => 'file|thumbnail'])
+        ->middleware(['signed:relative', 'throttle:240,1'])
+        ->name('messaging.media.signed');
+
     Route::prefix('messaging')->middleware(['uip.auth', 'uip.can:messaging.use', 'uip.realtime:messaging'])->group(function () {
         Route::get('/inbox', [MessagingController::class, 'inbox']);
         // الاستوري (Status) — نص/صورة/فيديو بتختفي بعد مدة. ثابتة قبل /conversations/{id} فمفيش تعارض.
@@ -2113,7 +2120,11 @@ Route::prefix('v1')->group(function () {
         Route::post('/presence/typing', [MessagingController::class, 'typing']);
         Route::post('/presence/lookup', [MessagingController::class, 'presence']);
 
-        Route::get('/attachments/{id}/download', [MessagingController::class, 'downloadAttachment']);
+        Route::get('/attachments/{id}/download', [MessagingController::class, 'downloadAttachment'])->where('id', '[0-9]+');
+        // ملفات الشات الخاصة: الملف/الصورة المصغّرة بالتوكن، و /link بيطلّع رابط موقّع قصير العمر للـ <video> والتطبيق الأصلي.
+        Route::get('/attachments/{id}/file', [MessagingController::class, 'attachmentFile'])->where('id', '[0-9]+');
+        Route::get('/attachments/{id}/thumbnail', [MessagingController::class, 'attachmentThumbnail'])->where('id', '[0-9]+');
+        Route::get('/attachments/{id}/link', [MessagingController::class, 'attachmentLink'])->where('id', '[0-9]+');
         Route::get('/attachments/{id}/view-once', [MessagingController::class, 'viewOnceAttachment'])->where('id', '[0-9]+');
         Route::delete('/attachments/{id}', [MessagingController::class, 'deleteAttachment']);
     });

@@ -649,8 +649,9 @@ class MessagingService
         return [
             'id'               => (int) $a['id'],
             'kind'             => $a['kind'],
-            'url'              => '/uploads/' . ltrim(str_replace('uploads/', '', $a['stored_path']), '/'),
-            'thumbnail_url'    => $a['thumbnail_path'] ? '/uploads/' . ltrim(str_replace('uploads/', '', $a['thumbnail_path']), '/') : null,
+            // ملفات الشات خاصة (خارج public/): الرابط ده route محمي بالتوكن والعضوية — مش /uploads/... العام.
+            'url'              => '/api/v1/messaging/attachments/' . (int) $a['id'] . '/file',
+            'thumbnail_url'    => !empty($a['thumbnail_path']) ? '/api/v1/messaging/attachments/' . (int) $a['id'] . '/thumbnail' : null,
             'original_name'    => $a['original_name'],
             'mime_type'        => $a['mime_type'],
             'extension'        => $a['extension'],
@@ -692,7 +693,7 @@ class MessagingService
         $absoluteMaxKb = $file instanceof \App\Support\ChunkedUploadedFile ? (int) floor((int) config('messaging.chunked.max_bytes') / 1024) : null;
         $stored = $this->uploads->store($file, 'messages', 'conv_' . $conversationId, null, null, $absoluteMaxKb);
         $kind = $this->classifyKind($stored['extension'], $file->getClientOriginalName(), $file->getClientMimeType());
-        $absolutePath = public_path($stored['stored_path']);
+        $absolutePath = FileUploadService::absolutePath($stored['stored_path']);
 
         [$width, $height] = $kind === 'image' ? $this->imageDimensions($absolutePath) : [null, null];
 
@@ -1601,6 +1602,22 @@ class MessagingService
             return null;
         }
         return (array) $row;
+    }
+
+    /**
+     * مرفق جاهز للتسليم (file/thumbnail/download/link): المستخدم عضو في المحادثة، الرسالة مش محذوفة للكل، والمرفق مش "مرة واحدة /
+     * تايمر" (دول ليهم route خاص بيسلّمهم لمرة واحدة بس). null = مش موجود/مش مسموح.
+     */
+    public function attachmentForServing(int $attachmentId, $userId): ?array
+    {
+        $row = $this->attachmentAuthorized($attachmentId, $userId);
+        if (!$row || !empty($row['view_mode'])) {
+            return null;
+        }
+        if ((int) DB::table('messages')->where('id', (int) $row['message_id'])->value('is_deleted') === 1) {
+            return null;
+        }
+        return $row;
     }
 
     /**

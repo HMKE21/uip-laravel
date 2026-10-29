@@ -85,7 +85,8 @@ class FileUploadService
 
         $basePath = (string) config("upload.paths.{$category}", 'uploads/' . $category);
         $relativeDir = $basePath . ($subfolder !== '' ? '/' . trim($subfolder, '/') : '');
-        $targetDir = public_path($relativeDir);
+        // فئة خاصة (messages) بتتخزن تحت storage/app/private — خارج public/ — فمفيش رابط مباشر ليها.
+        $targetDir = self::diskDir($relativeDir);
 
         if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
             throw new \RuntimeException('Could not prepare the upload destination.');
@@ -125,13 +126,75 @@ class FileUploadService
         return in_array($extension, self::NEUTRALIZED_EXTENSIONS, true) ? $extension . '.txt' : $extension;
     }
 
-    /** Best-effort delete of a previously stored file (paths are relative to public/). */
+    /** Best-effort delete of a previously stored file (paths are relative to public/ — or to storage/app/private for private categories). */
     public function delete(string $relativePath): void
     {
-        $full = public_path(ltrim($relativePath, '/'));
-        if (is_file($full)) {
-            @unlink($full);
+        $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
+        if ($rel === '' || str_contains($rel, '..')) {
+            return;
         }
+        // الخاص أولًا، وبعدين public/ (ملفات قديمة لسه ماتنقلتش).
+        $candidates = [public_path($rel)];
+        if (self::isPrivatePath($rel)) {
+            array_unshift($candidates, self::privateRoot() . '/' . $rel);
+        }
+        foreach ($candidates as $full) {
+            if (is_file($full)) {
+                @unlink($full);
+            }
+        }
+    }
+
+    /** المسارات النسبية (مثلًا uploads/messages) لكل فئة خاصة — config('upload.private_categories'). */
+    private static function privateBases(): array
+    {
+        $out = [];
+        foreach ((array) config('upload.private_categories', []) as $category) {
+            $out[] = trim((string) config("upload.paths.{$category}", 'uploads/' . $category), '/');
+        }
+        return $out;
+    }
+
+    /** true لو المسار النسبي تابع لفئة خاصة (ملفاتها خارج public/). */
+    public static function isPrivatePath(string $relativePath): bool
+    {
+        $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
+        foreach (self::privateBases() as $base) {
+            if ($rel === $base || str_starts_with($rel, $base . '/')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static function privateRoot(): string
+    {
+        return rtrim(storage_path('app/private'), '/');
+    }
+
+    /** المجلد الفعلي على الديسك لمجلد نسبي (خاص => storage/app/private/..، عام => public/..). */
+    public static function diskDir(string $relativeDir): string
+    {
+        $rel = ltrim(str_replace('\\', '/', $relativeDir), '/');
+        return self::isPrivatePath($rel) ? self::privateRoot() . '/' . $rel : public_path($rel);
+    }
+
+    /**
+     * المسار المطلق لملف متخزّن. للفئات الخاصة: بيدوّر في storage/app/private الأول، وبعدين في public/ (ملفات قديمة
+     * قبل النقل). مفيش تحقق وجود هنا — الكولر بيعمل is_file.
+     */
+    public static function absolutePath(string $relativePath): string
+    {
+        $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
+        if (!self::isPrivatePath($rel)) {
+            return public_path($rel);
+        }
+        $private = self::privateRoot() . '/' . $rel;
+        if (is_file($private)) {
+            return $private;
+        }
+        $legacy = public_path($rel);
+        return is_file($legacy) ? $legacy : $private;
     }
 
     /** نفس assertContentMatchesExtension() القديمة حرف بحرف — magic-byte sniffing، مش ثقة في الامتداد بس. */

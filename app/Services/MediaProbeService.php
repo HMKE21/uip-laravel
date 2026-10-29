@@ -98,7 +98,7 @@ class MediaProbeService
             return null;
         }
 
-        $targetDir = public_path(trim($relativeDir, '/') . '/thumbnails');
+        $targetDir = FileUploadService::diskDir(trim($relativeDir, '/') . '/thumbnails');
         if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
             Log::warning('Could not prepare video thumbnail directory', ['dir' => $targetDir]);
             return null;

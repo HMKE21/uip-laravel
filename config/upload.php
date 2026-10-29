@@ -196,4 +196,17 @@ return [
         'meeting-recordings' => 'uploads/meeting-recordings',
         'general'   => 'uploads/general',
     ],
+    /*
+    |--------------------------------------------------------------------------
+    | فئات خاصة (private categories)
+    |--------------------------------------------------------------------------
+    | الفئات دي بتتخزن خارج public/ (تحت storage/app/private/<paths.category>) فمفيش رابط مباشر ليها: الملف مابيتسلّمش
+    | غير من خلال route بيتأكد إن اللي بيطلبه عضو في المحادثة (أو برابط موقّع قصير العمر طالع من نفس الفحص).
+    | الـ stored_path في الداتابيز بيفضل نسبي بنفس الشكل (uploads/messages/conv_N/xxx) — القديم لسه بيتقرأ من public/ لحد
+    | ما `php artisan messages:privatize-attachments` ينقله.
+    */
+    'private_categories' => ['messages'],
+
+    // صلاحية الرابط الموقّع للوسائط (ثواني) — للـ <video> والتطبيق الأصلي اللي مابيبعتوش Authorization header.
+    'signed_media_ttl' => (int) env('UPLOAD_SIGNED_MEDIA_TTL', 600),
 ];

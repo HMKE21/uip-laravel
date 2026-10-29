@@ -410,26 +410,137 @@ class MessagingController extends Controller
     /** GET /api/v1/messaging/attachments/{id}/download */
     public function downloadAttachment(Request $request, $id)
     {
-        $row = $this->messaging->attachmentAuthorized((int) $id, $this->uid($request));
+        $row = $this->messaging->attachmentForServing((int) $id, $this->uid($request));
         if (!$row) {
             return $this->apiError('Attachment not found.', null, 404);
         }
-        $path = public_path(ltrim(str_replace('uploads/', 'uploads/', $row['stored_path']), '/'));
+        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
         if (!is_file($path)) {
             return $this->apiError('File not found on server.', null, 404);
         }
 
         // حماية: الملف بيتفحص (ClamAV + محتوى PDF النشط) قبل ما أي حد يفتحه أو ينزّله.
         // فيروس = ممنوع تمامًا. PDF فيه سكربتات = ممنوع إلا لو الواجهة بعتت force=1 بعد تحذيرين متتاليين.
-        $inspection = app(\App\Services\FileUploadService::class)->inspectStoredFile($path, (string) $row['original_name']);
+        if ($blocked = $this->inspectOrBlock($request, $path, (string) $row['original_name'])) {
+            return $blocked;
+        }
+
+        return response()->download($path, $row['original_name'], ['X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store']);
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/file — الملف نفسه (inline، بيدعم Range للفيديو/الصوت). لازم Bearer token
+     * والطالب يكون عضو في المحادثة، غير كده 404. مفيش رابط عام ليه: الملفات نفسها خارج public/.
+     */
+    public function attachmentFile(Request $request, $id)
+    {
+        return $this->serveAttachment($request, (int) $id, 'file', $this->uid($request));
+    }
+
+    /** GET /api/v1/messaging/attachments/{id}/thumbnail — صورة الفيديو المصغّرة (نفس شروط /file). */
+    public function attachmentThumbnail(Request $request, $id)
+    {
+        return $this->serveAttachment($request, (int) $id, 'thumbnail', $this->uid($request));
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/link?variant=file|thumbnail
+     * بيرجّع رابط موقّع قصير العمر (config upload.signed_media_ttl، افتراضي 10 دقايق) لنفس الملف — للـ <video> وللتطبيق
+     * الأصلي (تحميل/حفظ) اللي مابيبعتوش Authorization header. العضوية بتتفحص هنا وبتتفحص تاني وقت الفتح.
+     */
+    public function attachmentLink(Request $request, $id)
+    {
+        $variant = $request->query('variant') === 'thumbnail' ? 'thumbnail' : 'file';
+        $uid = $this->uid($request);
+        $row = $this->messaging->attachmentForServing((int) $id, $uid);
+        if (!$row || ($variant === 'thumbnail' && empty($row['thumbnail_path']))) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $ttl = max(60, (int) config('upload.signed_media_ttl', 600));
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute(
+            'messaging.media.signed',
+            now()->addSeconds($ttl),
+            ['id' => (int) $id, 'variant' => $variant, 'u' => $uid],
+            absolute: false
+        );
+        return $this->apiSuccess(['url' => $url, 'expires_in' => $ttl], 'Link created.');
+    }
+
+    /** GET /api/v1/messaging/media/{id}/{variant}?u=..&expires=..&signature=.. — بعد middleware signed:relative. */
+    public function signedMedia(Request $request, $id, $variant)
+    {
+        $uid = (int) $request->query('u');
+        if ($uid <= 0 || !in_array($variant, ['file', 'thumbnail'], true)) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        return $this->serveAttachment($request, (int) $id, (string) $variant, $uid);
+    }
+
+    /** بيسلّم ملف/thumbnail مرفق بعد فحص العضوية (والرسالة مش محذوفة ومش "مرة واحدة"). */
+    private function serveAttachment(Request $request, int $id, string $variant, int $uid)
+    {
+        $row = $this->messaging->attachmentForServing($id, $uid);
+        if (!$row) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $rel = $variant === 'thumbnail' ? (string) ($row['thumbnail_path'] ?? '') : (string) $row['stored_path'];
+        if ($rel === '') {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $path = \App\Services\FileUploadService::absolutePath($rel);
+        if (!is_file($path)) {
+            return $this->apiError('File not found on server.', null, 404);
+        }
+
+        // وسائط (صورة/فيديو/صوت) بتتسلّم مباشرة؛ أي نوع تاني (مستند/أرشيف/كود) بيتفحص زي /download قبل ما يتفتح.
+        $isMedia = $variant === 'thumbnail' || in_array($row['kind'], ['image', 'video', 'audio'], true);
+        if (!$isMedia && ($blocked = $this->inspectOrBlock($request, $path, (string) $row['original_name']))) {
+            return $blocked;
+        }
+
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $mime = $variant === 'thumbnail' ? 'image/jpeg' : $this->safeMime($ext, (string) $row['kind']);
+        // inline بس للأنواع الآمنة للعرض؛ أي حاجة تانية بتتنزّل (مفيش HTML/JS بيتنفّذ من نفس الأوريجن أبدًا).
+        $inline = $mime !== 'application/octet-stream' && !str_starts_with($mime, 'text/');
+        $name = $variant === 'thumbnail' ? 'thumbnail.jpg' : (string) $row['original_name'];
+
+        return response()->file($path, [
+            'Content-Type'            => $mime,
+            'Content-Disposition'     => ($inline ? 'inline' : 'attachment') . "; filename*=UTF-8''" . rawurlencode($name),
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
+            'Cross-Origin-Resource-Policy' => 'cross-origin',
+            'Cache-Control'           => 'private, max-age=300',
+        ]);
+    }
+
+    /** MIME من الامتداد الفعلي المتخزّن (مش من اللي بعته العميل). أي حاجة مش في القائمة => octet-stream. */
+    private function safeMime(string $ext, string $kind): string
+    {
+        $map = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+            'bmp' => 'image/bmp', 'svg' => 'image/svg+xml',
+            'mp4' => 'video/mp4', 'mov' => 'video/quicktime', 'avi' => 'video/x-msvideo', 'mkv' => 'video/x-matroska',
+            'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'm4a' => 'audio/mp4', 'aac' => 'audio/aac',
+            'opus' => 'audio/ogg', 'weba' => 'audio/webm', 'pdf' => 'application/pdf',
+        ];
+        if ($ext === 'webm') {
+            return $kind === 'audio' ? 'audio/webm' : 'video/webm'; // تسجيلات الصوت بتتخزن .webm بس صوت
+        }
+        return $map[$ext] ?? 'application/octet-stream';
+    }
+
+    /** فحص الأمان المشترك (/download و /file لغير الوسائط): null = سليم، غير كده Response بحالة 423. */
+    private function inspectOrBlock(Request $request, string $path, string $displayName)
+    {
+        $inspection = app(\App\Services\FileUploadService::class)->inspectStoredFile($path, $displayName);
         if ($inspection['status'] === 'infected') {
             return $this->apiError('This file was flagged as infected and is blocked.', ['blocked' => ['malware']], 423);
         }
         if ($inspection['status'] === 'active_content' && !$request->boolean('force')) {
             return $this->apiError('This file contains scripts or active content and was not opened.', ['blocked' => ['active_content'], 'findings' => $inspection['findings']], 423);
         }
-
-        return response()->download($path, $row['original_name'], ['X-Content-Type-Options' => 'nosniff']);
+        return null;
     }
 
     /**
@@ -449,7 +560,7 @@ class MessagingController extends Controller
             return $this->apiError('This media was already opened and is no longer available.', ['consumed' => true], 410);
         }
         $row = $claim['row'];
-        $path = public_path(ltrim((string) $row['stored_path'], '/'));
+        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
         if (!is_file($path)) {
             return $this->apiError('This media is no longer available.', ['consumed' => true], 410);
         }
