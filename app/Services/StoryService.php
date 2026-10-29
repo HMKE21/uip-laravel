@@ -84,9 +84,14 @@ class StoryService
     /** استوري واحدة لو المستخدم يقدر يشوفها (وإلا null). */
     private function visibleStory(int $uid, int $storyId): ?object
     {
-        return $this->visibleScope($uid)->where('s.id', $storyId)
+        $row = $this->visibleScope($uid)->where('s.id', $storyId)
             ->select('s.*', 'u.full_name', 'u.avatar_path', 'u.email')
             ->first();
+        // إعداد "مين يشوف الاستوري بتاعتي" على مستوى الحساب بيعلو على جمهور الاستوري نفسها.
+        if ($row && (int) $row->user_id !== $uid && !app(ChatSettingsService::class)->allows((int) $row->user_id, $uid, 'stories')) {
+            return null;
+        }
+        return $row;
     }
 
     // ------------------------------------------------------------------ Feed
@@ -101,6 +106,8 @@ class StoryService
             ->select('s.*', 'u.full_name', 'u.avatar_path', 'v.viewed_at as my_viewed_at', 'v.reaction as my_reaction')
             ->orderBy('s.created_at')
             ->get();
+        $cs = app(ChatSettingsService::class);
+        $rows = $rows->filter(fn ($r) => (int) $r->user_id === $uid || $cs->allows((int) $r->user_id, $uid, 'stories'))->values();
 
         $muted = DB::table('story_mutes')->where('user_id', $uid)->pluck('muted_user_id')->map(fn ($v) => (int) $v)->all();
 
@@ -199,6 +206,14 @@ class StoryService
             throw new \InvalidArgumentException('Invalid story type.');
         }
 
+        // من غير اختيار صريح: افتراضيات المستخدم من إعدادات الشات (الجمهور + المدة + السماح بالردود).
+        $def = app(ChatSettingsService::class)->storyDefaults($uid);
+        if (!isset($in['audience'])) {
+            $in['audience'] = $def['audience'];
+            $in['audience_ids'] = $in['audience_ids'] ?? $def['audience_ids'];
+        }
+        $in['expires_hours'] = $in['expires_hours'] ?? $def['expires_hours'];
+        $in['allow_replies'] = $in['allow_replies'] ?? $def['allow_replies'];
         $audience = (string) ($in['audience'] ?? 'contacts');
         if (!in_array($audience, self::AUDIENCES, true)) {
             throw new \InvalidArgumentException('Invalid audience.');
@@ -407,7 +422,7 @@ class StoryService
             throw new \RuntimeException('You cannot send messages to this user.');
         }
 
-        $conversationId = $this->messaging->openOrStartDirectByEmail($uid, (string) $s->email);
+        $conversationId = $this->messaging->openOrStartDirectByEmail($uid, (string) $s->email, true);
         $snippet = $s->type === 'text' ? mb_substr((string) $s->body, 0, 80) : mb_substr((string) ($s->caption ?? ''), 0, 80);
         $message = $this->messaging->sendMessage($conversationId, $uid, $body, [
             'metadata' => ['story_reply' => [

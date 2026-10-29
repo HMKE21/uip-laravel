@@ -422,7 +422,7 @@ class MessagingController extends Controller
     public function presence(Request $request)
     {
         $userIds = array_map('intval', (array) $request->input('user_ids', []));
-        return $this->apiSuccess($this->messaging->presenceFor($userIds), 'Presence retrieved successfully.');
+        return $this->apiSuccess($this->messaging->presenceFor($userIds, $this->uid($request)), 'Presence retrieved successfully.');
     }
 
     /** GET /api/v1/messaging/attachments/{id}/download */

@@ -59,6 +59,7 @@ class MessagingService
         private AudioDenoiseService $denoise,
         private GroupChatService $groups,
         private ChatSafetyService $safety,
+        private ChatSettingsService $chatSettings,
     ) {
     }
 
@@ -74,7 +75,7 @@ class MessagingService
         $blockedSet = array_flip($this->safety->blockedIds((int) $userId));
 
         return array_map(function ($row) use ($blockedSet, $userId) {
-            $others = $this->flagDeleted($this->applyAvatarPrivacy($row['other_participants']));
+            $others = $this->flagDeleted($this->applyAvatarPrivacy($row['other_participants'], (int) $userId));
             $isSaved = !empty($row['saved_for_user_id']);
             $displayName = $row['subject'] ?: ($row['is_group'] ? $row['group_name'] : null) ?: ($others[0]['full_name'] ?? ($isSaved ? 'Saved Messages' : '—'));
             $peer = !$row['is_group'] ? ($others[0] ?? null) : null;
@@ -92,6 +93,7 @@ class MessagingService
                 // الطرف التاني في المحادثة المباشرة (إيميل/صورة/نوع حساب) — الصورة null لو هو مخفيها.
                 'peer_email'         => $peer['email'] ?? null,
                 'peer_avatar'        => $peer['avatar_path'] ?? null,
+                'peer_bio'           => $peer['bio'] ?? null,
                 'peer_role'          => $peer['account_role'] ?? null,
                 // الطرف التاني حذف حسابه: المحادثة بتتقفل (قراءة بس) والفرونت بيغيّر شكلها.
                 'peer_deleted'       => (bool) ($peer['is_deleted'] ?? false),
@@ -193,11 +195,17 @@ class MessagingService
             return [];
         }
         $rows = $this->users->searchDirectory($query, $excludeUserId);
+        $viewer = (int) $excludeUserId;
+        // اللي قفل "أظهر في البحث" مبيظهرش لغير جهات اتصاله.
+        $rows = array_values(array_filter($rows, fn ($r) => $this->chatSettings->discoverable((int) $r['id']) || $this->chatSettings->isContact((int) $r['id'], $viewer)));
         // الصورة تتشال من أي شخص مخفيها — الفرونت يعرض الحروف الأولى بدلها.
         foreach ($rows as &$r) {
             if ($this->isAvatarHidden((int) $r['id'], $excludeUserId)) {
                 $r['avatar_path'] = null;
             }
+            // مين مسموح يبدأ معاه محادثة جديدة؟ الفرونت بيعرض "مش بيستقبل رسائل" بدل ما الإرسال يفشل.
+            $r['can_message'] = $this->chatSettings->allows((int) $r['id'], $viewer, 'messages') || $this->chatSettings->isContact((int) $r['id'], $viewer);
+            $r['can_add_to_group'] = $this->chatSettings->allows((int) $r['id'], $viewer, 'groups');
         }
         unset($r);
         return $rows;
@@ -221,7 +229,7 @@ class MessagingService
             $this->notifications->markConversationNotificationsRead($userId, $conversationId);
         }
 
-        $others = $this->flagDeleted($this->applyAvatarPrivacy($this->conversations->otherParticipants($conversationId, $userId)));
+        $others = $this->flagDeleted($this->applyAvatarPrivacy($this->conversations->otherParticipants($conversationId, $userId), (int) $userId));
         $messages = array_map(
             fn ($m) => $this->shapeMessage($m, $userId),
             $this->messages->forConversation($conversationId, $userId, $beforeId)
@@ -398,11 +406,15 @@ class MessagingService
             if ($this->isMuted($conversationId, $participant['id'])) {
                 continue;
             }
+            $np = $this->chatSettings->notifyPrefs((int) $participant['id']);
+            if (!$np['notify']) {
+                continue; // قفل إشعارات الرسائل من إعدادات الشات
+            }
             $this->notifications->notify(
                 $participant['id'],
                 'new_message',
                 'New message from ' . ($sender->full_name ?? 'a user'),
-                $body !== '' ? mb_substr($body, 0, 140) : '(attachment)',
+                !$np['preview'] ? '(message)' : ($body !== '' ? mb_substr($body, 0, 140) : '(attachment)'),
                 $this->messagesLinkFor($participant['id'], $conversationId)
             );
         }
@@ -415,7 +427,7 @@ class MessagingService
     }
 
     /** يبدأ محادثة مباشرة (find-or-create) بالإيميل، من غير ما يبعت رسالة. */
-    public function openOrStartDirectByEmail($userId, string $recipientEmail): int
+    public function openOrStartDirectByEmail($userId, string $recipientEmail, bool $viaStoryReply = false): int
     {
         $recipient = $this->users->findByEmail(trim($recipientEmail));
         if (!$recipient) {
@@ -432,6 +444,9 @@ class MessagingService
 
         $this->assertNotBlockedPair((int) $userId, (int) $recipient->id);
         $this->assertGroupMessagingAllowed($userId, $recipient->id);
+        if (!$viaStoryReply) { // الرد على استوري شافها صاحبها مسموحة حتى لو بيقفل المحادثات الجديدة
+            $this->assertRecipientAcceptsMessages((int) $userId, (int) $recipient->id);
+        }
 
         $conversation = $this->conversations->createWithParticipants(null, [$userId, $recipient->id]);
         return (int) $conversation->id;
@@ -452,6 +467,7 @@ class MessagingService
         $this->assertNotBlockedPair((int) $userId, (int) $recipient->id);
         if (!$existing) {
             $this->assertGroupMessagingAllowed($userId, $recipient->id);
+            $this->assertRecipientAcceptsMessages((int) $userId, (int) $recipient->id);
         }
         $conversation = $existing ?? $this->conversations->createWithParticipants(null, [$userId, $recipient->id]);
 
@@ -474,6 +490,14 @@ class MessagingService
         }
 
         return (int) $conversation->id;
+    }
+
+    /** إعداد "مين يقدر يبدأ معايا محادثة": بيتطبّق على المحادثات الجديدة بس (القديمة بتفضل شغالة). */
+    private function assertRecipientAcceptsMessages(int $senderId, int $recipientId): void
+    {
+        if (!$this->chatSettings->allows($recipientId, $senderId, 'messages')) {
+            throw new \RuntimeException('This person is not accepting new messages from you.');
+        }
     }
 
     /**
@@ -970,6 +994,8 @@ class MessagingService
         if ($groupName === '') {
             throw new \RuntimeException('Group name is required.');
         }
+        // اللي مقفل "مين يضيفني لمجموعات" من الشخص ده بيتتخطى (مش بنفشّل إنشاء المجموعة كلها).
+        $memberIds = array_values(array_filter(array_map('intval', $memberIds), fn ($m) => $m > 0 && $this->chatSettings->allows($m, (int) $creatorId, 'groups')));
         $conversation = $this->conversations->createGroup(mb_substr($groupName, 0, 100), $creatorId, $memberIds);
         $this->groups->afterCreate((int) $conversation->id, $creatorId, $description);
         return $this->threadForUser((int) $conversation->id, $creatorId) ?? [];
@@ -1001,6 +1027,9 @@ class MessagingService
     {
         if (DB::table('conversations')->where('id', $conversationId)->whereNotNull('saved_for_user_id')->exists()) {
             throw new \RuntimeException('You cannot add people to Saved Messages.');
+        }
+        if (!$this->chatSettings->allows((int) $newUserId, (int) $actingUserId, 'groups')) {
+            throw new \RuntimeException('This person does not allow being added to groups by you.');
         }
         $this->groups->addMembers($conversationId, $actingUserId, [$newUserId]);
     }
@@ -1059,33 +1088,44 @@ class MessagingService
     /** @var array<int,bool> كاش per-request: user_id => صورته مخفية؟ */
     private array $avatarHiddenCache = [];
 
-    /** هل المستخدم ده مخفي صورته في الشات؟ (صاحب الصورة بيشوف صورته دايمًا). */
+    /**
+     * هل صورة $ownerId مخفية عن $viewerId؟ (صاحب الصورة بيشوف صورته دايمًا).
+     * مخفية لو: "صورتي للعامة" مقفولة (كل البوابات)، أو إعداد "مين يشوف صورتي" في الشات مش مسموح للمشاهد ده.
+     * من غير مشاهد معروف ($viewerId = null) بنتصرف كأنه شخص غريب.
+     */
     public function isAvatarHidden(int $ownerId, $viewerId = null): bool
     {
         if ($viewerId !== null && (string) $ownerId === (string) $viewerId) {
             return false;
         }
         if (!array_key_exists($ownerId, $this->avatarHiddenCache)) {
-            // مخفية لو قفلها من إعداد الشات، أو من إعداد "صورتي للعامة" (كل البوابات).
-            $this->avatarHiddenCache[$ownerId] =
-                $this->settings->get('messaging_show_avatar', 'user', $ownerId, '1') === '0'
-                || $this->settings->get('profile_photo_public', 'user', $ownerId, '1') === '0';
+            $this->avatarHiddenCache[$ownerId] = $this->settings->get('profile_photo_public', 'user', $ownerId, '1') === '0';
         }
-        return $this->avatarHiddenCache[$ownerId];
+        if ($this->avatarHiddenCache[$ownerId]) {
+            return true;
+        }
+        return !$this->chatSettings->allows($ownerId, $viewerId !== null ? (int) $viewerId : null, 'avatar');
     }
 
-    /**
-     * يشيل avatar_path من أي مشارك مخفي صورته — الفرونت بيرجع للحروف الأولى
-     * تلقائيًا لما avatar_path يبقى null.
-     *
-     * @param array<int,array<string,mixed>> $participants
-     * @return array<int,array<string,mixed>>
-     */
-    private function applyAvatarPrivacy(array $participants): array
+    /** بيو المستخدم لو مسموح للمشاهد يشوفه (وإلا null). */
+    public function bioFor(int $ownerId, $viewerId): ?string
+    {
+        if (!$this->chatSettings->allows($ownerId, $viewerId !== null ? (int) $viewerId : null, 'bio')) {
+            return null;
+        }
+        $bio = $this->chatSettings->bio($ownerId);
+        return $bio !== '' ? $bio : null;
+    }
+
+    /** بيطبّق خصوصية الصورة + البايو على المشاركين من منظور المشاهد $viewerId. */
+    private function applyAvatarPrivacy(array $participants, $viewerId = null): array
     {
         foreach ($participants as &$p) {
-            if (isset($p['id']) && $this->isAvatarHidden((int) $p['id'])) {
-                $p['avatar_path'] = null;
+            if (isset($p['id'])) {
+                if ($this->isAvatarHidden((int) $p['id'], $viewerId)) {
+                    $p['avatar_path'] = null;
+                }
+                $p['bio'] = $this->bioFor((int) $p['id'], $viewerId);
             }
         }
         unset($p);
@@ -1104,6 +1144,7 @@ class MessagingService
             unset($p['deleted_at']);
             if ($p['is_deleted']) {
                 $p['avatar_path'] = null;
+                $p['bio'] = null;
                 $p['email'] = '';
             }
         }
@@ -1191,24 +1232,32 @@ class MessagingService
     /** @return array{read_receipts_enabled:bool,show_avatar:bool} */
     public function chatPrivacyFor($userId): array
     {
+        $s = $this->chatSettings->get((int) $userId);
         return [
-            'read_receipts_enabled' => $this->readReceiptsEnabled($userId),
-            'show_avatar'           => $this->settings->get('messaging_show_avatar', 'user', $userId, '1') === '1',
+            'read_receipts_enabled' => $s['read_receipts_enabled'],
+            'show_avatar'           => $s['privacy']['avatar']['audience'] !== 'nobody',
         ];
     }
 
     /**
+     * واجهة قديمة (مفتاحين بس) — بتكتب في نفس مخزن إعدادات الشات الجديد.
      * @param array{read_receipts_enabled?:mixed,show_avatar?:mixed} $input أي مفتاح مش مبعوت بيفضل زي ما هو
      * @return array{read_receipts_enabled:bool,show_avatar:bool}
      */
     public function updateChatPrivacy($userId, array $input): array
     {
+        $patch = [];
         if (array_key_exists('read_receipts_enabled', $input)) {
-            $this->settings->set('messaging_read_receipts_enabled', filter_var($input['read_receipts_enabled'], FILTER_VALIDATE_BOOLEAN) ? '1' : '0', 'user', $userId);
+            $patch['read_receipts_enabled'] = $input['read_receipts_enabled'];
         }
         if (array_key_exists('show_avatar', $input)) {
-            $this->settings->set('messaging_show_avatar', filter_var($input['show_avatar'], FILTER_VALIDATE_BOOLEAN) ? '1' : '0', 'user', $userId);
+            $show = filter_var($input['show_avatar'], FILTER_VALIDATE_BOOLEAN);
+            $cur = $this->chatSettings->get((int) $userId)['privacy']['avatar'];
+            $patch['privacy'] = ['avatar' => ['audience' => $show ? ($cur['audience'] === 'nobody' ? 'everyone' : $cur['audience']) : 'nobody']];
             unset($this->avatarHiddenCache[(int) $userId]);
+        }
+        if ($patch) {
+            $this->chatSettings->update((int) $userId, $patch);
         }
         return $this->chatPrivacyFor($userId);
     }
@@ -1267,6 +1316,10 @@ class MessagingService
     /** بيضبط/يمسح "بيكتب في المحادثة X" — مرّر $conversationId = null عشان تمسح. */
     public function setTyping($userId, ?int $conversationId): void
     {
+        // "مؤشر الكتابة" مقفول: نحدّث آخر ظهور بس ومنقولش للتاني إني بكتب.
+        if ($conversationId !== null && !$this->chatSettings->typingVisible((int) $userId)) {
+            $conversationId = null;
+        }
         DB::table('user_presence')->updateOrInsert(
             ['user_id' => $userId],
             [
@@ -1292,10 +1345,17 @@ class MessagingService
     }
 
     /** حالة أونلاين/آخر ظهور لمجموعة من الـ user ids. */
-    public function presenceFor(array $userIds): array
+    public function presenceFor(array $userIds, $viewerId = null): array
     {
         if (!$userIds) {
             return [];
+        }
+        // اللي مخفي آخر ظهوره عن المشاهد ده مبيرجعش ليه أي حالة (الفرونت مبيعرضش حاجة).
+        if ($viewerId !== null) {
+            $userIds = array_values(array_filter($userIds, fn ($id) => $this->chatSettings->allows((int) $id, (int) $viewerId, 'last_seen')));
+            if (!$userIds) {
+                return [];
+            }
         }
         $threshold = (int) config('messaging.presence.online_threshold_s', 30);
         $rows = DB::table('user_presence')->whereIn('user_id', $userIds)->get(['user_id', 'last_seen_at']);

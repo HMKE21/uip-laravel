@@ -80,6 +80,10 @@ class CallService
         if ($this->safety->isBlockedEitherWay($userId, $peerId)) {
             throw new \RuntimeException('You cannot call this user.');
         }
+        // إعداد "مين يقدر يتصل بيا" عند الطرف التاني.
+        if (!app(ChatSettingsService::class)->allows($peerId, $userId, 'calls')) {
+            throw new \RuntimeException('This person is not accepting calls from you.');
+        }
 
         // حد بدء المكالمات في الدقيقة (حماية من إزعاج/رنّات متكررة).
         $key = 'calls_start_' . $userId . '_' . (int) floor(time() / 60);

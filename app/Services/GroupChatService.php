@@ -493,6 +493,10 @@ class GroupChatService
             if (!DB::table('users')->where('id', $uid)->exists()) {
                 continue;
             }
+            // "مين يقدر يضيفني لمجموعات": اللي مقفلها قدام الشخص ده بيتتخطى.
+            if (!app(ChatSettingsService::class)->allows($uid, (int) $actorId, 'groups')) {
+                continue;
+            }
             if ($count + $added >= $this->maxMembers($row)) {
                 throw new \RuntimeException('This group has reached its member limit.');
             }

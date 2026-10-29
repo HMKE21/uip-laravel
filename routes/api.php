@@ -77,6 +77,7 @@ use App\Http\Controllers\Api\MeetingsAttendanceApiController;
 use App\Http\Controllers\Api\MeetingsInvitationsApiController;
 use App\Http\Controllers\Api\MessagingController;
 use App\Http\Controllers\Api\StoriesApiController;
+use App\Http\Controllers\Api\ChatSettingsApiController;
 use App\Http\Controllers\Api\CallsApiController;
 use App\Http\Controllers\Api\ChunkedUploadController;
 use App\Http\Controllers\Api\GroupChatController;
@@ -2050,6 +2051,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/search', [MessagingController::class, 'search']);
         Route::get('/mentions', [MessagingController::class, 'mentions']);
         Route::get('/categories', [MessagingController::class, 'categories']);
+        Route::get('/settings', [ChatSettingsApiController::class, 'show']);
+        Route::patch('/settings', [ChatSettingsApiController::class, 'update']);
         Route::get('/privacy', [MessagingController::class, 'privacy']);
         Route::patch('/privacy', [MessagingController::class, 'updatePrivacy']);
 
