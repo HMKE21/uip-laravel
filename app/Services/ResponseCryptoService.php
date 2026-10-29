@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Cache;
  */
 class ResponseCryptoService
 {
+    /** Why the last bindClient() refused a key: missing | ua | sub (diagnostics only). */
+    public string $lastFailure = '';
+
     private const SPKI_P256_PREFIX = '3059301306072a8648ce3d020106082a8648ce3d030107034200';
 
     public static function b64uEncode(string $raw): string
@@ -25,7 +28,22 @@ class ResponseCryptoService
         return (string) base64_decode(strtr($s, '-_', '+/') . str_repeat('=', (4 - strlen($s) % 4) % 4), true);
     }
 
-    /** @return array{kid:string,server_pub:string,salt:string}|null */
+    /**
+     * What a key is bound to. Browsers: the User-Agent. The Android app talks through two stacks (native HTTP and the WebView: uploads,
+     * streams, XHR) that can send different User-Agents, so for it the binding is the app marker header instead (the app token and the
+     * account binding below still apply).
+     */
+    public static function clientFingerprint(?\Illuminate\Http\Request $request = null): string
+    {
+        $request ??= request();
+        if (strtolower((string) $request->header('X-UIP-Client', '')) === 'android') {
+            return 'uip-android-app';
+        }
+
+        return (string) $request->userAgent();
+    }
+
+    /** @return array{kid:string,server_pub:string,salt:string,server_time:int}|null */
     public function handshake(string $clientPubB64u): ?array
     {
         $point = self::b64uDecode($clientPubB64u);
@@ -66,10 +84,10 @@ class ResponseCryptoService
         $ttl = (int) config('secure_transport.key_ttl', 7200);
         // The key id is bound to the client that did the handshake (User-Agent hash now, account id on its first
         // authenticated call), so a leaked/stolen X-Enc-Kid cannot be replayed from another browser or another account.
-        $record = array_map('base64_encode', $keys) + ['ua' => hash('sha256', (string) request()->userAgent()), 'sub' => '', 'exp' => time() + $ttl];
+        $record = array_map('base64_encode', $keys) + ['ua' => hash('sha256', self::clientFingerprint()), 'sub' => '', 'exp' => time() + $ttl];
         Cache::put('resp_enc:' . $kid, json_encode($record), $ttl);
 
-        return ['kid' => $kid, 'server_pub' => self::b64uEncode($serverPub), 'salt' => self::b64uEncode($salt)];
+        return ['kid' => $kid, 'server_pub' => self::b64uEncode($serverPub), 'salt' => self::b64uEncode($salt), 'server_time' => (int) round(microtime(true) * 1000)];
     }
 
     /** @return array{resp:string,req:string}|null */
@@ -96,10 +114,13 @@ class ResponseCryptoService
     {
         $v = Cache::get('resp_enc:' . $kid);
         $rec = $v ? json_decode($v, true) : null;
+        $this->lastFailure = '';
         if (!is_array($rec)) {
+            $this->lastFailure = 'missing';
             return false;
         }
         if (isset($rec['ua']) && !hash_equals((string) $rec['ua'], hash('sha256', $userAgent))) {
+            $this->lastFailure = 'ua';
             return false;
         }
         $sub = '';
@@ -119,7 +140,12 @@ class ResponseCryptoService
             return true;
         }
 
-        return hash_equals($bound, $sub);
+        if (!hash_equals($bound, $sub)) {
+            $this->lastFailure = 'sub';
+            return false;
+        }
+
+        return true;
     }
 
     /**

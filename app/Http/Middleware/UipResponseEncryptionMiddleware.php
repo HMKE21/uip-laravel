@@ -25,13 +25,13 @@ class UipResponseEncryptionMiddleware
     {
     }
 
-    private function reject(string $code, int $status = 428)
+    private function reject(string $code, int $status = 428, string $reason = '')
     {
         return response()->json([
             'success' => false,
-            'message' => $code === 'enc_bad_request' ? 'Invalid or expired secure request.' : 'Secure channel required.',
+            'message' => $code === 'enc_bad_request' ? 'Invalid or expired secure request.' : ('Secure channel required.' . ($reason !== '' ? " ({$code}: {$reason})" : '')),
             'data'    => null,
-            'errors'  => ['code' => $code],
+            'errors'  => ['code' => $code] + ($reason !== '' ? ['reason' => $reason] : []),
             'meta'    => (object) [],
         ], $status)->header('Cache-Control', 'no-store');
     }
@@ -82,8 +82,10 @@ class UipResponseEncryptionMiddleware
 
         $kid  = (string) $request->header('X-Enc-Kid', '');
         $keys = $kid !== '' ? $this->crypto->keysFor($kid) : null;
+        $why  = ($kid !== '' && $keys === null) ? 'not_in_cache' : '';   // diagnostics: shown in the 428 so a screenshot says which check failed
         // A key id presented by a different client / account than the one that negotiated it is treated as expired (client re-handshakes).
-        if ($keys !== null && !$this->crypto->bindClient($kid, (string) $request->userAgent(), (string) $request->header('Authorization', ''))) {
+        if ($keys !== null && !$this->crypto->bindClient($kid, ResponseCryptoService::clientFingerprint($request), (string) $request->header('Authorization', ''))) {
+            $why  = $this->crypto->lastFailure ?: 'bind';
             $keys = null;
         }
 
@@ -100,7 +102,9 @@ class UipResponseEncryptionMiddleware
 
         if ($key === null) {
             if ($kid !== '') {
-                return $this->reject('enc_key_expired'); // client re-handshakes and retries
+                \Illuminate\Support\Facades\Log::notice('Secure channel: key refused', ['reason' => $why, 'kid' => substr($kid, 0, 8), 'path' => $request->path(), 'client' => (string) $request->header('X-UIP-Client', '')]);
+
+                return $this->reject('enc_key_expired', 428, $why); // client re-handshakes and retries
             }
             if (!$enforce) {
                 return $next($request);
