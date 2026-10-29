@@ -19,7 +19,7 @@ class ConversationRepository
     {
         $rows = DB::select(
             "SELECT c.id, c.subject, c.related_project_id, c.updated_at,
-                    c.is_group, c.group_name, c.avatar_path AS group_avatar,
+                    c.is_group, c.group_name, c.avatar_path AS group_avatar, c.saved_for_user_id,
                     cp.last_read_at, cp.role AS my_role,
                     cp.is_favorite, cp.is_pinned, cp.is_muted, cp.is_archived, cp.category, cp.deleted_at,
                     m.body AS last_message_body, m.created_at AS last_message_at, m.sender_id AS last_message_sender_id,
@@ -69,6 +69,46 @@ class ConversationRepository
             [$conversationId, $excludingUserId]
         );
         return array_map(fn ($r) => (array) $r, $rows);
+    }
+
+    /**
+     * محادثة "الرسائل المحفوظة" الخاصة بالمستخدم — بتتعمل أول مرة وتتثبّت في أول القايمة.
+     * مشارك واحد بس (صاحبها)، فمفيش حد تاني يقدر يشوفها أو يضيف نفسه (isParticipant هو اللي بيحمي كل الـ endpoints).
+     */
+    public function savedConversationFor(int $userId): Conversation
+    {
+        $conversation = Conversation::where('saved_for_user_id', $userId)->first();
+        if (!$conversation) {
+            try {
+                $conversation = DB::transaction(function () use ($userId) {
+                    $c = Conversation::create(['saved_for_user_id' => $userId]);
+                    DB::table('conversation_participants')->insert([
+                        'conversation_id' => $c->id,
+                        'user_id'         => $userId,
+                        'joined_at'       => now(),
+                        'role'            => 'owner',
+                        'is_pinned'       => 1,
+                    ]);
+                    return $c;
+                });
+            } catch (\Illuminate\Database\QueryException $e) {
+                // طلبين متزامنين: التاني كسب السباق (unique) — نقرأ اللي اتعمل.
+                $conversation = Conversation::where('saved_for_user_id', $userId)->first();
+                if (!$conversation) {
+                    throw $e;
+                }
+            }
+        }
+        // لو المشاركة اتشالت أو المحادثة اتنقلت للسلة بأي طريقة، نرجّعها.
+        $exists = DB::table('conversation_participants')->where('conversation_id', $conversation->id)->where('user_id', $userId)->exists();
+        if (!$exists) {
+            DB::table('conversation_participants')->insert([
+                'conversation_id' => $conversation->id, 'user_id' => $userId, 'joined_at' => now(), 'role' => 'owner', 'is_pinned' => 1,
+            ]);
+        } else {
+            DB::table('conversation_participants')->where('conversation_id', $conversation->id)->where('user_id', $userId)->whereNotNull('deleted_at')->update(['deleted_at' => null]);
+        }
+        return $conversation;
     }
 
     public function isParticipant(int $conversationId, $userId): bool

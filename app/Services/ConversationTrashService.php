@@ -62,6 +62,11 @@ class ConversationTrashService
     public function delete(int $userId, array $ids, bool $all = false): int
     {
         $targets = $this->targetIds($userId, $ids, $all, false);
+        // "الرسائل المحفوظة" ثابتة: ما بتتحذفش ولا بتروح للسلة.
+        if ($targets) {
+            $saved = DB::table('conversations')->whereIn('id', $targets)->whereNotNull('saved_for_user_id')->pluck('id')->map(fn ($i) => (int) $i)->all();
+            $targets = array_values(array_diff($targets, $saved));
+        }
         if (!$targets) {
             return 0;
         }

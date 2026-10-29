@@ -67,15 +67,22 @@ class MessagingService
     /** @return array<int,array<string,mixed>> صفوف الـ inbox، بشكل الفرونت المتوقع */
     public function inboxForUser($userId, bool $trashed = false): array
     {
+        if (!$trashed) {
+            $this->conversations->savedConversationFor((int) $userId); // كل مستخدم عنده "الرسائل المحفوظة" جاهزة
+        }
         $rows = $this->conversations->inboxForUser($userId, $trashed);
         $blockedSet = array_flip($this->safety->blockedIds((int) $userId));
 
         return array_map(function ($row) use ($blockedSet, $userId) {
             $others = $this->flagDeleted($this->applyAvatarPrivacy($row['other_participants']));
-            $displayName = $row['subject'] ?: ($row['is_group'] ? $row['group_name'] : null) ?: ($others[0]['full_name'] ?? '—');
+            $isSaved = !empty($row['saved_for_user_id']);
+            $displayName = $row['subject'] ?: ($row['is_group'] ? $row['group_name'] : null) ?: ($others[0]['full_name'] ?? ($isSaved ? 'Saved Messages' : '—'));
             $peer = !$row['is_group'] ? ($others[0] ?? null) : null;
 
             return [
+                'is_saved'           => $isSaved,
+                // true = لسه بالاسم الافتراضي (الفرونت بيترجمه حسب اللغة)؛ false = المستخدم سمّاها بنفسه
+                'saved_default_name' => $isSaved && !$row['subject'],
                 'id'                 => (int) $row['id'],
                 'subject'            => $displayName,
                 'is_group'           => (bool) $row['is_group'],
@@ -229,13 +236,22 @@ class MessagingService
         }
         unset($msgRow);
 
+        $isSaved = !empty($conversation->saved_for_user_id);
         $conversationOut = [
             'id'       => (int) $conversation->id,
-            'subject'  => $conversation->subject ?: ($conversation->is_group ? $conversation->group_name : null) ?: ($others[0]['full_name'] ?? '—'),
+            'subject'  => $conversation->subject ?: ($conversation->is_group ? $conversation->group_name : null) ?: ($others[0]['full_name'] ?? ($isSaved ? 'Saved Messages' : '—')),
+            'is_saved' => $isSaved,
+            'saved_default_name' => $isSaved && !$conversation->subject,
             'is_group' => (bool) $conversation->is_group,
             'my_role'  => $this->conversations->memberRole($conversationId, $userId),
         ];
-        if (!$conversation->is_group) {
+        if ($isSaved) {
+            $conversationOut['can_send'] = true;
+            $conversationOut['peer_deleted'] = false;
+            $conversationOut['peer_id'] = null;
+            $conversationOut['blocked_by_me'] = false;
+            $conversationOut['send_block'] = null;
+        } elseif (!$conversation->is_group) {
             // محادثة مباشرة مع حساب محذوف: القراءة متاحة والإرسال لأ.
             $peerDeleted = (bool) ($others[0]['is_deleted'] ?? false);
             $peerId = isset($others[0]['id']) ? (int) $others[0]['id'] : null;
@@ -959,8 +975,33 @@ class MessagingService
         return $this->threadForUser((int) $conversation->id, $creatorId) ?? [];
     }
 
+    /** أول فتح لـ "الرسائل المحفوظة" (من الـ API مباشرة): ترجّع id المحادثة. */
+    public function savedConversationId($userId): int
+    {
+        return (int) $this->conversations->savedConversationFor((int) $userId)->id;
+    }
+
+    /** تسمية "الرسائل المحفوظة" (صاحبها بس). اسم فاضي = رجوع للاسم الافتراضي. */
+    public function renameSaved(int $conversationId, $userId, ?string $name): ?string
+    {
+        $c = $this->conversations->find($conversationId);
+        if (!$c || (string) $c->saved_for_user_id !== (string) $userId) {
+            throw new \RuntimeException('Conversation not found.');
+        }
+        $name = trim((string) $name);
+        if (mb_strlen($name) > 60) {
+            throw new \RuntimeException('Name is too long (max 60 characters).');
+        }
+        $c->subject = $name === '' ? null : $name;
+        $c->save();
+        return $c->subject;
+    }
+
     public function addMember(int $conversationId, $actingUserId, $newUserId): void
     {
+        if (DB::table('conversations')->where('id', $conversationId)->whereNotNull('saved_for_user_id')->exists()) {
+            throw new \RuntimeException('You cannot add people to Saved Messages.');
+        }
         $this->groups->addMembers($conversationId, $actingUserId, [$newUserId]);
     }
 

@@ -19,7 +19,7 @@ class Conversation extends Model
 
     protected $fillable = [
         'subject', 'related_project_id',
-        'is_group', 'group_name', 'student_group_id',
+        'is_group', 'group_name', 'student_group_id', 'saved_for_user_id',
     ];
 
     protected $casts = [

@@ -96,6 +96,24 @@ class MessagingController extends Controller
         });
     }
 
+    /** GET /api/v1/messaging/saved — يفتح (وينشئ لو أول مرة) "الرسائل المحفوظة" الخاصة بالمستخدم */
+    public function saved(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $id = $this->messaging->savedConversationId($this->uid($request));
+            return $this->apiSuccess($this->messaging->threadForUser($id, $this->uid($request)), 'Saved messages retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/saved-name — body: name (فاضي = الاسم الافتراضي) */
+    public function renameSaved(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $name = $this->messaging->renameSaved((int) $id, $this->uid($request), (string) $request->input('name', ''));
+            return $this->apiSuccess(['subject' => $name], 'Saved messages renamed.');
+        });
+    }
+
     /** POST /api/v1/messaging/conversations/group — body: name, description?, member_ids[] */
     public function createGroup(Request $request)
     {
