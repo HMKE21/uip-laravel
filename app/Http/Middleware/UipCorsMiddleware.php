@@ -45,7 +45,7 @@ class UipCorsMiddleware
     {
         $response->headers->set('Access-Control-Allow-Origin', $this->resolveAllowedOrigin($request));
         $response->headers->set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token, X-Exam-Session, X-Device-Id, X-Enc-Kid, X-App-Token, X-UIP-Client, X-Locale, X-Share-Session, X-Share-Client, X-Share-Confirm, X-View-Claim, Accept, Accept-Language, If-None-Match');
+        $response->headers->set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-CSRF-Token, X-Exam-Session, X-Device-Id, X-Enc-Kid, X-Enc-Z, X-App-Token, X-UIP-Client, X-Locale, X-Share-Session, X-Share-Client, X-Share-Confirm, X-View-Claim, Accept, Accept-Language, If-None-Match');
         // ETag lets the front-end re-validate its local copy of a file (304) instead of downloading it again
         $response->headers->set('Access-Control-Expose-Headers', 'ETag, Content-Disposition');
         $response->headers->set('Access-Control-Max-Age', '86400');

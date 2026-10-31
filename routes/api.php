@@ -248,6 +248,9 @@ Route::prefix('v1')->group(function () {
     });
 
     // جلسة واحدة نشطة لكل حساب — نبضة + تحرير عند قفل المتصفح (SessionsController).
+    // One call for the shell's permissions + heartbeat + notification counters + unread-messages badge (replaces 4 polled requests).
+    Route::get('/app/summary', [\App\Http\Controllers\Api\AppSummaryApiController::class, 'show'])->middleware(['uip.auth', 'throttle:120,1']);
+
     Route::middleware('uip.auth')->prefix('session')->group(function () {
         Route::get('/heartbeat', [SessionsController::class, 'heartbeat']);
         Route::post('/release', [SessionsController::class, 'release']);

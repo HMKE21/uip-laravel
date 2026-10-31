@@ -141,7 +141,20 @@ class UipResponseEncryptionMiddleware
         }
 
         $status   = $response->getStatusCode();
-        $envelope = json_encode(['enc' => 'v1', 'kid' => $kid, 'd' => $this->crypto->encrypt((string) $response->getContent(), $key, $kid, $status)]);
+        $plain = (string) $response->getContent();
+        $env   = ['enc' => 'v1', 'kid' => $kid];
+        // Compress BEFORE encrypting: ciphertext (and its base64) cannot be compressed by the proxy/CDN, so without this
+        // every JSON answer travelled ~33% bigger than the plain JSON instead of ~5x smaller. Opt-in per request
+        // (X-Enc-Z: 1) so older clients / the APK keep receiving the format they understand.
+        if ($request->header('X-Enc-Z') === '1' && strlen($plain) >= 600 && function_exists('gzencode')) {
+            $gz = gzencode($plain, 6);
+            if ($gz !== false && strlen($gz) < strlen($plain)) {
+                $plain = $gz;
+                $env['z'] = 1;
+            }
+        }
+        $env['d'] = $this->crypto->encrypt($plain, $key, $kid, $status);
+        $envelope = json_encode($env);
 
         $response->setContent($envelope);
         $response->headers->set('X-Enc', '1');
