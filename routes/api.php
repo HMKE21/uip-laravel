@@ -251,6 +251,9 @@ Route::prefix('v1')->group(function () {
     // One call for the shell's permissions + heartbeat + notification counters + unread-messages badge (replaces 4 polled requests).
     Route::get('/app/summary', [\App\Http\Controllers\Api\AppSummaryApiController::class, 'show'])->middleware(['uip.auth', 'throttle:120,1']);
 
+    // Per-user activity timeline: the browser tracker's batches (page views, clicks, errors). User = the token's own user.
+    Route::post('/activity/track', [\App\Http\Controllers\Api\ActivityTrackApiController::class, 'track'])->middleware(['uip.auth', 'throttle:90,1']);
+
     Route::middleware('uip.auth')->prefix('session')->group(function () {
         Route::get('/heartbeat', [SessionsController::class, 'heartbeat']);
         Route::post('/release', [SessionsController::class, 'release']);
@@ -1247,6 +1250,12 @@ Route::prefix('v1')->group(function () {
         // static قبل /{id} عشان مايتبلعش كـ uuid
         Route::get('/affiliation-options', [AdminUsersApiController::class, 'affiliationOptions']);
         Route::get('/filter-options', [AdminUsersApiController::class, 'filterOptions']);
+        // Activity timeline of one user (static suffix routes — declared before the bare /{id} ones)
+        Route::get('/{id}/activity', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'index']);
+        Route::get('/{id}/activity/summary', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'summary']);
+        Route::get('/{id}/activity/sessions', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'sessions']);
+        Route::get('/{id}/activity/export', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'export']);
+        Route::delete('/{id}/activity', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'destroy']);
         Route::get('/{id}', [AdminUsersApiController::class, 'show']);
         Route::patch('/{id}', [AdminUsersApiController::class, 'update']);
         Route::delete('/{id}', [AdminUsersApiController::class, 'destroy']);

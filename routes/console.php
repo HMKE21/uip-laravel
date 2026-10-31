@@ -69,3 +69,6 @@ Schedule::command('drive:purge-resets')->hourly()->withoutOverlapping();
 // المكالمات: تنضيف تخزين بس (الصفوف المنتهية الأقدم من CALLS_PRUNE_DAYS + أي مكالمة عالقة). صحة السلوك مش معتمدة عليه —
 // المكالمات المعلّقة بتتقفل كسولًا مع أي poll.
 Schedule::command('calls:prune')->dailyAt('04:30')->withoutOverlapping();
+
+// Per-user activity timeline: keep ACTIVITY_LOG_RETENTION_DAYS (90) days.
+Schedule::command('activity:prune')->dailyAt('04:30')->withoutOverlapping();

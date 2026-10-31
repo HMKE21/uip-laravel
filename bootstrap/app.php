@@ -97,6 +97,11 @@ return Application::configure(basePath: dirname(__DIR__))
             // IP + Country Restrictions على كل الـ API (قبل كده كانوا متخزّنين بس ومش متطبقين).
             \App\Http\Middleware\UipNetworkRestrictionMiddleware::class,
         ]);
+        // Per-user activity timeline (server half): every write + every failed request of a signed-in user. Appended so it sits
+        // INSIDE the response-encryption middleware (the JSON answer is still readable) and writes after the response is sent.
+        $middleware->api(append: [
+            \App\Http\Middleware\UipActivityLogMiddleware::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
