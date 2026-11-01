@@ -83,6 +83,18 @@ class MfaPolicyService
             return $result;
         }
 
+        // People who already enabled 2FA are the common case on an enforced role: remember that for 30s instead of loading
+        // the user row on every request. Anyone not enrolled is always re-checked.
+        $okKey = 'mfa:enrolled:' . $userId;
+        try {
+            if (\Illuminate\Support\Facades\Cache::get($okKey)) {
+                $result['required'] = true;
+                $result['enrolled'] = true;
+                return $result;
+            }
+        } catch (\Throwable $e) {
+        }
+
         $user = $this->users->findById($userId);
         if (!$user) {
             return $result;
@@ -92,6 +104,10 @@ class MfaPolicyService
 
         if ($user->two_factor_enabled) {
             $result['enrolled'] = true;
+            try {
+                \Illuminate\Support\Facades\Cache::put($okKey, 1, 30);
+            } catch (\Throwable $e) {
+            }
             return $result;
         }
 

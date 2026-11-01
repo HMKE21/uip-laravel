@@ -69,12 +69,17 @@ class MessagingService
     public function inboxForUser($userId, bool $trashed = false): array
     {
         if (!$trashed) {
-            $this->conversations->savedConversationFor((int) $userId); // كل مستخدم عنده "الرسائل المحفوظة" جاهزة
+            // كل مستخدم عنده "الرسائل المحفوظة" جاهزة. الفحص/الإصلاح بيتم مرة كل دقيقة بس بدل كل poll (كان 3 استعلامات في كل مرة).
+            if (\Illuminate\Support\Facades\Cache::add('inbox:saved-ok:' . (int) $userId, 1, 60)) {
+                $this->conversations->savedConversationFor((int) $userId);
+            }
         }
         $rows = $this->conversations->inboxForUser($userId, $trashed);
         $blockedSet = array_flip($this->safety->blockedIds((int) $userId));
+        $savedAvatar = null;
+        $savedAvatarLoaded = false;
 
-        return array_map(function ($row) use ($blockedSet, $userId) {
+        return array_map(function ($row) use ($blockedSet, $userId, &$savedAvatar, &$savedAvatarLoaded) {
             $others = $this->flagDeleted($this->applyAvatarPrivacy($row['other_participants'], (int) $userId));
             $isSaved = !empty($row['saved_for_user_id']);
             $displayName = $row['subject'] ?: ($row['is_group'] ? $row['group_name'] : null) ?: ($others[0]['full_name'] ?? ($isSaved ? 'Saved Messages' : '—'));
@@ -83,7 +88,7 @@ class MessagingService
             return [
                 'is_saved'           => $isSaved,
                 // "الرسائل المحفوظة": صورتي أنا (بتظهر بدل أيقونة العلامة لو عندي صورة)
-                'saved_avatar'       => $isSaved ? DB::table('users')->where('id', (int) $userId)->value('avatar_path') : null,
+                'saved_avatar'       => $isSaved ? $this->memoSavedAvatar($savedAvatar, $savedAvatarLoaded, (int) $userId) : null,
                 // true = لسه بالاسم الافتراضي (الفرونت بيترجمه حسب اللغة)؛ false = المستخدم سمّاها بنفسه
                 'saved_default_name' => $isSaved && !$row['subject'],
                 'id'                 => (int) $row['id'],
@@ -126,6 +131,16 @@ class MessagingService
                 'days_left'          => !empty($row['deleted_at']) ? \App\Services\ConversationTrashService::daysLeft($row['deleted_at']) : null,
             ];
         }, $rows);
+    }
+
+    private function memoSavedAvatar(&$value, bool &$loaded, int $userId)
+    {
+        if (!$loaded) {
+            $value = DB::table('users')->where('id', $userId)->value('avatar_path');
+            $loaded = true;
+        }
+
+        return $value;
     }
 
     /**
@@ -1947,6 +1962,11 @@ class MessagingService
 
     public function heartbeat($userId): void
     {
+        // "online" window is 30s, so writing more than once per ~10s per person only burns DB writes
+        // (every open tab used to do select+update on every beat).
+        if (!\Illuminate\Support\Facades\Cache::add('presence:hb:' . (int) $userId, 1, 10)) {
+            return;
+        }
         DB::table('user_presence')->updateOrInsert(
             ['user_id' => $userId],
             ['last_seen_at' => now()]

@@ -111,6 +111,17 @@ class AccountAccessGate
             return $this->memo[$key];
         }
 
+        // Only the "all clear" answer is cached (30s): a restricted person is always re-checked, so an approval or a grant
+        // unlocks at once, while the thousands of normal users stop costing a `students` query on every request.
+        $okKey = 'acgate:ok:' . $key;
+        try {
+            $hit = \Illuminate\Support\Facades\Cache::get($okKey);
+            if (is_array($hit)) {
+                return $this->memo[$key] = $hit;
+            }
+        } catch (\Throwable $e) {
+        }
+
         $out = [
             'enabled' => PlatformPolicy::flag('require_university_link'),
             'restricted' => false, 'reason' => null, 'exemption_cancelled' => false,
@@ -143,6 +154,13 @@ class AccountAccessGate
                     $r = DB::table('student_university_requests')->where('student_id', $student->id)->orderByDesc('id')->first(['status', 'created_at', 'university_id']);
                     $out['request'] = $r ? ['status' => $r->status, 'created_at' => $r->created_at, 'university_id' => $r->university_id] : null;
                 }
+            }
+        }
+
+        if ($out['enabled'] && !$out['restricted'] && !$out['allowed_features']) {
+            try {
+                \Illuminate\Support\Facades\Cache::put($okKey, $out, 30);
+            } catch (\Throwable $e) {
             }
         }
 

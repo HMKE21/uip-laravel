@@ -32,7 +32,7 @@ class ConversationRepository
              LEFT JOIN messages m ON m.id = (
                  SELECT id FROM messages
                  WHERE conversation_id = c.id
-                   AND id NOT IN (SELECT message_id FROM message_hidden_for_user WHERE user_id = ?)
+                   AND NOT EXISTS (SELECT 1 FROM message_hidden_for_user h WHERE h.message_id = messages.id AND h.user_id = ?)
                  ORDER BY created_at DESC LIMIT 1
              )
              WHERE cp.deleted_at " . ($trashed ? 'IS NOT NULL' : 'IS NULL') . "
@@ -42,8 +42,11 @@ class ConversationRepository
 
         $rows = array_map(fn ($r) => (array) $r, $rows);
 
+        // one query for everybody in all of these conversations (was: one query per conversation on every inbox poll)
+        $participants = $this->otherParticipantsMany(array_map(fn ($r) => (int) $r['id'], $rows), $userId);
+
         foreach ($rows as &$row) {
-            $row['other_participants'] = $this->otherParticipants((int) $row['id'], $userId);
+            $row['other_participants'] = $participants[(int) $row['id']] ?? [];
             $row['is_unread'] = $row['last_message_at']
                 && (string) $row['last_message_sender_id'] !== (string) $userId
                 && (!$row['last_read_at'] || strtotime($row['last_message_at']) > strtotime($row['last_read_at']));
@@ -51,6 +54,43 @@ class ConversationRepository
         unset($row);
 
         return $rows;
+    }
+
+    /**
+     * Same rows as otherParticipants(), for many conversations at once.
+     *
+     * @param  int[] $conversationIds
+     * @return array<int,array<int,array<string,mixed>>> conversation id => participants (same shape as otherParticipants())
+     */
+    public function otherParticipantsMany(array $conversationIds, $excludingUserId): array
+    {
+        $out = [];
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $conversationIds))), 400) as $chunk) {
+            if (!$chunk) {
+                continue;
+            }
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            $rows = DB::select(
+                'SELECT cp.conversation_id AS _cid, u.id, u.full_name, u.email, u.avatar_path, u.deleted_at,
+                        (SELECT r.slug FROM user_roles ur INNER JOIN roles r ON r.id = ur.role_id
+                          WHERE ur.user_id = u.id ORDER BY ur.assigned_at ASC LIMIT 1) AS account_role,
+                        COALESCE(uni.official_name_en, s.faculty) AS org
+                 FROM conversation_participants cp
+                 INNER JOIN users u ON u.id = cp.user_id
+                 LEFT JOIN universities uni ON uni.user_id = u.id
+                 LEFT JOIN students s ON s.user_id = u.id
+                 WHERE cp.conversation_id IN (' . $in . ') AND cp.user_id != ?',
+                array_merge($chunk, [$excludingUserId])
+            );
+            foreach ($rows as $r) {
+                $a = (array) $r;
+                $cid = (int) $a['_cid'];
+                unset($a['_cid']);
+                $out[$cid][] = $a;
+            }
+        }
+
+        return $out;
     }
 
     /** @return array<int,array{id:int,full_name:string,email:string,avatar_path:?string,account_role:?string,org:?string}> */
