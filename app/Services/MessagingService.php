@@ -653,6 +653,7 @@ class MessagingService
             'pinned_until'       => !empty($m['is_pinned']) && !empty($m['pinned_until']) ? $m['pinned_until'] : null,
             'pinned_at'          => !empty($m['is_pinned']) ? ($m['pinned_at'] ?? null) : null,
             'pinned_by_name'     => !empty($m['is_pinned']) ? ($m['pinned_by_name'] ?? null) : null,
+            'is_starred'         => $this->isStarredFor((int) $m['id'], $viewerId),
             'is_deleted'         => (bool) ($m['is_deleted'] ?? false),
             'deleted_reason'     => !empty($m['is_deleted']) ? ($m['deleted_reason'] ?? null) : null,
             'created_at'         => $m['created_at'],
@@ -1316,6 +1317,176 @@ class MessagingService
             ->get()
             ->all();
     }
+
+    // -- Star / Favourites / Message info (قائمة الرسالة) ---------------------
+
+    /** @var array<int,array<int,true>> كاش per-request: user_id => [message_id => true] */
+    private array $starCache = [];
+
+    private function isStarredFor(int $messageId, $viewerId): bool
+    {
+        if ($viewerId === null || $viewerId === '') {
+            return false;
+        }
+        $uid = (int) $viewerId;
+        if (!isset($this->starCache[$uid])) {
+            try {
+                $this->starCache[$uid] = array_fill_keys(
+                    DB::table('message_stars')->where('user_id', $uid)->pluck('message_id')->map(fn ($v) => (int) $v)->all(),
+                    true
+                );
+            } catch (\Throwable $e) {
+                $this->starCache[$uid] = []; // الجدول لسه متعملوش migrate
+            }
+        }
+        return isset($this->starCache[$uid][$messageId]);
+    }
+
+    /** نجمة شخصية: لازم تكون عضو في المحادثة، والرسالة مش محذوفة. */
+    public function setStarred(int $messageId, $userId, bool $starred): array
+    {
+        $message = $this->messages->find($messageId);
+        if (!$message || !$this->conversations->isParticipant((int) $message->conversation_id, $userId)) {
+            throw new \RuntimeException('Message not found.');
+        }
+        if ($starred) {
+            if (!empty($message->is_deleted)) {
+                throw new \RuntimeException('This message was deleted.');
+            }
+            DB::table('message_stars')->insertOrIgnore([
+                'user_id' => (int) $userId, 'message_id' => $messageId, 'created_at' => now(),
+            ]);
+        } else {
+            DB::table('message_stars')->where('user_id', (int) $userId)->where('message_id', $messageId)->delete();
+        }
+        unset($this->starCache[(int) $userId]);
+        return ['message_id' => $messageId, 'is_starred' => $starred];
+    }
+
+    /** الرسائل المميّزة بنجمة (للمستخدم الحالي) — في محادثة واحدة، أو في كل محادثاته لو $conversationId = null. */
+    public function starredMessages(?int $conversationId, $userId): array
+    {
+        if ($conversationId !== null && !$this->conversations->isParticipant($conversationId, $userId)) {
+            throw new \RuntimeException('Conversation not found.');
+        }
+        $q = DB::table('message_stars as s')
+            ->join('messages as m', 'm.id', '=', 's.message_id')
+            ->join('conversation_participants as cp', function ($j) use ($userId) {
+                $j->on('cp.conversation_id', '=', 'm.conversation_id')->where('cp.user_id', '=', (int) $userId);
+            })
+            ->where('s.user_id', (int) $userId)
+            ->where('m.is_deleted', 0)
+            ->whereNotExists(function ($h) use ($userId) {
+                $h->select(DB::raw(1))->from('message_hidden_for_user as h')
+                    ->whereColumn('h.message_id', 'm.id')->where('h.user_id', (int) $userId);
+            });
+        if ($conversationId !== null) {
+            $q->where('m.conversation_id', $conversationId);
+        }
+        $ids = $q->orderByDesc('s.created_at')->limit(200)->pluck('m.id')->all();
+        $out = [];
+        foreach ($ids as $id) {
+            $row = $this->messages->withRelations((int) $id);
+            if ($row) {
+                $out[] = $this->shapeMessage($row, $userId);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * "معلومات الرسالة": مين استلم ومين قرا وإمتى. للمرسل بس (زي واتساب).
+     * خصوصية: لو أنا قافل إشعارات القراءة مبشوفش وقت القراءة عند حد؛ ولو المستلم قافلها مفيش read_at أصلاً.
+     */
+    public function messageInfo(int $messageId, $userId): array
+    {
+        $message = $this->messages->find($messageId);
+        if (!$message || !$this->conversations->isParticipant((int) $message->conversation_id, $userId)) {
+            throw new \RuntimeException('Message not found.');
+        }
+        if ((string) $message->sender_id !== (string) $userId) {
+            throw new \RuntimeException('Message info is only available for your own messages.');
+        }
+        $iSeeReads = $this->readReceiptsEnabled($userId);
+
+        $rows = DB::table('conversation_participants as cp')
+            ->join('users as u', 'u.id', '=', 'cp.user_id')
+            ->leftJoin('message_read_receipts as rr', function ($j) use ($messageId) {
+                $j->on('rr.user_id', '=', 'cp.user_id')->where('rr.message_id', '=', $messageId);
+            })
+            ->where('cp.conversation_id', (int) $message->conversation_id)
+            ->where('cp.user_id', '!=', (int) $userId)
+            ->select('u.id', 'u.full_name', 'u.avatar_path', 'rr.delivered_at', 'rr.read_at')
+            ->orderBy('u.full_name')
+            ->get();
+
+        $recipients = [];
+        foreach ($rows as $r) {
+            $read = $iSeeReads ? $r->read_at : null;
+            $recipients[] = [
+                'user_id'      => (int) $r->id,
+                'full_name'    => $r->full_name,
+                'avatar_path'  => $this->isAvatarHidden((int) $r->id, (int) $userId) ? null : $r->avatar_path,
+                'delivered_at' => $r->delivered_at ?? ($r->read_at ?: null),
+                'read_at'      => $read,
+                'status'       => $read ? 'read' : (($r->delivered_at || $r->read_at) ? 'delivered' : 'sent'),
+            ];
+        }
+        $conv = $this->conversations->find((int) $message->conversation_id);
+        return [
+            'message_id'         => (int) $message->id,
+            'sent_at'            => $message->created_at,
+            'edited_at'          => $message->edited_at ?? null,
+            'is_group'           => (bool) ($conv->is_group ?? false),
+            'read_receipts_off'  => !$iSeeReads,
+            'recipients'         => $recipients,
+        ];
+    }
+
+    // مفضلة الملصقات / GIF (شخصية)
+
+    public function favouriteStickers($userId): array
+    {
+        return DB::table('favourite_stickers')->where('user_id', (int) $userId)
+            ->orderByDesc('id')->limit(300)
+            ->get(['kind', 'item_key', 'url', 'label', 'created_at'])->all();
+    }
+
+    /** @return array{is_favourite:bool,item_key:string} toggle */
+    public function toggleFavouriteSticker($userId, int $messageId): array
+    {
+        $message = $this->messages->find($messageId);
+        if (!$message || !$this->conversations->isParticipant((int) $message->conversation_id, $userId)) {
+            throw new \RuntimeException('Message not found.');
+        }
+        $type = $message->message_type ?? 'text';
+        if (!in_array($type, ['sticker', 'gif'], true) || empty($message->is_deleted) === false) {
+            throw new \RuntimeException('Only stickers and GIFs can be added to favourites.');
+        }
+        $meta = is_string($message->metadata ?? null) ? json_decode($message->metadata, true) : (array) ($message->metadata ?? []);
+        $url = (string) ($meta['url'] ?? '');
+        if ($url === '') {
+            throw new \RuntimeException('This item has no image.');
+        }
+        $key = sha1($url);
+        $existing = DB::table('favourite_stickers')->where('user_id', (int) $userId)->where('item_key', $key);
+        if ($existing->exists()) {
+            $existing->delete();
+            return ['is_favourite' => false, 'item_key' => $key];
+        }
+        DB::table('favourite_stickers')->insert([
+            'user_id' => (int) $userId, 'kind' => $type, 'item_key' => $key,
+            'url' => mb_substr($url, 0, 1000), 'label' => mb_substr((string) ($meta['label'] ?? $meta['title'] ?? ''), 0, 190) ?: null,
+            'created_at' => now(),
+        ]);
+        return ['is_favourite' => true, 'item_key' => $key];
+    }
+
+    public function isFavouriteSticker($userId, string $url): bool
+    {
+        return DB::table('favourite_stickers')->where('user_id', (int) $userId)->where('item_key', sha1($url))->exists();
+    }
+
 
     public function heartbeat($userId): void
     {

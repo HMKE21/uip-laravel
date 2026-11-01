@@ -387,6 +387,48 @@ class MessagingController extends Controller
         });
     }
 
+    /** GET /api/v1/messaging/messages/{id}/info — مين استلم/قرا وإمتى (للمرسل بس) */
+    public function info(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->messageInfo((int) $id, $this->uid($request)), 'Message info retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/star — body: starred (bool، الافتراضي true) */
+    public function star(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $on = filter_var($request->input('starred', true), FILTER_VALIDATE_BOOLEAN);
+            return $this->apiSuccess($this->messaging->setStarred((int) $id, $this->uid($request), $on), $on ? 'Message starred.' : 'Message unstarred.');
+        });
+    }
+
+    /** GET /api/v1/messaging/starred?conversation_id= — الرسائل المميّزة بنجمة */
+    public function starred(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $cid = $request->filled('conversation_id') ? (int) $request->input('conversation_id') : null;
+            return $this->apiSuccess($this->messaging->starredMessages($cid, $this->uid($request)), 'Starred messages retrieved successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/favourites/stickers */
+    public function favouriteStickers(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            return $this->apiSuccess($this->messaging->favouriteStickers($this->uid($request)), 'Favourites retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/favourite — toggle (ملصق / GIF بس) */
+    public function toggleFavourite(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->toggleFavouriteSticker($this->uid($request), (int) $id), 'Favourites updated.');
+        });
+    }
+
     /** POST /api/v1/messaging/messages/{id}/vote — body: option_index */
     public function votePoll(Request $request, $id)
     {

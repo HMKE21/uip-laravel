@@ -2123,6 +2123,12 @@ Route::prefix('v1')->group(function () {
         Route::post('/messages/{id}/unpin', [MessagingController::class, 'unpin']);
         Route::post('/messages/{id}/react', [MessagingController::class, 'react']);
         Route::get('/messages/{id}/receipts', [MessagingController::class, 'receipts']);
+        // قائمة الرسالة: معلومات (مين قرا/استلم) + نجمة + مفضلة الملصقات.
+        Route::get('/messages/{id}/info', [MessagingController::class, 'info'])->where('id', '[0-9]+');
+        Route::post('/messages/{id}/star', [MessagingController::class, 'star'])->where('id', '[0-9]+');
+        Route::post('/messages/{id}/favourite', [MessagingController::class, 'toggleFavourite'])->where('id', '[0-9]+');
+        Route::get('/starred', [MessagingController::class, 'starred']);
+        Route::get('/favourites/stickers', [MessagingController::class, 'favouriteStickers']);
         Route::post('/messages/{id}/vote', [MessagingController::class, 'votePoll']);
         Route::get('/messages/{id}/poll-voters', [MessagingController::class, 'pollVoters']);
 
