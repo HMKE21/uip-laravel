@@ -47,6 +47,10 @@ final class PlatformPolicy
         'persistent_login'       => true,  // Facebook-style: sessions never expire from inactivity; only an explicit sign-out / revoke / device-limit eviction ends them
         'animations_enabled'     => true,  // platform-wide UI motion (ambient backdrop, pill/chip + page-enter animations); OFF = a calm, static UI for every user
         'messaging_restricted'   => false, // ON = students may only start chats with their project group / own institution; OFF = anyone can message anyone
+        // Env-backed switches: the dashboard value wins once saved, otherwise the .env value (CALLS_ENABLED, CALLS_VIDEO_ENABLED, DRIVE_DIRECT) keeps working.
+        'calls_enabled'          => true,  // voice / video calls in chats
+        'calls_video_enabled'    => false, // video calls (default follows CALLS_VIDEO_ENABLED)
+        'drive_direct'           => true,  // browser uploads/downloads straight to the S3 / R2 bucket (signed links)
         'require_university_link' => true, // ON = a student account with no university can't use the platform (meetings, messaging, projects, My PC…) until a university/faculty approves it or the admin/university/faculty grants it access
     ];
 
@@ -73,6 +77,17 @@ final class PlatformPolicy
         'fcm_project_id'       => ['type' => 'string', 'min' => 0, 'max' => 100],                    // FCM_PROJECT_ID
         // Chat GIF picker (Giphy). Stored ENCRYPTED, never echoed back in full. Managed from Admin → Chat Media.
         'giphy_api_key'        => ['type' => 'string', 'min' => 0,  'max' => 200, 'secret' => true], // GIPHY_API_KEY
+        // ── Settings that used to live only in .env. Save one here and it wins; leave it empty / reset and the .env value applies. ──
+        'frontend_url'         => ['type' => 'string', 'min' => 0,  'max' => 300],                    // FRONTEND_URL (links in e-mails)
+        'cors_allowed_origins' => ['type' => 'string', 'min' => 0,  'max' => 1500],                   // CORS_ALLOWED_ORIGINS
+        'ms_client_id'         => ['type' => 'string', 'min' => 0,  'max' => 100],                    // MS_CLIENT_ID (OneDrive)
+        'ms_authority'         => ['type' => 'string', 'min' => 0,  'max' => 300],                    // MS_AUTHORITY
+        'google_drive_redirect' => ['type' => 'string', 'min' => 0, 'max' => 300],                    // GOOGLE_DRIVE_REDIRECT
+        'cf_turn_key_id'       => ['type' => 'string', 'min' => 0,  'max' => 100],                    // CF_TURN_KEY_ID (call relay)
+        'cf_turn_api_token'    => ['type' => 'string', 'min' => 0,  'max' => 300, 'secret' => true],  // CF_TURN_API_TOKEN
+        'drive_direct_ttl_min' => ['type' => 'int',    'min' => 1,  'max' => 1440],                   // DRIVE_DIRECT_TTL_MIN
+        'sandbox_url'          => ['type' => 'string', 'min' => 0,  'max' => 300],                    // SANDBOX_URL
+        'sandbox_jwt_secret'   => ['type' => 'string', 'min' => 0,  'max' => 300, 'secret' => true],  // SANDBOX_JWT_SECRET
         // حماية رموز OTP (OtpGuard): غلطات متراكمة => حظر، وحد إرسال في النافذة.
         'otp_max_wrong'           => ['type' => 'int', 'min' => 1, 'max' => 20],   // OTP_MAX_WRONG
         'otp_block_minutes'       => ['type' => 'int', 'min' => 1, 'max' => 1440], // OTP_BLOCK_MINUTES
@@ -131,6 +146,9 @@ final class PlatformPolicy
             'suspicious_gmail_check' => (bool) config('mail.block_suspicious_gmail', true),
             'response_enc_enforce'   => (bool) config('secure_transport.enforce', false),
             'request_enc_enforce'    => (bool) config('secure_transport.enforce_requests', false),
+            'calls_enabled'          => (bool) self::envConfig('calls.enabled', true),
+            'calls_video_enabled'    => (bool) self::envConfig('calls.video_enabled', false),
+            'drive_direct'           => (bool) self::envConfig('drive.direct', true),
             default                  => self::FLAGS[$flag] ?? false,
         };
     }
@@ -199,6 +217,59 @@ final class PlatformPolicy
         return self::flag('request_enc_enforce');
     }
 
+    // ───────────────────────── dashboard ⇄ .env bridge ─────────────────────────
+
+    /** setting key => config() path that the rest of the app already reads. */
+    private const CONFIG_MAP = [
+        'frontend_url' => 'app.frontend_url', 'cors_allowed_origins' => 'security.cors_allowed_origins',
+        'ms_client_id' => 'services.microsoft.client_id', 'ms_authority' => 'services.microsoft.authority',
+        'google_drive_redirect' => 'services.google.drive_redirect',
+        'cf_turn_key_id' => 'calls.turn.cloudflare.key_id', 'cf_turn_api_token' => 'calls.turn.cloudflare.api_token',
+        'drive_direct_ttl_min' => 'drive.direct_ttl_min',
+        'sandbox_url' => 'services.sandbox.url', 'sandbox_jwt_secret' => 'services.sandbox.secret',
+    ];
+    private const FLAG_CONFIG = ['calls_enabled' => 'calls.enabled', 'calls_video_enabled' => 'calls.video_enabled', 'drive_direct' => 'drive.direct'];
+
+    /** @var array<string,mixed> the .env-derived config values, remembered before the dashboard overrides them */
+    private static array $envSnapshot = [];
+
+    /** The value config() had from .env / config files, even after applyRuntimeConfig() replaced it. */
+    public static function envConfig(string $path, $default = null)
+    {
+        return array_key_exists($path, self::$envSnapshot) ? self::$envSnapshot[$path] : config($path, $default);
+    }
+
+    /**
+     * Called once per request from AppServiceProvider::boot(). For every setting the admin saved on the Platform Policy page,
+     * the matching config() entry is replaced, so the rest of the code (which keeps reading config()) follows the dashboard.
+     * Anything the admin never saved (or saved empty) keeps its .env value — so .env and dashboard both keep working.
+     */
+    public static function applyRuntimeConfig(): void
+    {
+        try {
+            foreach (self::CONFIG_MAP as $key => $path) {
+                if (!self::isValueOverridden($key)) {
+                    continue;
+                }
+                $v = self::value($key);
+                if ($v === '' || $v === null) {
+                    continue; // saved empty = "use .env"
+                }
+                self::$envSnapshot[$path] ??= config($path);
+                config([$path => $v]);
+            }
+            foreach (self::FLAG_CONFIG as $flag => $path) {
+                if (!self::isOverridden($flag)) {
+                    continue;
+                }
+                self::$envSnapshot[$path] ??= config($path);
+                config([$path => self::flag($flag)]);
+            }
+        } catch (\Throwable $e) {
+            // settings table missing (fresh install / migrating) or DB down: stay on the .env values
+        }
+    }
+
     // ───────────────────────── editable values ─────────────────────────
 
     /** The .env / config value used while the admin has not saved one. */
@@ -215,6 +286,16 @@ final class PlatformPolicy
             'fcm_credentials_json' => (string) config('services.fcm.credentials_json', ''),
             'fcm_project_id'       => (string) config('services.fcm.project_id', ''),
             'giphy_api_key'        => (string) config('services.giphy.key', ''),
+            'frontend_url'         => (string) self::envConfig('app.frontend_url', ''),
+            'cors_allowed_origins' => (string) self::envConfig('security.cors_allowed_origins', ''),
+            'ms_client_id'         => (string) self::envConfig('services.microsoft.client_id', ''),
+            'ms_authority'         => (string) self::envConfig('services.microsoft.authority', 'https://login.microsoftonline.com/common'),
+            'google_drive_redirect' => (string) self::envConfig('services.google.drive_redirect', ''),
+            'cf_turn_key_id'       => (string) self::envConfig('calls.turn.cloudflare.key_id', ''),
+            'cf_turn_api_token'    => (string) self::envConfig('calls.turn.cloudflare.api_token', ''),
+            'drive_direct_ttl_min' => max(1, (int) self::envConfig('drive.direct_ttl_min', 15)),
+            'sandbox_url'          => (string) self::envConfig('services.sandbox.url', ''),
+            'sandbox_jwt_secret'   => (string) self::envConfig('services.sandbox.secret', ''),
             'otp_max_wrong'           => max(1, (int) config('security.otp.max_wrong', 5)),
             'otp_block_minutes'       => max(1, (int) config('security.otp.block_minutes', 10)),
             'otp_max_sends'           => max(1, (int) config('security.otp.max_sends', 5)),

@@ -45,6 +45,9 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('public-visits-read', fn (Request $r) => Limit::perMinute(240)->by('pvr|' . $fingerprint($r)));
         RateLimiter::for('public-visits-write', fn (Request $r) => Limit::perMinute(60)->by('pvw|' . $fingerprint($r)));
 
+        // Settings saved on Admin → Platform Policy override the matching .env values at runtime (unset ones keep the .env value).
+        \App\Support\PlatformPolicy::applyRuntimeConfig();
+
         // لو PERSISTENT_STORAGE_PATH متظبط (Volume على Railway) اربط مسارات الكتابة بيه. idempotent ورخيص.
         if (!$this->app->runningUnitTests()) {
             PersistentStorage::ensure();
