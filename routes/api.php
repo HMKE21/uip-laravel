@@ -2129,6 +2129,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/messages/{id}/favourite', [MessagingController::class, 'toggleFavourite'])->where('id', '[0-9]+');
         Route::get('/starred', [MessagingController::class, 'starred']);
         Route::get('/favourites/stickers', [MessagingController::class, 'favouriteStickers']);
+        // ستيكراتي (New sticker) + إرسال ستيكر/GIF. الثابتة هنا قبل أي /conversations/{id} عشان مفيش تعارض.
+        Route::get('/stickers', [MessagingController::class, 'myStickers']);
+        Route::post('/stickers', [MessagingController::class, 'createSticker'])->middleware('throttle:60,1');
+        Route::delete('/stickers/{id}', [MessagingController::class, 'deleteSticker'])->where('id', '[0-9]+');
+        Route::get('/stickers/{id}/file', [MessagingController::class, 'stickerFile'])->where('id', '[0-9]+');
+        Route::get('/gifs', [MessagingController::class, 'searchGifs'])->middleware('throttle:60,1');
+        Route::post('/conversations/{id}/sticker-message', [MessagingController::class, 'sendSticker'])->where('id', '[0-9]+')->middleware('throttle:120,1');
+        Route::post('/conversations/{id}/gif-message', [MessagingController::class, 'sendGif'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::post('/messages/{id}/vote', [MessagingController::class, 'votePoll']);
         Route::get('/messages/{id}/poll-voters', [MessagingController::class, 'pollVoters']);
 

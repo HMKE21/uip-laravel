@@ -79,4 +79,9 @@ return [
         'token_ttl' => (int) env('SANDBOX_TOKEN_TTL', 120),
     ],
 
+    // GIF picker in chat (optional). Free key: https://developers.giphy.com — without it the GIF tab shows a "not set up" note.
+    'giphy' => [
+        'key' => env('GIPHY_API_KEY', ''),
+    ],
+
 ];

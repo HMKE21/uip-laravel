@@ -330,7 +330,7 @@ class MessagingService
         // Group rules: closed group / restricted member / allowed message types (no-op for 1:1 chats).
         $kinds = [];
         foreach (array_values((array) ($options['attachments'] ?? [])) as $file) {
-            if ($file instanceof UploadedFile) {
+            if ($file instanceof UploadedFile && ($options['message_type'] ?? 'text') !== 'sticker') {
                 $kinds[] = $this->classifyKind(strtolower((string) $file->getClientOriginalExtension()), $file->getClientOriginalName(), $file->getClientMimeType());
             }
         }
@@ -1483,6 +1483,206 @@ class MessagingService
             'created_at' => now(),
         ]);
         return ['is_favourite' => true, 'item_key' => $key];
+    }
+
+    // -- Stickers (ستيكراتي) + GIF ------------------------------------------------
+
+    private const STICKER_EXT = ['webp', 'png', 'gif', 'jpg', 'jpeg', 'webm', 'mp4'];
+    private const STICKER_MAX_BYTES = 4 * 1024 * 1024;
+    private const STICKER_MAX_PER_USER = 200;
+
+    /** @return array<int,array<string,mixed>> */
+    public function myStickers($userId): array
+    {
+        return DB::table('user_stickers')->where('user_id', (int) $userId)->orderByDesc('id')->limit(self::STICKER_MAX_PER_USER)
+            ->get(['id', 'kind', 'label', 'created_at'])
+            ->map(fn ($r) => [
+                'id' => (int) $r->id, 'kind' => $r->kind, 'label' => $r->label, 'created_at' => $r->created_at,
+                'url' => '/api/v1/messaging/stickers/' . (int) $r->id . '/file',
+            ])->all();
+    }
+
+    /** يخزّن ستيكر جديد في مكتبة المستخدم (webp/png/gif/jpg أو فيديو قصير webm/mp4). */
+    public function createSticker($userId, ?UploadedFile $file, ?string $label = null): array
+    {
+        $this->assertStickerFile($file);
+        if (DB::table('user_stickers')->where('user_id', (int) $userId)->count() >= self::STICKER_MAX_PER_USER) {
+            throw new \RuntimeException('You can keep up to ' . self::STICKER_MAX_PER_USER . ' stickers. Delete some to add more.');
+        }
+        $stored = $this->uploads->store($file, 'messages', 'stickers/u_' . (int) $userId, (int) (self::STICKER_MAX_BYTES / 1024), self::STICKER_EXT);
+        $kind = in_array($stored['extension'], ['webm', 'mp4'], true) ? 'video' : 'image';
+        $id = DB::table('user_stickers')->insertGetId([
+            'user_id' => (int) $userId, 'kind' => $kind, 'stored_path' => $stored['stored_path'],
+            'original_name' => mb_substr((string) $stored['original_name'], 0, 190), 'mime_type' => $stored['mime_type'] ?? null,
+            'label' => $label !== null && trim($label) !== '' ? mb_substr(trim($label), 0, 120) : null,
+            'size_bytes' => (int) ($stored['size_bytes'] ?? 0), 'created_at' => now(),
+        ]);
+        return ['id' => (int) $id, 'kind' => $kind, 'label' => $label, 'url' => '/api/v1/messaging/stickers/' . $id . '/file'];
+    }
+
+    public function deleteSticker($userId, int $id): void
+    {
+        $row = DB::table('user_stickers')->where('id', $id)->where('user_id', (int) $userId)->first();
+        if (!$row) {
+            throw new \RuntimeException('Sticker not found.');
+        }
+        DB::table('user_stickers')->where('id', $id)->delete();
+        $abs = FileUploadService::absolutePath((string) $row->stored_path);
+        if (is_file($abs)) {
+            @unlink($abs);
+        }
+    }
+
+    /** @return array{path:string,mime:string,name:string}|null  (صاحب الستيكر بس) */
+    public function stickerForServing($userId, int $id): ?array
+    {
+        $row = DB::table('user_stickers')->where('id', $id)->where('user_id', (int) $userId)->first();
+        if (!$row) {
+            return null;
+        }
+        $abs = FileUploadService::absolutePath((string) $row->stored_path);
+        if (!is_file($abs)) {
+            return null;
+        }
+        $ext = strtolower(pathinfo($abs, PATHINFO_EXTENSION));
+        $mimes = ['webp' => 'image/webp', 'png' => 'image/png', 'gif' => 'image/gif', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'webm' => 'video/webm', 'mp4' => 'video/mp4'];
+        return ['path' => $abs, 'mime' => $mimes[$ext] ?? 'application/octet-stream', 'name' => (string) ($row->original_name ?: 'sticker.' . $ext)];
+    }
+
+    /**
+     * يبعت ستيكر. المصدر واحد من: ملف مرفوع ($file) | ستيكر من مكتبتي ($stickerId) | ستيكر/مرفق وصلني أو بعتّه ($attachmentId).
+     * الملف بيتنسخ كمرفق للرسالة (ماينفعش نشارك ملف مكتبة شخصية مع حد تاني).
+     */
+    public function sendSticker(int $conversationId, $userId, ?UploadedFile $file, ?int $stickerId, ?int $attachmentId, ?string $label = null): array
+    {
+        $tmp = null;
+        if ($file) {
+            $this->assertStickerFile($file);
+            $upload = $file;
+            $kind = in_array(strtolower((string) $file->getClientOriginalExtension()), ['webm', 'mp4'], true) ? 'video' : 'image';
+        } elseif ($stickerId) {
+            $src = $this->stickerForServing($userId, $stickerId);
+            if (!$src) {
+                throw new \RuntimeException('Sticker not found.');
+            }
+            [$upload, $tmp] = $this->tempUploadFrom($src['path'], $src['name'], $src['mime']);
+            $kind = str_starts_with($src['mime'], 'video/') ? 'video' : 'image';
+        } elseif ($attachmentId) {
+            $row = $this->attachmentForServing($attachmentId, $userId);
+            if (!$row || !in_array($row['kind'], ['image', 'video'], true)
+                || !in_array(DB::table('messages')->where('id', (int) $row['message_id'])->value('message_type'), ['sticker', 'gif'], true)) {
+                throw new \RuntimeException('Sticker not found.');
+            }
+            $abs = FileUploadService::absolutePath((string) $row['stored_path']);
+            if (!is_file($abs)) {
+                throw new \RuntimeException('Sticker not found.');
+            }
+            [$upload, $tmp] = $this->tempUploadFrom($abs, (string) $row['original_name'], (string) ($row['mime_type'] ?? ''));
+            $kind = $row['kind'];
+        } else {
+            throw new \RuntimeException('Choose a sticker to send.');
+        }
+
+        try {
+            $shaped = $this->sendMessage($conversationId, $userId, '', [
+                'message_type' => 'sticker',
+                'attachments'  => [$upload],
+                'metadata'     => ['label' => $label !== null ? mb_substr(trim($label), 0, 120) : null, 'kind' => $kind],
+            ]);
+        } finally {
+            if ($tmp && is_file($tmp)) {
+                @unlink($tmp);
+            }
+        }
+
+        // metadata.url = رابط المرفق المحمي (الـ bubble بيعرضه بنفس نظام الوسائط المحمية)
+        $att = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->orderBy('id')->first(['id']);
+        if ($att) {
+            $meta = ['url' => '/api/v1/messaging/attachments/' . (int) $att->id . '/file', 'kind' => $kind, 'label' => $label !== null && trim($label) !== '' ? mb_substr(trim($label), 0, 120) : null];
+            DB::table('messages')->where('id', (int) $shaped['id'])->update(['metadata' => json_encode($meta)]);
+            $shaped = $this->shapeMessage($this->messages->withRelations((int) $shaped['id']), $userId);
+        }
+        return $shaped;
+    }
+
+    /** يبعت GIF من نتيجة بحث (Giphy) — بنقبل روابط Giphy بس. */
+    public function sendGif(int $conversationId, $userId, string $url, ?string $title = null, ?string $preview = null): array
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $ok = fn (string $h) => $h === 'giphy.com' || str_ends_with($h, '.giphy.com');
+        if (!str_starts_with($url, 'https://') || !$ok($host)) {
+            throw new \RuntimeException('Unsupported GIF source.');
+        }
+        $meta = ['url' => $url, 'title' => mb_substr(trim((string) $title), 0, 140)];
+        if ($preview && str_starts_with($preview, 'https://') && $ok(strtolower((string) parse_url($preview, PHP_URL_HOST)))) {
+            $meta['preview'] = $preview;
+        }
+        return $this->sendMessage($conversationId, $userId, '', ['message_type' => 'gif', 'metadata' => $meta]);
+    }
+
+    /** بحث/ترند GIF عن طريق Giphy (مفتاح GIPHY_API_KEY في .env). من غير مفتاح => configured=false والواجهة بتعرض رسالة. */
+    public function searchGifs(string $q, int $offset = 0): array
+    {
+        $key = (string) config('services.giphy.key');
+        if ($key === '') {
+            return ['configured' => false, 'items' => [], 'next' => null];
+        }
+        $q = trim($q);
+        $limit = 24;
+        $cacheKey = 'gif:' . sha1($q . '|' . $offset);
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit) {
+            $resp = \Illuminate\Support\Facades\Http::timeout(6)->get('https://api.giphy.com/v1/gifs/' . ($q === '' ? 'trending' : 'search'), array_filter([
+                'api_key' => $key, 'q' => $q ?: null, 'limit' => $limit, 'offset' => $offset, 'rating' => 'pg-13', 'bundle' => 'messaging_non_clips',
+            ], fn ($v) => $v !== null));
+            if (!$resp->ok()) {
+                return ['configured' => true, 'items' => [], 'next' => null, 'error' => true];
+            }
+            $items = [];
+            foreach ((array) $resp->json('data', []) as $g) {
+                $img = $g['images'] ?? [];
+                $full = $img['downsized']['url'] ?? ($img['fixed_height']['url'] ?? null);
+                $thumb = $img['fixed_width_small']['url'] ?? ($img['fixed_width']['url'] ?? $full);
+                if (!$full) {
+                    continue;
+                }
+                $items[] = [
+                    'id' => (string) ($g['id'] ?? ''), 'title' => (string) ($g['title'] ?? ''), 'url' => $full, 'preview' => $thumb,
+                    'w' => (int) ($img['fixed_width_small']['width'] ?? 0), 'h' => (int) ($img['fixed_width_small']['height'] ?? 0),
+                ];
+            }
+            $total = (int) $resp->json('pagination.total_count', 0);
+            $next = $offset + $limit < $total ? $offset + $limit : null;
+            return ['configured' => true, 'items' => $items, 'next' => $next];
+        });
+    }
+
+    private function assertStickerFile(?UploadedFile $file): void
+    {
+        if (!$file || !$file->isValid()) {
+            throw new \RuntimeException('No sticker file was uploaded.');
+        }
+        $ext = strtolower((string) $file->getClientOriginalExtension());
+        if (!in_array($ext, self::STICKER_EXT, true)) {
+            throw new \RuntimeException('Sticker must be an image (webp, png, gif, jpg) or a short video (webm, mp4).');
+        }
+        if ((int) $file->getSize() > self::STICKER_MAX_BYTES) {
+            throw new \RuntimeException('Sticker is too large (max 4 MB).');
+        }
+        $real = (string) $file->getMimeType();
+        $isVideo = in_array($ext, ['webm', 'mp4'], true);
+        if ($isVideo ? !str_starts_with($real, 'video/') : !str_starts_with($real, 'image/')) {
+            throw new \RuntimeException('The file is not a valid sticker.');
+        }
+    }
+
+    /** @return array{0:UploadedFile,1:string} نسخة مؤقتة (store() بيعمل move للملف، فمينفعش نديله الأصل). */
+    private function tempUploadFrom(string $absPath, string $name, ?string $mime): array
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'stk');
+        if ($tmp === false || !@copy($absPath, $tmp)) {
+            throw new \RuntimeException('Sticker not found.');
+        }
+        return [new UploadedFile($tmp, $name !== '' ? $name : 'sticker', $mime ?: null, null, true), $tmp];
     }
 
     public function isFavouriteSticker($userId, string $url): bool

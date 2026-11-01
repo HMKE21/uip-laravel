@@ -429,6 +429,75 @@ class MessagingController extends Controller
         });
     }
 
+    // -- Stickers / GIF ---------------------------------------------------------
+
+    /** GET /api/v1/messaging/stickers — ستيكراتي */
+    public function myStickers(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->myStickers($this->uid($request)), 'Stickers retrieved successfully.'));
+    }
+
+    /** POST /api/v1/messaging/stickers — multipart: sticker (file), label? */
+    public function createSticker(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->createSticker($this->uid($request), $request->file('sticker'), $request->input('label')),
+            'Sticker saved.', 201
+        ));
+    }
+
+    /** DELETE /api/v1/messaging/stickers/{id} */
+    public function deleteSticker(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->deleteSticker($this->uid($request), (int) $id);
+            return $this->apiSuccess(null, 'Sticker deleted.');
+        });
+    }
+
+    /** GET /api/v1/messaging/stickers/{id}/file — صاحب الستيكر بس (Bearer). */
+    public function stickerFile(Request $request, $id)
+    {
+        $src = $this->messaging->stickerForServing($this->uid($request), (int) $id);
+        if (!$src) {
+            return $this->apiError('Sticker not found.', null, 404);
+        }
+        return response()->file($src['path'], [
+            'Content-Type' => $src['mime'], 'Content-Disposition' => 'inline', 'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'",
+            'Cache-Control' => 'private, max-age=86400',
+        ]);
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/sticker-message — multipart: sticker (file) | sticker_id | attachment_id, label? */
+    public function sendSticker(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->sendSticker(
+                (int) $id, $this->uid($request), $request->file('sticker'),
+                $request->filled('sticker_id') ? (int) $request->input('sticker_id') : null,
+                $request->filled('attachment_id') ? (int) $request->input('attachment_id') : null,
+                $request->input('label')
+            );
+            return $this->apiSuccess($message, 'Sticker sent.', 201);
+        });
+    }
+
+    /** GET /api/v1/messaging/gifs?q=&offset= */
+    public function searchGifs(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->searchGifs((string) $request->query('q', ''), max(0, (int) $request->query('offset', 0))), 'GIFs retrieved.'));
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/gif-message — body: url, title?, preview? */
+    public function sendGif(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->sendGif((int) $id, $this->uid($request), (string) $request->input('url', ''), $request->input('title'), $request->input('preview'));
+            return $this->apiSuccess($message, 'GIF sent.', 201);
+        });
+    }
+
     /** POST /api/v1/messaging/messages/{id}/vote — body: option_index */
     public function votePoll(Request $request, $id)
     {
