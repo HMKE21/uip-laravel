@@ -114,6 +114,28 @@ class MessagingController extends Controller
         });
     }
 
+    /** POST /api/v1/messaging/me/avatar — multipart: avatar (صورتي الشخصية، من "الرسائل المحفوظة") */
+    public function setMyAvatar(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $file = $request->file('avatar');
+            if (!$file) {
+                return $this->apiError('avatar file is required.', null, 422);
+            }
+            $path = $this->messaging->setMyAvatar($this->uid($request), $file);
+            return $this->apiSuccess(['avatar_path' => $path], 'Profile photo updated successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/me/avatar */
+    public function removeMyAvatar(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $this->messaging->removeMyAvatar($this->uid($request));
+            return $this->apiSuccess(['avatar_path' => null], 'Profile photo removed.');
+        });
+    }
+
     /** POST /api/v1/messaging/conversations/group — body: name, description?, member_ids[] */
     public function createGroup(Request $request)
     {

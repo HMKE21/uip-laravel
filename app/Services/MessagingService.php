@@ -82,6 +82,8 @@ class MessagingService
 
             return [
                 'is_saved'           => $isSaved,
+                // "الرسائل المحفوظة": صورتي أنا (بتظهر بدل أيقونة العلامة لو عندي صورة)
+                'saved_avatar'       => $isSaved ? DB::table('users')->where('id', (int) $userId)->value('avatar_path') : null,
                 // true = لسه بالاسم الافتراضي (الفرونت بيترجمه حسب اللغة)؛ false = المستخدم سمّاها بنفسه
                 'saved_default_name' => $isSaved && !$row['subject'],
                 'id'                 => (int) $row['id'],
@@ -255,6 +257,8 @@ class MessagingService
             'my_role'  => $this->conversations->memberRole($conversationId, $userId),
         ];
         if ($isSaved) {
+            // بياناتي كما تظهر في محادثتي الخاصة (للتعديل المباشر + معاينة "كما يراني الآخرون")
+            $conversationOut['me'] = $this->savedOwnerCard((int) $conversationId);
             $conversationOut['can_send'] = true;
             $conversationOut['peer_deleted'] = false;
             $conversationOut['peer_id'] = null;
@@ -1035,6 +1039,60 @@ class MessagingService
         $c->subject = $name === '' ? null : $name;
         $c->save();
         return $c->subject;
+    }
+
+    /** كارت صاحب "الرسائل المحفوظة" (هو المشارك الوحيد فيها): الاسم/الصورة/الدور/الجهة/الإيميل. */
+    private function savedOwnerCard(int $conversationId): ?array
+    {
+        $me = $this->conversations->otherParticipants($conversationId, 0)[0] ?? null;
+        if (!$me) {
+            return null;
+        }
+        return [
+            'id'           => (int) $me['id'],
+            'full_name'    => $me['full_name'],
+            'email'        => $me['email'] ?? '',
+            'avatar_path'  => $me['avatar_path'] ?? null,
+            'account_role' => $me['account_role'] ?? null,
+            'org'          => $me['org'] ?? null,
+        ];
+    }
+
+    private const AVATAR_EXT = ['jpg', 'jpeg', 'png', 'webp'];
+    private const AVATAR_MAX_KB = 5120;
+
+    /**
+     * تغيير صورتي من داخل الشات (لكل الأدوار — نفس عمود users.avatar_path اللي كل بوابة بتستخدمه).
+     * @return string|null المسار الجديد
+     */
+    public function setMyAvatar($userId, $file): ?string
+    {
+        $user = \App\Models\User::find((int) $userId);
+        if (!$user) {
+            throw new \RuntimeException('User not found.');
+        }
+        $stored = $this->uploads->store($file, 'avatars', (string) $user->id, self::AVATAR_MAX_KB, self::AVATAR_EXT);
+        $old = $user->avatar_path;
+        $user->fill(['avatar_path' => $stored['stored_path']]);
+        $user->save();
+        if ($old && $old !== $stored['stored_path']) {
+            $this->uploads->delete($old);
+        }
+        return $stored['stored_path'];
+    }
+
+    public function removeMyAvatar($userId): void
+    {
+        $user = \App\Models\User::find((int) $userId);
+        if (!$user) {
+            throw new \RuntimeException('User not found.');
+        }
+        $old = $user->avatar_path;
+        $user->fill(['avatar_path' => null]);
+        $user->save();
+        if ($old) {
+            $this->uploads->delete($old);
+        }
     }
 
     public function addMember(int $conversationId, $actingUserId, $newUserId): void

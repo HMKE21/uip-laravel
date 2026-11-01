@@ -2072,6 +2072,8 @@ Route::prefix('v1')->group(function () {
         Route::post('/conversations/group', [MessagingController::class, 'createGroup']);
         Route::get('/conversations/{id}', [MessagingController::class, 'thread']);
         Route::get('/saved', [MessagingController::class, 'saved']);
+        Route::post('/me/avatar', [MessagingController::class, 'setMyAvatar'])->middleware('throttle:20,1');
+        Route::delete('/me/avatar', [MessagingController::class, 'removeMyAvatar']);
         Route::post('/conversations/{id}/saved-name', [MessagingController::class, 'renameSaved'])->where('id', '[0-9]+');
         Route::post('/conversations/{id}/rename', [MessagingController::class, 'renameGroup']);
         Route::post('/conversations/{id}/members', [MessagingController::class, 'addMember']);
