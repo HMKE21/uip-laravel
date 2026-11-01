@@ -90,7 +90,17 @@ class UipAuthMiddleware
 
         // حساب اتحذف/اتوقف/اتحظر (مثلاً الجامعة اتحذفت وطلابها اتوقفوا) => الـ token
         // بيبطل فورًا بدل ما يفضل شغال لحد ما يخلص.
-        $account = \Illuminate\Support\Facades\DB::table('users')->where('id', (int) $claims['sub'])->first(['status', 'deleted_at']);
+        // كاش 10 ثواني لحالة الحساب: كان استعلام users في كل ريكويست محمي (مع 10k مستخدم = آلاف الاستعلامات/ثانية).
+        $uid = (int) $claims['sub'];
+        try {
+            $acc = \Illuminate\Support\Facades\Cache::remember('acct:status:' . $uid, 10, function () use ($uid) {
+                $r = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first(['status', 'deleted_at']);
+                return $r ? (array) $r : false;
+            });
+            $account = $acc ? (object) $acc : null;
+        } catch (\Throwable $e) {
+            $account = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first(['status', 'deleted_at']);
+        }
         if (!$account || $account->deleted_at !== null || in_array($account->status, ['suspended', 'banned'], true)) {
             return response()->json([
                 'success' => false,

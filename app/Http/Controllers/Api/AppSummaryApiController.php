@@ -8,6 +8,7 @@ use App\Services\NotificationService;
 use App\Services\PermissionService;
 use App\Services\UserSessionService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * GET /api/v1/app/summary — ONE request that replaces what the shell used to ask for in 4+ separate calls
@@ -37,11 +38,14 @@ class AppSummaryApiController extends Controller
             // best effort
         }
 
-        // 2) permissions: reuse the exact controller so the payload can never drift from /auth/permissions
+        // 2) permissions: reuse the exact controller so the payload can never drift from /auth/permissions.
+        //    كاش 15 ثانية لكل (مستخدم، دور): الصلاحيات نادرًا بتتغير وكانت بتتحسب مع كل poll لكل مستخدم.
         $permissions = null;
         try {
-            $res = app(MyPermissionsApiController::class)->show($request);
-            $permissions = $res->getData(true)['data'] ?? null;
+            $permissions = Cache::remember('summary:perm:' . $userId . ':' . $role, 15, function () use ($request) {
+                $res = app(MyPermissionsApiController::class)->show($request);
+                return $res->getData(true)['data'] ?? null;
+            });
         } catch (\Throwable $e) {
             $permissions = null;
         }
@@ -54,19 +58,27 @@ class AppSummaryApiController extends Controller
             $counts = null;
         }
 
-        // 4) unread-messages badge (same maths the client used on the full inbox: muted chats do not count)
+        // 4) unread-messages badge (same maths the client used on the full inbox: muted chats do not count).
+        //    الحساب تقيل (بيحمّل الـ inbox كله) فبيتخزّن 20 ثانية، وبيتمسح فورًا لما توصل رسالة/تغيير للمستخدم (Realtime::toUsers).
         $unreadMessages = null;
         try {
-            $canChat = app(PermissionService::class)->currentUserCan($userId, $role, 'messaging.use');
-            if ($canChat) {
+            $unreadMessages = Cache::remember('summary:unread:' . $userId, 20, function () use ($userId, $role) {
+                $canChat = app(PermissionService::class)->currentUserCan($userId, $role, 'messaging.use');
+                if (!$canChat) {
+                    return -1; // -1 = مش مسموح له (عشان نقدر نخزّن null في الكاش)
+                }
                 $rows = app(MessagingService::class)->inboxForUser($userId);
-                $unreadMessages = 0;
+                $n = 0;
                 foreach ($rows as $row) {
                     if (!empty($row['is_muted'])) {
                         continue;
                     }
-                    $unreadMessages += (int) ($row['unread_count'] ?? (!empty($row['is_unread']) ? 1 : 0));
+                    $n += (int) ($row['unread_count'] ?? (!empty($row['is_unread']) ? 1 : 0));
                 }
+                return $n;
+            });
+            if ($unreadMessages === -1) {
+                $unreadMessages = null;
             }
         } catch (\Throwable $e) {
             $unreadMessages = null;

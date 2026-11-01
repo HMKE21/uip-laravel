@@ -22,6 +22,15 @@ class Realtime
     public static function toUsers(array $userIds, string $topic, array $data = []): void
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+        // كاش ملخص التطبيق (عدّاد الرسائل غير المقروءة) بيتمسح مع أي تغيير بيوصل للمستخدم، فالـ badge يفضل لحظي.
+        if ($ids && in_array($topic, ['messaging', 'notification'], true)) {
+            foreach ($ids as $id) {
+                try {
+                    \Illuminate\Support\Facades\Cache::forget('summary:unread:' . $id);
+                } catch (\Throwable $e) {
+                }
+            }
+        }
         if (!$ids || !self::enabled()) {
             return;
         }

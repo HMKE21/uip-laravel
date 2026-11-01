@@ -51,20 +51,19 @@ class UipRateLimitMiddleware
         $window = (int) floor(time() / 60);
         $key = 'ratelimit_' . ($isExamAttempt ? 'exam_' : ($isCall ? 'calls_' : '')) . preg_replace('/[^a-zA-Z0-9]/', '_', $this->actorKey($request)) . '_' . $window;
 
-        $count = (int) Cache::get($key, 0);
+        // Cache::add + increment ذريّة (Redis) وبتقلل العمليات من 3 لـ 2 في كل ريكويست؛ والعدّ بعد الزيادة بيمنع تخطّي الحد في السباق.
+        Cache::add($key, 0, 65); // TTL شوية أكبر من الدقيقة عشان أي تأخير بسيط في التوقيت بين الطلبات
+        $count = (int) Cache::increment($key);
 
-        if ($count >= $limit) {
+        if ($count > $limit) {
             return response()->json([
                 'success' => false,
                 'message' => 'Too many requests.',
                 'data'    => null,
                 'errors'  => null,
                 'meta'    => (object) [],
-            ], 429);
+            ], 429)->header('Retry-After', (string) (60 - (time() % 60)));
         }
-
-        Cache::add($key, 0, 65); // TTL شوية أكبر من الدقيقة عشان أي تأخير بسيط في التوقيت بين الطلبات
-        Cache::increment($key);
 
         return $next($request);
     }

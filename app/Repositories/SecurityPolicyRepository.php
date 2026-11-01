@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Models\SecurityPolicy;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * منقولة من app/Repositories/SecurityPolicyRepository.php القديمة بالكامل
@@ -21,9 +22,41 @@ class SecurityPolicyRepository
         return SecurityPolicy::orderBy('category')->orderBy('policy_key')->get()->all();
     }
 
+    /** كاش قصير للسياسات: كانت بتتقرا من الداتابيز عدة مرات في كل ريكويست (rate-limit / device / ip / country / mfa). */
+    private const CACHE_TTL = 20;
+
+    /** @var array<string,?SecurityPolicy> memo جوّه نفس الريكويست */
+    private static array $memo = [];
+
     public function findByKey(string $key): ?SecurityPolicy
     {
-        return SecurityPolicy::where('policy_key', $key)->first();
+        if (array_key_exists($key, self::$memo)) {
+            return self::$memo[$key];
+        }
+        try {
+            $attrs = Cache::remember('secpol:' . $key, self::CACHE_TTL, function () use ($key) {
+                $row = SecurityPolicy::where('policy_key', $key)->first();
+                return $row ? $row->getAttributes() : false; // false = "مفيش صف" (بنخزّنها برضو عشان ميتسألش تاني)
+            });
+        } catch (\Throwable $e) {
+            return self::$memo[$key] = SecurityPolicy::where('policy_key', $key)->first();
+        }
+
+        if (!$attrs) {
+            return self::$memo[$key] = null;
+        }
+
+        return self::$memo[$key] = (new SecurityPolicy())->newFromBuilder($attrs);
+    }
+
+    /** يمسح الكاش بعد أي تعديل عشان تغيير الأدمن يسري فورًا. */
+    public static function forget(string $key): void
+    {
+        unset(self::$memo[$key]);
+        try {
+            Cache::forget('secpol:' . $key);
+        } catch (\Throwable $e) {
+        }
     }
 
     /**
@@ -45,6 +78,8 @@ class SecurityPolicyRepository
 
     public function updateValue(string $key, string $value, $updatedBy): bool
     {
+        // قراءة طازجة من الداتابيز (مش من الكاش) قبل التعديل.
+        self::forget($key);
         $policy = $this->findByKey($key);
 
         if (!$policy) {
@@ -63,6 +98,9 @@ class SecurityPolicyRepository
         }
 
         $policy->fill(['value' => $value, 'updated_by' => $updatedBy]);
-        return $policy->save();
+        $ok = $policy->save();
+        self::forget($key);
+
+        return $ok;
     }
 }

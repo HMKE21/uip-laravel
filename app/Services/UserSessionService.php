@@ -284,6 +284,10 @@ class UserSessionService
     /** نبضة: الجلسة لسه مفتوحة (بتحدّث "آخر نشاط" اللي بيظهر في قائمة الأجهزة). */
     public function heartbeat(int $sessionId): void
     {
+        // كان بيكتب في الداتابيز مع كل poll لكل مستخدم؛ دلوقتي مرة كل 30 ثانية لكل جلسة (touch() بيعمل نفس الحاجة كل 60ث).
+        if (!Cache::add('sess:hb:' . $sessionId, 1, 30)) {
+            return;
+        }
         DB::table('user_sessions')->where('id', $sessionId)->where('is_active', 1)->update(['last_activity_at' => now()]);
     }
 
@@ -376,16 +380,29 @@ class UserSessionService
         return $last !== false && (time() - $last) > $limit;
     }
 
+    /** مدة كاش صف الجلسة (ثواني). الإلغاء (end/endAllForUser) بيمسحه فورًا؛ أي تغيير تاني بيبان خلال المدة دي. */
+    private const ACTIVE_CACHE_SECONDS = 10;
+
     /** هل الجلسة لسه شغالة؟ التوكنات القديمة (من غير sid) بتعدّي. */
     public function isActive(?int $sessionId): bool
     {
         if (!$sessionId) {
             return true;
         }
-        $row = DB::table('user_sessions')->where('id', $sessionId)->first(['user_id', 'is_active', 'expires_at', 'last_activity_at']);
-        if (!$row) {
+        $cacheKey = 'sess:row:' . $sessionId;
+        try {
+            $arr = Cache::remember($cacheKey, self::ACTIVE_CACHE_SECONDS, function () use ($sessionId) {
+                $r = DB::table('user_sessions')->where('id', $sessionId)->first(['user_id', 'is_active', 'expires_at', 'last_activity_at']);
+                return $r ? (array) $r : false;
+            });
+        } catch (\Throwable $e) {
+            $r = DB::table('user_sessions')->where('id', $sessionId)->first(['user_id', 'is_active', 'expires_at', 'last_activity_at']);
+            $arr = $r ? (array) $r : false;
+        }
+        if (!$arr) {
             return false;
         }
+        $row = (object) $arr;
         if (!(bool) $row->is_active || ($row->expires_at && strtotime((string) $row->expires_at) <= time())) {
             return false;
         }
@@ -420,12 +437,17 @@ class UserSessionService
             'revoke_reason' => $reason,
         ]);
         RefreshToken::where('token_hash', $row->session_token)->whereNull('revoked_at')->update(['revoked_at' => now()]);
+        Cache::forget('sess:row:' . $sessionId);
         return true;
     }
 
     /** كل جلسات مستخدم (refresh token reuse مثلًا). */
     public function endAllForUser(int $userId, string $reason): void
     {
+        $ids = DB::table('user_sessions')->where('user_id', $userId)->where('is_active', 1)->pluck('id')->all();
+        foreach ($ids as $sid) {
+            Cache::forget('sess:row:' . (int) $sid);
+        }
         DB::table('user_sessions')->where('user_id', $userId)->where('is_active', 1)->update([
             'is_active' => 0, 'revoked_at' => now(), 'revoke_reason' => $reason,
         ]);
