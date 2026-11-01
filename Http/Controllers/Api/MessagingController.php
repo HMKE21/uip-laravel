@@ -1,0 +1,832 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Services\MessagingService;
+use Illuminate\Http\Request;
+
+/**
+ * /api/v1/messaging/* — الكنترولر الموحّد لكل بورتال (زي Common\
+ * MessagingController القديمة بالظبط: كنترولر واحد، الـ RBAC/قيود
+ * المراسلة نفسها متحكم فيها جوّه MessagingService مش هنا). بند 18.
+ *
+ * المستخدم الفاعل دايمًا من uip_user_id (uip.auth middleware)، نفس
+ * اتفاقية NotificationsApiController.
+ */
+class MessagingController extends Controller
+{
+    public function __construct(private MessagingService $messaging, private \App\Services\ChunkedUploadService $chunks)
+    {
+    }
+
+    private function uid(Request $request): int
+    {
+        return (int) $request->attributes->get('uip_user_id');
+    }
+
+    /** GET /api/v1/messaging/inbox — query: q (اختياري، بحث) */
+    public function inbox(Request $request)
+    {
+        $q = trim((string) $request->input('q', ''));
+        $rows = $q !== '' ? $this->messaging->searchInbox($this->uid($request), $q) : $this->messaging->inboxForUser($this->uid($request));
+        return $this->apiSuccess($rows, 'Inbox retrieved successfully.');
+    }
+
+    /** GET /api/v1/messaging/recipients — query: q */
+    public function recipients(Request $request)
+    {
+        $rows = $this->messaging->searchRecipients((string) $request->input('q', ''), $this->uid($request));
+        return $this->apiSuccess($rows, 'Recipients retrieved successfully.');
+    }
+
+    /** GET /api/v1/messaging/search — query: q, conversation_id (اختياري) */
+    public function search(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $conversationId = $request->filled('conversation_id') ? (int) $request->input('conversation_id') : null;
+            $rows = $this->messaging->searchMessages($this->uid($request), (string) $request->input('q', ''), $conversationId);
+            return $this->apiSuccess($rows, 'Search results retrieved successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/mentions — الرسايل اللي فيها mention لليوزر الحالي */
+    public function mentions(Request $request)
+    {
+        return $this->apiSuccess($this->messaging->mentionsOfMe($this->uid($request)), 'Mentions retrieved successfully.');
+    }
+
+    /** GET /api/v1/messaging/privacy — إعدادات خصوصية الشات للمستخدم الحالي (كل الأدوار). */
+    public function privacy(Request $request)
+    {
+        return $this->apiSuccess($this->messaging->chatPrivacyFor($this->uid($request)), 'Chat privacy retrieved successfully.');
+    }
+
+    /** PATCH /api/v1/messaging/privacy — body: show_avatar?, read_receipts_enabled? (المفتاح اللي مش مبعوت مبيتغيرش). */
+    public function updatePrivacy(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $input = $request->only(['show_avatar', 'read_receipts_enabled']);
+            return $this->apiSuccess($this->messaging->updateChatPrivacy($this->uid($request), $input), 'Chat privacy saved successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/categories */
+    public function categories(Request $request)
+    {
+        return $this->apiSuccess($this->messaging->categoriesForUser($this->uid($request)), 'Categories retrieved successfully.');
+    }
+
+    /** POST /api/v1/messaging/conversations/direct — body: recipient_email, body */
+    public function startDirect(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $email = (string) $request->input('recipient_email', '');
+            // recipient_id: used by the Stories "viewed by" list (it only knows ids). Same rules apply: blocks / group-messaging limits are enforced in startConversation().
+            if ($email === '' && $request->filled('recipient_id')) {
+                $email = (string) \Illuminate\Support\Facades\DB::table('users')->where('id', (int) $request->input('recipient_id'))->value('email');
+            }
+            $id = $this->messaging->startConversation(
+                $this->uid($request),
+                $email,
+                (string) $request->input('body', '')
+            );
+            $thread = $this->messaging->threadForUser($id, $this->uid($request));
+            return $this->apiSuccess($thread, 'Conversation started successfully.', 201);
+        });
+    }
+
+    /** GET /api/v1/messaging/saved — يفتح (وينشئ لو أول مرة) "الرسائل المحفوظة" الخاصة بالمستخدم */
+    public function saved(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $id = $this->messaging->savedConversationId($this->uid($request));
+            return $this->apiSuccess($this->messaging->threadForUser($id, $this->uid($request)), 'Saved messages retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/saved-name — body: name (فاضي = الاسم الافتراضي) */
+    public function renameSaved(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $name = $this->messaging->renameSaved((int) $id, $this->uid($request), (string) $request->input('name', ''));
+            return $this->apiSuccess(['subject' => $name], 'Saved messages renamed.');
+        });
+    }
+
+    /** POST /api/v1/messaging/me/avatar — multipart: avatar (صورتي الشخصية، من "الرسائل المحفوظة") */
+    public function setMyAvatar(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $file = $request->file('avatar');
+            if (!$file) {
+                return $this->apiError('avatar file is required.', null, 422);
+            }
+            $path = $this->messaging->setMyAvatar($this->uid($request), $file);
+            return $this->apiSuccess(['avatar_path' => $path], 'Profile photo updated successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/me/avatar */
+    public function removeMyAvatar(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $this->messaging->removeMyAvatar($this->uid($request));
+            return $this->apiSuccess(['avatar_path' => null], 'Profile photo removed.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/group — body: name, description?, member_ids[] */
+    public function createGroup(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $memberIds = array_map('intval', (array) $request->input('member_ids', []));
+            $thread = $this->messaging->createGroupConversation(
+                $this->uid($request),
+                (string) $request->input('name', ''),
+                $memberIds,
+                $request->filled('description') ? (string) $request->input('description') : null
+            );
+            return $this->apiSuccess($thread, 'Group created successfully.', 201);
+        });
+    }
+
+    /** GET /api/v1/messaging/conversations/{id} — query: before_id (اختياري) */
+    public function thread(Request $request, $id)
+    {
+        $beforeId = $request->filled('before_id') ? (int) $request->input('before_id') : null;
+        try {
+            $thread = $this->messaging->threadForUser((int) $id, $this->uid($request), $beforeId);
+        } catch (\Illuminate\Database\QueryException $e) {
+            return $this->dbError($e);
+        }
+        if (!$thread) {
+            return $this->apiError('Conversation not found.', null, 404);
+        }
+        return $this->apiSuccess($thread, 'Conversation retrieved successfully.');
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/rename — body: name */
+    public function renameGroup(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->renameGroup((int) $id, $this->uid($request), (string) $request->input('name', ''));
+            return $this->apiSuccess(null, 'Group renamed successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/members — body: user_id */
+    public function addMember(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->addMember((int) $id, $this->uid($request), (int) $request->input('user_id'));
+            return $this->apiSuccess(null, 'Member added successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/conversations/{id}/members/{userId} */
+    public function removeMember(Request $request, $id, $userId)
+    {
+        return $this->handle(function () use ($request, $id, $userId) {
+            $this->messaging->removeMember((int) $id, $this->uid($request), (int) $userId);
+            return $this->apiSuccess(null, 'Member removed successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/members/{userId}/role — body: role */
+    public function setMemberRole(Request $request, $id, $userId)
+    {
+        return $this->handle(function () use ($request, $id, $userId) {
+            $this->messaging->setMemberRole((int) $id, $this->uid($request), (int) $userId, (string) $request->input('role', 'member'));
+            return $this->apiSuccess(null, 'Member role updated successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/flags/{flag} — body: value (bool) */
+    public function setFlag(Request $request, $id, $flag)
+    {
+        return $this->handle(function () use ($request, $id, $flag) {
+            $this->messaging->toggleMemberFlag((int) $id, $this->uid($request), (string) $flag, (bool) $request->input('value', true));
+            return $this->apiSuccess(null, 'Conversation updated successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/category — body: category */
+    public function setCategory(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->setCategory((int) $id, $this->uid($request), $request->input('category'));
+            return $this->apiSuccess(null, 'Category updated successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/messages — multipart: body, parent_message_id?, forwarded_from_id?, mentioned_user_ids[]?, attachments[]? */
+    public function send(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $uid = $this->uid($request);
+            // ملفات كبيرة اترفعت بالأجزاء (uploaded_ids[]) بتتضاف بعد الملفات العادية؛ denoise[] بيمشي بنفس الترتيب ده.
+            $files = array_values((array) $request->file('attachments', []));
+            $uploadedIds = array_values(array_unique(array_filter((array) $request->input('uploaded_ids', []), 'is_string')));
+            foreach ($uploadedIds as $uploadedId) {
+                $files[] = $this->chunks->open($uid, $uploadedId);
+            }
+            $message = $this->messaging->sendMessage((int) $id, $uid, (string) $request->input('body', ''), [
+                'parent_message_id'   => $request->filled('parent_message_id') ? (int) $request->input('parent_message_id') : null,
+                'forwarded_from_id'   => $request->filled('forwarded_from_id') ? (int) $request->input('forwarded_from_id') : null,
+                'mentioned_user_ids'  => (array) $request->input('mentioned_user_ids', []),
+                'attachments'         => $files,
+                // denoise[] = '1'/'0' لكل ملف بنفس ترتيب attachments[] (عزل الضوضاء بعد الرفع).
+                // view_mode[] = 'once'|'timer'|'' و view_seconds[] لكل ملف بنفس ترتيب attachments[] (صور/فيديو بس).
+                'view_modes'          => array_values((array) $request->input('view_mode', [])),
+                'view_seconds'        => array_values((array) $request->input('view_seconds', [])),
+                'denoise'             => array_map(fn ($v) => filter_var($v, FILTER_VALIDATE_BOOLEAN), array_values((array) $request->input('denoise', []))),
+            ]);
+            foreach ($uploadedIds as $uploadedId) {
+                $this->chunks->discard($uid, $uploadedId);
+            }
+            return $this->apiSuccess($message, 'Message sent successfully.', 201);
+        });
+    }
+
+    /** GET /api/v1/messaging/conversations/{id}/pinned */
+    public function pinned(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->pinnedMessages((int) $id, $this->uid($request)), 'Pinned messages retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/read */
+    public function markRead(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->markConversationRead((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Conversation marked as read.');
+        });
+    }
+
+    /** GET /api/v1/messaging/conversations/{id}/poll — query: since_id, changes_since (server_time من الـ poll السابق) */
+    public function poll(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $sinceId = (int) $request->input('since_id', 0);
+            $changesSince = $request->input('changes_since');
+            return $this->apiSuccess($this->messaging->poll((int) $id, $this->uid($request), $sinceId, is_string($changesSince) && $changesSince !== '' ? $changesSince : null), 'Poll retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/poll-message — body: question, options[] */
+    public function createPoll(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->createPoll((int) $id, $this->uid($request), (string) $request->input('question', ''), (array) $request->input('options', []));
+            return $this->apiSuccess($message, 'Poll created successfully.', 201);
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/location-message — body: lat, lng, accuracy? */
+    public function sendLocation(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->sendLocation((int) $id, $this->uid($request), $request->input('lat'), $request->input('lng'), $request->input('accuracy'));
+            return $this->apiSuccess($message, 'Location sent successfully.', 201);
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/live-location — body: lat, lng, accuracy?, minutes (15|60|480) */
+    public function startLiveLocation(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->startLiveLocation((int) $id, $this->uid($request), $request->input('lat'), $request->input('lng'), $request->input('accuracy'), (int) $request->input('minutes', 15));
+            return $this->apiSuccess($message, 'Live location started.', 201);
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/live-location — body: lat, lng, accuracy? */
+    public function updateLiveLocation(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->updateLiveLocation((int) $id, $this->uid($request), $request->input('lat'), $request->input('lng'), $request->input('accuracy'));
+            return $this->apiSuccess($message, 'Live location updated.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/messages/{id}/live-location */
+    public function stopLiveLocation(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->stopLiveLocation((int) $id, $this->uid($request)), 'Live location stopped.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/edit — body: body */
+    public function edit(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->editMessage((int) $id, $this->uid($request), (string) $request->input('body', ''));
+            return $this->apiSuccess($message, 'Message updated successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/messages/{id}/for-me */
+    public function deleteForMe(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->deleteForMe((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Message deleted for you.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/messages/{id}/for-everyone */
+    public function deleteForEveryone(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->deleteForEveryone((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Message deleted for everyone.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/restore */
+    public function restore(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->restoreMessage((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Message restored successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/messages/{id}/undo-send */
+    public function undoSend(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->undoSend((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Message undone.');
+        });
+    }
+
+    /** GET /api/v1/messaging/messages/{id}/history */
+    public function history(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->history((int) $id, $this->uid($request)), 'Message history retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/pin — body: duration? ('24h' | '7d' | '30d' | 'forever'، الافتراضي forever) */
+    public function pin(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $duration = (string) $request->input('duration', 'forever');
+            $this->messaging->setPinned((int) $id, $this->uid($request), true, $duration);
+            return $this->apiSuccess(null, 'Message pinned.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/unpin */
+    public function unpin(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->setPinned((int) $id, $this->uid($request), false);
+            return $this->apiSuccess(null, 'Message unpinned.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/react — body: emoji */
+    public function react(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $reactions = $this->messaging->toggleReaction((int) $id, $this->uid($request), (string) $request->input('emoji', ''));
+            return $this->apiSuccess(['reactions' => $reactions], 'Reaction updated successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/messages/{id}/receipts */
+    public function receipts(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->readReceipts((int) $id, $this->uid($request)), 'Read receipts retrieved successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/messages/{id}/info — مين استلم/قرا وإمتى (للمرسل بس) */
+    public function info(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->messageInfo((int) $id, $this->uid($request)), 'Message info retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/star — body: starred (bool، الافتراضي true) */
+    public function star(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $on = filter_var($request->input('starred', true), FILTER_VALIDATE_BOOLEAN);
+            return $this->apiSuccess($this->messaging->setStarred((int) $id, $this->uid($request), $on), $on ? 'Message starred.' : 'Message unstarred.');
+        });
+    }
+
+    /** GET /api/v1/messaging/starred?conversation_id= — الرسائل المميّزة بنجمة */
+    public function starred(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $cid = $request->filled('conversation_id') ? (int) $request->input('conversation_id') : null;
+            return $this->apiSuccess($this->messaging->starredMessages($cid, $this->uid($request)), 'Starred messages retrieved successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/favourites/stickers */
+    public function favouriteStickers(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            return $this->apiSuccess($this->messaging->favouriteStickers($this->uid($request)), 'Favourites retrieved successfully.');
+        });
+    }
+
+    /** DELETE /api/v1/messaging/favourites/stickers/{key} — يشيل ملصق/GIF من المفضلة مباشرة من الـ picker */
+    public function removeFavouriteSticker(Request $request, $key)
+    {
+        return $this->handle(function () use ($request, $key) {
+            $this->messaging->removeFavouriteSticker($this->uid($request), (string) $key);
+            return $this->apiSuccess(null, 'Removed from favourites.');
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/favourite — toggle (ملصق / GIF بس) */
+    public function toggleFavourite(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->toggleFavouriteSticker($this->uid($request), (int) $id), 'Favourites updated.');
+        });
+    }
+
+    // -- Stickers / GIF ---------------------------------------------------------
+
+    /** GET /api/v1/messaging/stickers — ستيكراتي */
+    public function myStickers(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->myStickers($this->uid($request)), 'Stickers retrieved successfully.'));
+    }
+
+    /** POST /api/v1/messaging/stickers — multipart: sticker (file), label? */
+    public function createSticker(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->createSticker($this->uid($request), $request->file('sticker'), $request->input('label')),
+            'Sticker saved.', 201
+        ));
+    }
+
+    /** DELETE /api/v1/messaging/stickers/{id} */
+    public function deleteSticker(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->deleteSticker($this->uid($request), (int) $id);
+            return $this->apiSuccess(null, 'Sticker deleted.');
+        });
+    }
+
+    // ---- Sticker packs ----
+
+    private function intOrNull(Request $request, string $key): ?int
+    {
+        return $request->filled($key) ? (int) $request->input($key) : null;
+    }
+
+    /** GET /api/v1/messaging/sticker-packs */
+    public function stickerPacks(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->stickerPacks($this->uid($request)), 'Sticker packs retrieved successfully.'));
+    }
+
+    /** GET /api/v1/messaging/sticker-packs/{id} */
+    public function stickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->stickerPack($this->uid($request), (int) $id), 'Sticker pack retrieved successfully.'));
+    }
+
+    /** GET /api/v1/messaging/stickers/lookup?attachment_id=|sticker_id= — حالة ستيكر (في أنهي باكات) */
+    public function stickerState(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->stickerState($this->uid($request), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Sticker state retrieved successfully.'
+        ));
+    }
+
+    /** POST /api/v1/messaging/sticker-packs — name, sticker_id?|attachment_id? (يضيف الستيكر للباك الجديدة) */
+    public function createStickerPack(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->createStickerPack($this->uid($request), (string) $request->input('name', ''), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Sticker pack created.', 201
+        ));
+    }
+
+    /** PATCH /api/v1/messaging/sticker-packs/{id} — name */
+    public function renameStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->renameStickerPack($this->uid($request), (int) $id, (string) $request->input('name', '')), 'Sticker pack renamed.'));
+    }
+
+    /** DELETE /api/v1/messaging/sticker-packs/{id} */
+    public function deleteStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->deleteStickerPack($this->uid($request), (int) $id), 'Sticker pack deleted.'));
+    }
+
+    /** POST /api/v1/messaging/sticker-packs/{id}/items — sticker_id | attachment_id */
+    public function addToStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->addToStickerPack($this->uid($request), (int) $id, $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Added to the pack.'
+        ));
+    }
+
+    /** DELETE /api/v1/messaging/sticker-packs/{id}/items/{stickerId} */
+    public function removeFromStickerPack(Request $request, $id, $stickerId)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->removeFromStickerPack($this->uid($request), (int) $id, (int) $stickerId), 'Removed from the pack.'));
+    }
+
+    /** GET /api/v1/messaging/stickers/{id}/file — صاحب الستيكر بس (Bearer). */
+    public function stickerFile(Request $request, $id)
+    {
+        $src = $this->messaging->stickerForServing($this->uid($request), (int) $id);
+        if (!$src) {
+            return $this->apiError('Sticker not found.', null, 404);
+        }
+        return response()->file($src['path'], [
+            'Content-Type' => $src['mime'], 'Content-Disposition' => 'inline', 'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'",
+            'Cache-Control' => 'private, max-age=86400',
+        ]);
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/sticker-message — multipart: sticker (file) | sticker_id | attachment_id, label? */
+    public function sendSticker(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->sendSticker(
+                (int) $id, $this->uid($request), $request->file('sticker'),
+                $request->filled('sticker_id') ? (int) $request->input('sticker_id') : null,
+                $request->filled('attachment_id') ? (int) $request->input('attachment_id') : null,
+                $request->input('label')
+            );
+            return $this->apiSuccess($message, 'Sticker sent.', 201);
+        });
+    }
+
+    /** GET /api/v1/messaging/gifs?q=&offset= */
+    public function searchGifs(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->searchGifs((string) $request->query('q', ''), max(0, (int) $request->query('offset', 0))), 'GIFs retrieved.'));
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/gif-message — body: url, title?, preview? */
+    public function sendGif(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $message = $this->messaging->sendGif((int) $id, $this->uid($request), (string) $request->input('url', ''), $request->input('title'), $request->input('preview'));
+            return $this->apiSuccess($message, 'GIF sent.', 201);
+        });
+    }
+
+    /** POST /api/v1/messaging/messages/{id}/vote — body: option_index */
+    public function votePoll(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $results = $this->messaging->votePoll((int) $id, $this->uid($request), (int) $request->input('option_index'));
+            return $this->apiSuccess($results, 'Vote recorded successfully.');
+        });
+    }
+
+    /** GET /api/v1/messaging/messages/{id}/poll-voters — مين صوّت على كل خيار */
+    public function pollVoters(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            return $this->apiSuccess($this->messaging->pollVoters((int) $id, $this->uid($request)), 'Poll voters retrieved successfully.');
+        });
+    }
+
+    /** POST /api/v1/messaging/presence/heartbeat */
+    public function heartbeat(Request $request)
+    {
+        $this->messaging->heartbeat($this->uid($request));
+        return $this->apiSuccess(null, 'Heartbeat recorded.');
+    }
+
+    /** POST /api/v1/messaging/presence/typing — body: conversation_id (nullable) */
+    public function typing(Request $request)
+    {
+        $conversationId = $request->filled('conversation_id') ? (int) $request->input('conversation_id') : null;
+        $this->messaging->setTyping($this->uid($request), $conversationId);
+        return $this->apiSuccess(null, 'Typing status updated.');
+    }
+
+    /** POST /api/v1/messaging/presence/lookup — body: user_ids[] */
+    public function presence(Request $request)
+    {
+        $userIds = array_map('intval', (array) $request->input('user_ids', []));
+        return $this->apiSuccess($this->messaging->presenceFor($userIds, $this->uid($request)), 'Presence retrieved successfully.');
+    }
+
+    /** GET /api/v1/messaging/attachments/{id}/download */
+    public function downloadAttachment(Request $request, $id)
+    {
+        $row = $this->messaging->attachmentForServing((int) $id, $this->uid($request));
+        if (!$row) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
+        if (!is_file($path)) {
+            return $this->apiError('File not found on server.', null, 404);
+        }
+
+        // حماية: الملف بيتفحص (ClamAV + محتوى PDF النشط) قبل ما أي حد يفتحه أو ينزّله.
+        // فيروس = ممنوع تمامًا. PDF فيه سكربتات = ممنوع إلا لو الواجهة بعتت force=1 بعد تحذيرين متتاليين.
+        if ($blocked = $this->inspectOrBlock($request, $path, (string) $row['original_name'])) {
+            return $blocked;
+        }
+
+        return response()->download($path, $row['original_name'], ['X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store']);
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/file — الملف نفسه (inline، بيدعم Range للفيديو/الصوت). لازم Bearer token
+     * والطالب يكون عضو في المحادثة، غير كده 404. مفيش رابط عام ليه: الملفات نفسها خارج public/.
+     */
+    public function attachmentFile(Request $request, $id)
+    {
+        return $this->serveAttachment($request, (int) $id, 'file', $this->uid($request));
+    }
+
+    /** GET /api/v1/messaging/attachments/{id}/thumbnail — صورة الفيديو المصغّرة (نفس شروط /file). */
+    public function attachmentThumbnail(Request $request, $id)
+    {
+        return $this->serveAttachment($request, (int) $id, 'thumbnail', $this->uid($request));
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/link?variant=file|thumbnail
+     * بيرجّع رابط موقّع قصير العمر (config upload.signed_media_ttl، افتراضي 10 دقايق) لنفس الملف — للـ <video> وللتطبيق
+     * الأصلي (تحميل/حفظ) اللي مابيبعتوش Authorization header. العضوية بتتفحص هنا وبتتفحص تاني وقت الفتح.
+     */
+    public function attachmentLink(Request $request, $id)
+    {
+        $variant = $request->query('variant') === 'thumbnail' ? 'thumbnail' : 'file';
+        $uid = $this->uid($request);
+        $row = $this->messaging->attachmentForServing((int) $id, $uid);
+        if (!$row || ($variant === 'thumbnail' && empty($row['thumbnail_path']))) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $ttl = max(60, (int) config('upload.signed_media_ttl', 600));
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute(
+            'messaging.media.signed',
+            now()->addSeconds($ttl),
+            ['id' => (int) $id, 'variant' => $variant, 'u' => $uid],
+            absolute: false
+        );
+        return $this->apiSuccess(['url' => $url, 'expires_in' => $ttl], 'Link created.');
+    }
+
+    /** GET /api/v1/messaging/media/{id}/{variant}?u=..&expires=..&signature=.. — بعد middleware signed:relative. */
+    public function signedMedia(Request $request, $id, $variant)
+    {
+        $uid = (int) $request->query('u');
+        if ($uid <= 0 || !in_array($variant, ['file', 'thumbnail'], true)) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        return $this->serveAttachment($request, (int) $id, (string) $variant, $uid);
+    }
+
+    /** بيسلّم ملف/thumbnail مرفق بعد فحص العضوية (والرسالة مش محذوفة ومش "مرة واحدة"). */
+    private function serveAttachment(Request $request, int $id, string $variant, int $uid)
+    {
+        $row = $this->messaging->attachmentForServing($id, $uid);
+        if (!$row) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $rel = $variant === 'thumbnail' ? (string) ($row['thumbnail_path'] ?? '') : (string) $row['stored_path'];
+        if ($rel === '') {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        $path = \App\Services\FileUploadService::absolutePath($rel);
+        if (!is_file($path)) {
+            return $this->apiError('File not found on server.', null, 404);
+        }
+
+        // وسائط (صورة/فيديو/صوت) بتتسلّم مباشرة؛ أي نوع تاني (مستند/أرشيف/كود) بيتفحص زي /download قبل ما يتفتح.
+        $isMedia = $variant === 'thumbnail' || in_array($row['kind'], ['image', 'video', 'audio'], true);
+        if (!$isMedia && ($blocked = $this->inspectOrBlock($request, $path, (string) $row['original_name']))) {
+            return $blocked;
+        }
+
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $mime = $variant === 'thumbnail' ? 'image/jpeg' : $this->safeMime($ext, (string) $row['kind']);
+        // inline بس للأنواع الآمنة للعرض؛ أي حاجة تانية بتتنزّل (مفيش HTML/JS بيتنفّذ من نفس الأوريجن أبدًا).
+        $inline = $mime !== 'application/octet-stream' && !str_starts_with($mime, 'text/');
+        $name = $variant === 'thumbnail' ? 'thumbnail.jpg' : (string) $row['original_name'];
+
+        return response()->file($path, [
+            'Content-Type'            => $mime,
+            'Content-Disposition'     => ($inline ? 'inline' : 'attachment') . "; filename*=UTF-8''" . rawurlencode($name),
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
+            'Cross-Origin-Resource-Policy' => 'cross-origin',
+            'Cache-Control'           => 'private, max-age=300',
+        ]);
+    }
+
+    /** MIME من الامتداد الفعلي المتخزّن (مش من اللي بعته العميل). أي حاجة مش في القائمة => octet-stream. */
+    private function safeMime(string $ext, string $kind): string
+    {
+        $map = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+            'bmp' => 'image/bmp', 'svg' => 'image/svg+xml',
+            'mp4' => 'video/mp4', 'mov' => 'video/quicktime', 'avi' => 'video/x-msvideo', 'mkv' => 'video/x-matroska',
+            'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'm4a' => 'audio/mp4', 'aac' => 'audio/aac',
+            'opus' => 'audio/ogg', 'weba' => 'audio/webm', 'pdf' => 'application/pdf',
+        ];
+        if ($ext === 'webm') {
+            return $kind === 'audio' ? 'audio/webm' : 'video/webm'; // تسجيلات الصوت بتتخزن .webm بس صوت
+        }
+        return $map[$ext] ?? 'application/octet-stream';
+    }
+
+    /** فحص الأمان المشترك (/download و /file لغير الوسائط): null = سليم، غير كده Response بحالة 423. */
+    private function inspectOrBlock(Request $request, string $path, string $displayName)
+    {
+        $inspection = app(\App\Services\FileUploadService::class)->inspectStoredFile($path, $displayName);
+        if ($inspection['status'] === 'infected') {
+            return $this->apiError('This file was flagged as infected and is blocked.', ['blocked' => ['malware']], 423);
+        }
+        if ($inspection['status'] === 'active_content' && !$request->boolean('force')) {
+            return $this->apiError('This file contains scripts or active content and was not opened.', ['blocked' => ['active_content'], 'findings' => $inspection['findings']], 423);
+        }
+        return null;
+    }
+
+    /**
+     * GET /api/v1/messaging/attachments/{id}/view-once  (header X-View-Claim: 1)
+     * بيسلّم ملف "مرة واحدة / تايمر" لأول مستلم بس وبعدين يمسحه من السيرفر. التايمر بيتعدّ في الواجهة (X-View-Seconds).
+     */
+    public function viewOnceAttachment(Request $request, $id)
+    {
+        if ($request->header('X-View-Claim') !== '1') {
+            return $this->apiError('Bad request.', null, 400); // يمنع الـ prefetch / فتح الرابط من المتصفح بالغلط
+        }
+        $claim = $this->messaging->claimViewOnce((int) $id, $this->uid($request));
+        if (!$claim) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        if ($claim['gone']) {
+            return $this->apiError('This media was already opened and is no longer available.', ['consumed' => true], 410);
+        }
+        $row = $claim['row'];
+        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
+        if (!is_file($path)) {
+            return $this->apiError('This media is no longer available.', ['consumed' => true], 410);
+        }
+        $this->messaging->purgeViewOnceFiles(['thumbnail_path' => $row['thumbnail_path'] ?? null]);
+        return response()->download($path, 'view-once.' . ($row['extension'] ?: 'bin'), [
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'no-store, private',
+            'X-View-Seconds'         => (string) ((int) ($row['view_seconds'] ?? 0)),
+            'X-View-Mode'            => (string) $row['view_mode'],
+            'Content-Type'           => (string) ($row['mime_type'] ?: 'application/octet-stream'),
+        ])->deleteFileAfterSend(true);
+    }
+
+    /** DELETE /api/v1/messaging/attachments/{id} */
+    public function deleteAttachment(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->messaging->deleteAttachment((int) $id, $this->uid($request));
+            return $this->apiSuccess(null, 'Attachment deleted successfully.');
+        });
+    }
+
+    /** بيلف أي فعل بيرمي RuntimeException بشكل ودّي (400) بدل ما يبوظ الطلب — نفس اتفاقية try/catch في كل كنترولر تاني في المشروع. */
+    /** بيسجّل خطأ الداتابيز، ولأدمن (أو لو APP_DEBUG) بيرجّع نصه في errors.db عشان نعرف الجدول/العمود الناقص. */
+    private function dbError(\Illuminate\Database\QueryException $e)
+    {
+        \Illuminate\Support\Facades\Log::error('Messaging DB error: ' . $e->getMessage());
+        // مؤقت للتشخيص: رسالة الدرايفر بس (من غير الـ SQL ولا الـ bindings) — شيله بعد ما نعرف السبب.
+        $driverMsg = $e->errorInfo[2] ?? 'database error';
+        return $this->apiError('Server Error', ['db' => [(string) $driverMsg]], 500);
+    }
+
+    private function handle(\Closure $action)
+    {
+        try {
+            return $action();
+        } catch (\Illuminate\Database\QueryException $e) {
+            // خطأ داتابيز (جدول/عمود ناقص مثلًا) مش "محادثة مش موجودة" — بنسجله ونرجّع 500 بدل 422.
+            return $this->dbError($e);
+        } catch (\RuntimeException | \InvalidArgumentException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        }
+    }
+}
