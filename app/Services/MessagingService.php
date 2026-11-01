@@ -94,6 +94,7 @@ class MessagingService
                 'peer_email'         => $peer['email'] ?? null,
                 'peer_avatar'        => $peer['avatar_path'] ?? null,
                 'peer_bio'           => $peer['bio'] ?? null,
+                'peer_bio_style'     => $peer['bio_style'] ?? null,
                 'peer_role'          => $peer['account_role'] ?? null,
                 // الطرف التاني حذف حسابه: المحادثة بتتقفل (قراءة بس) والفرونت بيغيّر شكلها.
                 'peer_deleted'       => (bool) ($peer['is_deleted'] ?? false),
@@ -1139,6 +1140,7 @@ class MessagingService
                     $p['avatar_path'] = null;
                 }
                 $p['bio'] = $this->bioFor((int) $p['id'], $viewerId);
+                $p['bio_style'] = $p['bio'] !== null ? $this->chatSettings->bioStyle((int) $p['id']) : null;
             }
         }
         unset($p);
@@ -1158,6 +1160,7 @@ class MessagingService
             if ($p['is_deleted']) {
                 $p['avatar_path'] = null;
                 $p['bio'] = null;
+                $p['bio_style'] = null;
                 $p['email'] = '';
             }
         }

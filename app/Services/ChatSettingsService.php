@@ -30,6 +30,9 @@ class ChatSettingsService
     public const KEY = 'chat_settings_v2';
     public const BIO_KEY = 'chat_bio';
     public const BIO_MAX = 190;
+    /** تصميم فقاعة البايو فوق صورة المحادثة — لازم يطابق BIO_STYLES في الفرونت (BioNote.jsx). */
+    public const BIO_KEY_STYLE = 'chat_bio_style';
+    public const BIO_STYLES = ['classic', 'mint', 'sunset', 'ocean', 'lavender', 'night', 'glass', 'spark'];
     public const LIST_MAX = 300;
     public const AUDIENCES = ['everyone', 'contacts', 'contacts_except', 'only', 'nobody'];
     public const FIELDS = ['avatar', 'bio', 'last_seen', 'stories', 'messages', 'calls', 'groups'];
@@ -129,6 +132,12 @@ class ChatSettingsService
         return $this->cache[$userId] = $out;
     }
 
+    public function bioStyle(int $userId): string
+    {
+        $v = (string) $this->settings->get(self::BIO_KEY_STYLE, 'user', $userId, 'classic');
+        return in_array($v, self::BIO_STYLES, true) ? $v : 'classic';
+    }
+
     public function bio(int $userId): string
     {
         return (string) $this->settings->get(self::BIO_KEY, 'user', $userId, '');
@@ -151,6 +160,8 @@ class ChatSettingsService
             }
         }
         $s['bio'] = $this->bio($userId);
+        $s['bio_style'] = $this->bioStyle($userId);
+        $s['bio_styles'] = self::BIO_STYLES;
         $s['bio_max'] = self::BIO_MAX;
         $s['people'] = (object) $people;
         $s['options'] = ['audiences' => self::AUDIENCES, 'wallpapers' => self::WALLPAPERS, 'story_expiry' => self::STORY_EXPIRY, 'font_sizes' => self::FONT_SIZES];
@@ -263,6 +274,14 @@ class ChatSettingsService
                 throw new \InvalidArgumentException('Bio is too long.');
             }
             $this->settings->set(self::BIO_KEY, $bio, 'user', $userId);
+        }
+
+        if (array_key_exists('bio_style', $in)) {
+            $style = (string) $in['bio_style'];
+            if (!in_array($style, self::BIO_STYLES, true)) {
+                throw new \InvalidArgumentException('Invalid bio style.');
+            }
+            $this->settings->set(self::BIO_KEY_STYLE, $style, 'user', $userId);
         }
 
         unset($this->cache[$userId]);
