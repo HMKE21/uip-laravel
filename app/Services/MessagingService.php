@@ -1743,6 +1743,178 @@ class MessagingService
         return [new UploadedFile($tmp, $name !== '' ? $name : 'sticker', $mime ?: null, null, true), $tmp];
     }
 
+    // -- Sticker packs (باكات الستيكرز) --------------------------------------------
+
+    private const PACK_MAX_PER_USER = 30;
+    private const PACK_MAX_ITEMS = 120;
+
+    private function ownPack($userId, int $packId): object
+    {
+        $p = DB::table('sticker_packs')->where('id', $packId)->where('user_id', (int) $userId)->first();
+        if (!$p) {
+            throw new \RuntimeException('Sticker pack not found.');
+        }
+        return $p;
+    }
+
+    private function packName(?string $name): string
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', (string) $name));
+        if ($name === '') {
+            throw new \RuntimeException('Give the pack a name.');
+        }
+        if (mb_strlen($name) > 40) {
+            throw new \RuntimeException('Pack name is too long (max 40 characters).');
+        }
+        return $name;
+    }
+
+    /**
+     * ستيكر المكتبة المقابل للمصدر: sticker_id (من مكتبتي) أو attachment_id (ستيكر وصلني/بعتّه — بيتنسخ للمكتبة مرة واحدة).
+     * @return int|null id في user_stickers (null لو مش موجود ومطلوب عدم الإنشاء)
+     */
+    private function resolveLibrarySticker($userId, ?int $stickerId, ?int $attachmentId, bool $create): ?int
+    {
+        if ($stickerId) {
+            $ok = DB::table('user_stickers')->where('id', $stickerId)->where('user_id', (int) $userId)->exists();
+            if (!$ok) {
+                throw new \RuntimeException('Sticker not found.');
+            }
+            return $stickerId;
+        }
+        if (!$attachmentId) {
+            throw new \RuntimeException('Choose a sticker.');
+        }
+        $id = DB::table('user_stickers')->where('user_id', (int) $userId)->where('source_attachment_id', $attachmentId)->value('id');
+        if ($id) {
+            return (int) $id;
+        }
+        if (!$create) {
+            return null;
+        }
+        $row = $this->attachmentForServing($attachmentId, $userId);
+        if (!$row || !in_array($row['kind'], ['image', 'video'], true)
+            || DB::table('messages')->where('id', (int) $row['message_id'])->value('message_type') !== 'sticker') {
+            throw new \RuntimeException('Sticker not found.');
+        }
+        $abs = FileUploadService::absolutePath((string) $row['stored_path']);
+        if (!is_file($abs)) {
+            throw new \RuntimeException('Sticker not found.');
+        }
+        [$upload, $tmp] = $this->tempUploadFrom($abs, (string) $row['original_name'], (string) ($row['mime_type'] ?? ''));
+        try {
+            $created = $this->createSticker($userId, $upload, null);
+        } finally {
+            if ($tmp && is_file($tmp)) {
+                @unlink($tmp);
+            }
+        }
+        DB::table('user_stickers')->where('id', (int) $created['id'])->update(['source_attachment_id' => $attachmentId]);
+        return (int) $created['id'];
+    }
+
+    private function stickerRow(object $r): array
+    {
+        return ['id' => (int) $r->id, 'kind' => $r->kind, 'label' => $r->label ?? null, 'url' => '/api/v1/messaging/stickers/' . (int) $r->id . '/file'];
+    }
+
+    /** @return array<int,array<string,mixed>> كل باكاتي: id, name, count, cover, sticker_ids */
+    public function stickerPacks($userId): array
+    {
+        $packs = DB::table('sticker_packs')->where('user_id', (int) $userId)->orderByDesc('updated_at')->orderByDesc('id')->get();
+        if ($packs->isEmpty()) {
+            return [];
+        }
+        $items = DB::table('sticker_pack_items as i')->join('user_stickers as s', 's.id', '=', 'i.sticker_id')
+            ->whereIn('i.pack_id', $packs->pluck('id')->all())->orderBy('i.id')
+            ->get(['i.pack_id', 's.id', 's.kind', 's.label'])->groupBy('pack_id');
+        return $packs->map(function ($p) use ($items) {
+            $rows = $items->get($p->id, collect());
+            $first = $rows->first();
+            return [
+                'id' => (int) $p->id, 'name' => $p->name, 'count' => $rows->count(), 'updated_at' => $p->updated_at,
+                'cover' => $first ? $this->stickerRow($first) : null,
+                'sticker_ids' => $rows->pluck('id')->map(fn ($v) => (int) $v)->all(),
+            ];
+        })->all();
+    }
+
+    /** باك واحدة مع ستيكراتها. */
+    public function stickerPack($userId, int $packId): array
+    {
+        $p = $this->ownPack($userId, $packId);
+        $rows = DB::table('sticker_pack_items as i')->join('user_stickers as s', 's.id', '=', 'i.sticker_id')
+            ->where('i.pack_id', $packId)->orderBy('i.id')->get(['s.id', 's.kind', 's.label']);
+        return ['id' => (int) $p->id, 'name' => $p->name, 'count' => $rows->count(), 'items' => $rows->map(fn ($r) => $this->stickerRow($r))->all()];
+    }
+
+    /** حالة ستيكر: موجود في مكتبتي؟ في أنهي باكات؟ (للـ bottom sheet) */
+    public function stickerState($userId, ?int $stickerId, ?int $attachmentId): array
+    {
+        $id = $stickerId ?: $this->resolveLibrarySticker($userId, null, $attachmentId, false);
+        $packs = $id
+            ? DB::table('sticker_pack_items as i')->join('sticker_packs as p', 'p.id', '=', 'i.pack_id')
+                ->where('p.user_id', (int) $userId)->where('i.sticker_id', $id)->pluck('p.id')->map(fn ($v) => (int) $v)->all()
+            : [];
+        return ['sticker_id' => $id ? (int) $id : null, 'pack_ids' => $packs];
+    }
+
+    public function createStickerPack($userId, ?string $name, ?int $stickerId = null, ?int $attachmentId = null): array
+    {
+        $name = $this->packName($name);
+        if (DB::table('sticker_packs')->where('user_id', (int) $userId)->count() >= self::PACK_MAX_PER_USER) {
+            throw new \RuntimeException('You can have up to ' . self::PACK_MAX_PER_USER . ' sticker packs.');
+        }
+        if (DB::table('sticker_packs')->where('user_id', (int) $userId)->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->exists()) {
+            throw new \RuntimeException('You already have a pack with this name.');
+        }
+        $libId = ($stickerId || $attachmentId) ? $this->resolveLibrarySticker($userId, $stickerId, $attachmentId, true) : null;
+        $packId = DB::table('sticker_packs')->insertGetId(['user_id' => (int) $userId, 'name' => $name, 'created_at' => now(), 'updated_at' => now()]);
+        if ($libId) {
+            DB::table('sticker_pack_items')->insert(['pack_id' => $packId, 'sticker_id' => $libId, 'created_at' => now()]);
+        }
+        return ['pack_id' => (int) $packId, 'sticker_id' => $libId, 'packs' => $this->stickerPacks($userId)];
+    }
+
+    public function renameStickerPack($userId, int $packId, ?string $name): array
+    {
+        $this->ownPack($userId, $packId);
+        $name = $this->packName($name);
+        if (DB::table('sticker_packs')->where('user_id', (int) $userId)->where('id', '!=', $packId)->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])->exists()) {
+            throw new \RuntimeException('You already have a pack with this name.');
+        }
+        DB::table('sticker_packs')->where('id', $packId)->update(['name' => $name, 'updated_at' => now()]);
+        return $this->stickerPacks($userId);
+    }
+
+    /** بيمسح الباك بس — الستيكرات نفسها بتفضل في مكتبتي. */
+    public function deleteStickerPack($userId, int $packId): array
+    {
+        $this->ownPack($userId, $packId);
+        DB::table('sticker_packs')->where('id', $packId)->delete();
+        return $this->stickerPacks($userId);
+    }
+
+    public function addToStickerPack($userId, int $packId, ?int $stickerId, ?int $attachmentId): array
+    {
+        $this->ownPack($userId, $packId);
+        if (DB::table('sticker_pack_items')->where('pack_id', $packId)->count() >= self::PACK_MAX_ITEMS) {
+            throw new \RuntimeException('This pack is full (max ' . self::PACK_MAX_ITEMS . ' stickers).');
+        }
+        $libId = $this->resolveLibrarySticker($userId, $stickerId, $attachmentId, true);
+        DB::table('sticker_pack_items')->insertOrIgnore(['pack_id' => $packId, 'sticker_id' => $libId, 'created_at' => now()]);
+        DB::table('sticker_packs')->where('id', $packId)->update(['updated_at' => now()]);
+        return ['sticker_id' => $libId, 'packs' => $this->stickerPacks($userId)];
+    }
+
+    public function removeFromStickerPack($userId, int $packId, int $stickerId): array
+    {
+        $this->ownPack($userId, $packId);
+        DB::table('sticker_pack_items')->where('pack_id', $packId)->where('sticker_id', $stickerId)->delete();
+        DB::table('sticker_packs')->where('id', $packId)->update(['updated_at' => now()]);
+        return $this->stickerPacks($userId);
+    }
+
     public function isFavouriteSticker($userId, string $url): bool
     {
         return DB::table('favourite_stickers')->where('user_id', (int) $userId)->where('item_key', sha1($url))->exists();

@@ -477,6 +477,70 @@ class MessagingController extends Controller
         });
     }
 
+    // ---- Sticker packs ----
+
+    private function intOrNull(Request $request, string $key): ?int
+    {
+        return $request->filled($key) ? (int) $request->input($key) : null;
+    }
+
+    /** GET /api/v1/messaging/sticker-packs */
+    public function stickerPacks(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->stickerPacks($this->uid($request)), 'Sticker packs retrieved successfully.'));
+    }
+
+    /** GET /api/v1/messaging/sticker-packs/{id} */
+    public function stickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->stickerPack($this->uid($request), (int) $id), 'Sticker pack retrieved successfully.'));
+    }
+
+    /** GET /api/v1/messaging/stickers/lookup?attachment_id=|sticker_id= — حالة ستيكر (في أنهي باكات) */
+    public function stickerState(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->stickerState($this->uid($request), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Sticker state retrieved successfully.'
+        ));
+    }
+
+    /** POST /api/v1/messaging/sticker-packs — name, sticker_id?|attachment_id? (يضيف الستيكر للباك الجديدة) */
+    public function createStickerPack(Request $request)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->createStickerPack($this->uid($request), (string) $request->input('name', ''), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Sticker pack created.', 201
+        ));
+    }
+
+    /** PATCH /api/v1/messaging/sticker-packs/{id} — name */
+    public function renameStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->renameStickerPack($this->uid($request), (int) $id, (string) $request->input('name', '')), 'Sticker pack renamed.'));
+    }
+
+    /** DELETE /api/v1/messaging/sticker-packs/{id} */
+    public function deleteStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->deleteStickerPack($this->uid($request), (int) $id), 'Sticker pack deleted.'));
+    }
+
+    /** POST /api/v1/messaging/sticker-packs/{id}/items — sticker_id | attachment_id */
+    public function addToStickerPack(Request $request, $id)
+    {
+        return $this->handle(fn () => $this->apiSuccess(
+            $this->messaging->addToStickerPack($this->uid($request), (int) $id, $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+            'Added to the pack.'
+        ));
+    }
+
+    /** DELETE /api/v1/messaging/sticker-packs/{id}/items/{stickerId} */
+    public function removeFromStickerPack(Request $request, $id, $stickerId)
+    {
+        return $this->handle(fn () => $this->apiSuccess($this->messaging->removeFromStickerPack($this->uid($request), (int) $id, (int) $stickerId), 'Removed from the pack.'));
+    }
+
     /** GET /api/v1/messaging/stickers/{id}/file — صاحب الستيكر بس (Bearer). */
     public function stickerFile(Request $request, $id)
     {
