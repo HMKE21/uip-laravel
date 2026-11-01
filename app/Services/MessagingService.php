@@ -1688,7 +1688,7 @@ class MessagingService
         }
         $q = trim($q);
         $limit = 24;
-        $cacheKey = 'gif:' . sha1($q . '|' . $offset);
+        $cacheKey = 'gif2:' . sha1($q . '|' . $offset);
         return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit) {
             $resp = \Illuminate\Support\Facades\Http::timeout(6)->get('https://api.giphy.com/v1/gifs/' . ($q === '' ? 'trending' : 'search'), array_filter([
                 'api_key' => $key, 'q' => $q ?: null, 'limit' => $limit, 'offset' => $offset, 'rating' => 'pg-13', 'bundle' => 'messaging_non_clips',
@@ -1701,11 +1701,13 @@ class MessagingService
                 $img = $g['images'] ?? [];
                 $full = $img['downsized']['url'] ?? ($img['fixed_height']['url'] ?? null);
                 $thumb = $img['fixed_width_small']['url'] ?? ($img['fixed_width']['url'] ?? $full);
+                // صورة ثابتة خفيفة (بضع KB) للعرض في الشبكة — الـ GIF المتحرك بيتحمّل بس لما المستخدم يقف عليه.
+                $still = $img['fixed_width_small_still']['url'] ?? ($img['fixed_width_still']['url'] ?? null);
                 if (!$full) {
                     continue;
                 }
                 $items[] = [
-                    'id' => (string) ($g['id'] ?? ''), 'title' => (string) ($g['title'] ?? ''), 'url' => $full, 'preview' => $thumb,
+                    'id' => (string) ($g['id'] ?? ''), 'title' => (string) ($g['title'] ?? ''), 'url' => $full, 'preview' => $thumb, 'still' => $still,
                     'w' => (int) ($img['fixed_width_small']['width'] ?? 0), 'h' => (int) ($img['fixed_width_small']['height'] ?? 0),
                 ];
             }
