@@ -351,11 +351,12 @@ class MessagingController extends Controller
         });
     }
 
-    /** POST /api/v1/messaging/messages/{id}/pin */
+    /** POST /api/v1/messaging/messages/{id}/pin — body: duration? ('24h' | '7d' | '30d' | 'forever'، الافتراضي forever) */
     public function pin(Request $request, $id)
     {
         return $this->handle(function () use ($request, $id) {
-            $this->messaging->setPinned((int) $id, $this->uid($request), true);
+            $duration = (string) $request->input('duration', 'forever');
+            $this->messaging->setPinned((int) $id, $this->uid($request), true, $duration);
             return $this->apiSuccess(null, 'Message pinned.');
         });
     }

@@ -212,19 +212,24 @@ class MessageRepository
         ]);
     }
 
-    public function setPinned(int $messageId, bool $pinned): void
+    /** $until = null مع $pinned=true → مثبّتة للأبد لحد ما حد يلغي التثبيت. */
+    public function setPinned(int $messageId, bool $pinned, ?\DateTimeInterface $until = null, $byUserId = null): void
     {
-        Message::where('id', $messageId)->update(['is_pinned' => $pinned ? 1 : 0]);
+        Message::where('id', $messageId)->update($pinned
+            ? ['is_pinned' => 1, 'pinned_until' => $until, 'pinned_at' => now(), 'pinned_by' => $byUserId]
+            : ['is_pinned' => 0, 'pinned_until' => null, 'pinned_at' => null, 'pinned_by' => null]);
     }
 
     public function pinnedForConversation(int $conversationId): array
     {
         $rows = DB::select(
-            'SELECT m.*, u.full_name AS sender_name
+            'SELECT m.*, u.full_name AS sender_name, pu.full_name AS pinned_by_name
              FROM messages m INNER JOIN users u ON u.id = m.sender_id
+             LEFT JOIN users pu ON pu.id = m.pinned_by
              WHERE m.conversation_id = ? AND m.is_pinned = 1 AND m.is_deleted = 0
-             ORDER BY m.created_at DESC',
-            [$conversationId]
+               AND (m.pinned_until IS NULL OR m.pinned_until > ?)
+             ORDER BY COALESCE(m.pinned_at, m.created_at) DESC, m.id DESC',
+            [$conversationId, now()->toDateTimeString()]
         );
         return $this->attachRelations(array_map(fn ($r) => (array) $r, $rows));
     }

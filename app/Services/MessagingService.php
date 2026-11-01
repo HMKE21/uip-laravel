@@ -648,7 +648,11 @@ class MessagingService
             'sender_avatar'      => $this->isAvatarHidden((int) $m['sender_id'], $viewerId) ? null : ($m['sender_avatar'] ?? null),
             'is_mine'            => (string) $m['sender_id'] === (string) $viewerId,
             'is_edited'          => (bool) ($m['is_edited'] ?? false),
-            'is_pinned'          => (bool) ($m['is_pinned'] ?? false),
+            // انتهت مدة التثبيت؟ تتعامل كأنها مش مثبّتة (من غير cron).
+            'is_pinned'          => (bool) ($m['is_pinned'] ?? false) && (empty($m['pinned_until']) || strtotime((string) $m['pinned_until']) > time()),
+            'pinned_until'       => !empty($m['is_pinned']) && !empty($m['pinned_until']) ? $m['pinned_until'] : null,
+            'pinned_at'          => !empty($m['is_pinned']) ? ($m['pinned_at'] ?? null) : null,
+            'pinned_by_name'     => !empty($m['is_pinned']) ? ($m['pinned_by_name'] ?? null) : null,
             'is_deleted'         => (bool) ($m['is_deleted'] ?? false),
             'deleted_reason'     => !empty($m['is_deleted']) ? ($m['deleted_reason'] ?? null) : null,
             'created_at'         => $m['created_at'],
@@ -929,13 +933,21 @@ class MessagingService
         return array_map(fn ($v) => ['body' => $v->body, 'edited_at' => $v->edited_at], $this->messages->history($messageId));
     }
 
-    public function setPinned(int $messageId, $userId, bool $pinned): void
+    /** مدد التثبيت المسموحة. 'forever' = من غير انتهاء. */
+    public const PIN_DURATIONS = ['24h' => '+24 hours', '7d' => '+7 days', '30d' => '+30 days', 'forever' => null];
+
+    /** @param string $duration واحد من PIN_DURATIONS (بيتجاهل لو $pinned=false). */
+    public function setPinned(int $messageId, $userId, bool $pinned, string $duration = 'forever'): void
     {
         $message = $this->messages->find($messageId);
         if (!$message || !$this->conversations->isParticipant((int) $message->conversation_id, $userId)) {
             throw new \RuntimeException('Message not found.');
         }
-        $this->messages->setPinned($messageId, $pinned);
+        if (!array_key_exists($duration, self::PIN_DURATIONS)) {
+            throw new \InvalidArgumentException('Invalid pin duration.');
+        }
+        $until = $pinned && self::PIN_DURATIONS[$duration] ? now()->modify(self::PIN_DURATIONS[$duration]) : null;
+        $this->messages->setPinned($messageId, $pinned, $until, $userId);
     }
 
     public function pinnedMessages(int $conversationId, $userId): array
