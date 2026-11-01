@@ -1558,7 +1558,7 @@ class MessagingService
     /** @return array<int,array<string,mixed>> */
     public function myStickers($userId): array
     {
-        return DB::table('user_stickers')->where('user_id', (int) $userId)->orderByDesc('id')->limit(self::STICKER_MAX_PER_USER)
+        return DB::table('user_stickers')->where('user_id', (int) $userId)->orderByDesc('id')->limit(1000)
             ->get(['id', 'kind', 'label', 'created_at'])
             ->map(fn ($r) => [
                 'id' => (int) $r->id, 'kind' => $r->kind, 'label' => $r->label, 'created_at' => $r->created_at,
@@ -1570,10 +1570,12 @@ class MessagingService
     public function createSticker($userId, ?UploadedFile $file, ?string $label = null): array
     {
         $this->assertStickerFile($file);
-        if (DB::table('user_stickers')->where('user_id', (int) $userId)->count() >= self::STICKER_MAX_PER_USER) {
-            throw new \RuntimeException('You can keep up to ' . self::STICKER_MAX_PER_USER . ' stickers. Delete some to add more.');
+        $pol = app(ChatMediaPolicyService::class)->get();
+        $cap = (int) $pol['sticker_max_per_user'];
+        if (DB::table('user_stickers')->where('user_id', (int) $userId)->count() >= $cap) {
+            throw new \RuntimeException('You can keep up to ' . $cap . ' stickers. Delete some to add more.');
         }
-        $stored = $this->uploads->store($file, 'messages', 'stickers/u_' . (int) $userId, (int) (self::STICKER_MAX_BYTES / 1024), self::STICKER_EXT);
+        $stored = $this->uploads->store($file, 'messages', 'stickers/u_' . (int) $userId, (int) $pol['sticker_max_kb'], self::STICKER_EXT);
         $kind = in_array($stored['extension'], ['webm', 'mp4'], true) ? 'video' : 'image';
         $id = DB::table('user_stickers')->insertGetId([
             'user_id' => (int) $userId, 'kind' => $kind, 'stored_path' => $stored['stored_path'],
@@ -1677,6 +1679,9 @@ class MessagingService
         if (!str_starts_with($url, 'https://') || !$ok($host)) {
             throw new \RuntimeException('Unsupported GIF source.');
         }
+        if ($title && app(ChatMediaPolicyService::class)->containsBlockedWord((string) $title)) {
+            throw new \RuntimeException('This GIF is not allowed on this platform.');
+        }
         $meta = ['url' => $url, 'title' => mb_substr(trim((string) $title), 0, 140)];
         if ($preview && str_starts_with($preview, 'https://') && $ok(strtolower((string) parse_url($preview, PHP_URL_HOST)))) {
             $meta['preview'] = $preview;
@@ -1687,16 +1692,22 @@ class MessagingService
     /** بحث/ترند GIF عن طريق Giphy (مفتاح GIPHY_API_KEY في .env). من غير مفتاح => configured=false والواجهة بتعرض رسالة. */
     public function searchGifs(string $q, int $offset = 0): array
     {
-        $key = (string) config('services.giphy.key');
+        $media = app(ChatMediaPolicyService::class);
+        $key = $media->giphyKey();
         if ($key === '') {
             return ['configured' => false, 'items' => [], 'next' => null];
         }
         $q = trim($q);
-        $limit = 24;
-        $cacheKey = 'gif2:' . sha1($q . '|' . $offset);
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit) {
+        if ($q !== '' && $media->containsBlockedWord($q)) {
+            return ['configured' => true, 'items' => [], 'next' => null, 'blocked' => true];
+        }
+        $pol = $media->get();
+        $limit = (int) $pol['gif_per_page'];
+        $rating = (string) $pol['gif_rating'];
+        $cacheKey = 'gif3:' . sha1($q . '|' . $offset . '|' . $limit . '|' . $rating . '|' . $pol['gif_blocked_words'] . '|' . sha1($key));
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit, $rating, $media) {
             $resp = \Illuminate\Support\Facades\Http::timeout(6)->get('https://api.giphy.com/v1/gifs/' . ($q === '' ? 'trending' : 'search'), array_filter([
-                'api_key' => $key, 'q' => $q ?: null, 'limit' => $limit, 'offset' => $offset, 'rating' => 'pg-13', 'bundle' => 'messaging_non_clips',
+                'api_key' => $key, 'q' => $q ?: null, 'limit' => $limit, 'offset' => $offset, 'rating' => $rating, 'bundle' => 'messaging_non_clips',
             ], fn ($v) => $v !== null));
             if (!$resp->ok()) {
                 return ['configured' => true, 'items' => [], 'next' => null, 'error' => true];
@@ -1708,7 +1719,7 @@ class MessagingService
                 $thumb = $img['fixed_width_small']['url'] ?? ($img['fixed_width']['url'] ?? $full);
                 // صورة ثابتة خفيفة (بضع KB) للعرض في الشبكة — الـ GIF المتحرك بيتحمّل بس لما المستخدم يقف عليه.
                 $still = $img['fixed_width_small_still']['url'] ?? ($img['fixed_width_still']['url'] ?? null);
-                if (!$full) {
+                if (!$full || $media->containsBlockedWord((string) ($g['title'] ?? '') . ' ' . (string) ($g['slug'] ?? ''))) {
                     continue;
                 }
                 $items[] = [
@@ -1731,8 +1742,13 @@ class MessagingService
         if (!in_array($ext, self::STICKER_EXT, true)) {
             throw new \RuntimeException('Sticker must be an image (webp, png, gif, jpg) or a short video (webm, mp4).');
         }
-        if ((int) $file->getSize() > self::STICKER_MAX_BYTES) {
-            throw new \RuntimeException('Sticker is too large (max 4 MB).');
+        $pol = app(ChatMediaPolicyService::class)->get();
+        $maxKb = (int) $pol['sticker_max_kb'];
+        if ((int) $file->getSize() > $maxKb * 1024) {
+            throw new \RuntimeException('Sticker is too large (max ' . ($maxKb >= 1024 ? round($maxKb / 1024, 1) . ' MB' : $maxKb . ' KB') . ').');
+        }
+        if (!$pol['sticker_allow_video'] && in_array($ext, ['webm', 'mp4'], true)) {
+            throw new \RuntimeException('Video stickers are turned off by the platform admin.');
         }
         $real = (string) $file->getMimeType();
         $isVideo = in_array($ext, ['webm', 'mp4'], true);

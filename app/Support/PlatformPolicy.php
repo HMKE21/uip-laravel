@@ -71,6 +71,8 @@ final class PlatformPolicy
         // Mobile push (Firebase Cloud Messaging). The service-account JSON is stored ENCRYPTED and never echoed back (see maskedFor()).
         'fcm_credentials_json' => ['type' => 'string', 'min' => 0, 'max' => 8000, 'secret' => true], // FCM_CREDENTIALS_JSON / FCM_CREDENTIALS_PATH
         'fcm_project_id'       => ['type' => 'string', 'min' => 0, 'max' => 100],                    // FCM_PROJECT_ID
+        // Chat GIF picker (Giphy). Stored ENCRYPTED, never echoed back in full. Managed from Admin → Chat Media.
+        'giphy_api_key'        => ['type' => 'string', 'min' => 0,  'max' => 200, 'secret' => true], // GIPHY_API_KEY
         // حماية رموز OTP (OtpGuard): غلطات متراكمة => حظر، وحد إرسال في النافذة.
         'otp_max_wrong'           => ['type' => 'int', 'min' => 1, 'max' => 20],   // OTP_MAX_WRONG
         'otp_block_minutes'       => ['type' => 'int', 'min' => 1, 'max' => 1440], // OTP_BLOCK_MINUTES
@@ -212,6 +214,7 @@ final class PlatformPolicy
             'github_oauth_redirect' => (string) config('services.github.redirect', ''),
             'fcm_credentials_json' => (string) config('services.fcm.credentials_json', ''),
             'fcm_project_id'       => (string) config('services.fcm.project_id', ''),
+            'giphy_api_key'        => (string) config('services.giphy.key', ''),
             'otp_max_wrong'           => max(1, (int) config('security.otp.max_wrong', 5)),
             'otp_block_minutes'       => max(1, (int) config('security.otp.block_minutes', 10)),
             'otp_max_sends'           => max(1, (int) config('security.otp.max_sends', 5)),

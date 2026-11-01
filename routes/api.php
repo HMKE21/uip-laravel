@@ -1181,6 +1181,15 @@ Route::prefix('v1')->group(function () {
         Route::delete('/staff-gate/{group}', [\App\Http\Controllers\Api\AdminPlatformPolicyApiController::class, 'resetStaffGateCode'])->middleware('throttle:10,1');
     });
 
+    // Admin → Chat Media: مفتاح Giphy + تحكم كامل في الـ GIF والستيكرز (مين يبعت، الحجم، الفلاتر…).
+    Route::prefix('admin/chat-media')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'show']);
+        Route::put('/', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'update'])->middleware('throttle:30,1');
+        Route::delete('/', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'reset'])->middleware('throttle:10,1');
+        Route::delete('/giphy-key', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'resetGiphyKey'])->middleware('throttle:10,1');
+        Route::post('/test-giphy', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'testGiphy'])->middleware('throttle:10,1');
+    });
+
     Route::prefix('admin/notification-settings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [AdminNotificationSettingsApiController::class, 'show']);
         Route::patch('/', [AdminNotificationSettingsApiController::class, 'update']);
@@ -2130,6 +2139,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/messages/{id}/star', [MessagingController::class, 'star'])->where('id', '[0-9]+');
         Route::post('/messages/{id}/favourite', [MessagingController::class, 'toggleFavourite'])->where('id', '[0-9]+');
         Route::get('/starred', [MessagingController::class, 'starred']);
+        Route::get('/media-policy', [MessagingController::class, 'mediaPolicy']);
         Route::get('/favourites/stickers', [MessagingController::class, 'favouriteStickers']);
         Route::delete('/favourites/stickers/{key}', [MessagingController::class, 'removeFavouriteSticker'])->where('key', '[a-f0-9]{40}');
         // ستيكراتي (New sticker) + إرسال ستيكر/GIF. الثابتة هنا قبل أي /conversations/{id} عشان مفيش تعارض.

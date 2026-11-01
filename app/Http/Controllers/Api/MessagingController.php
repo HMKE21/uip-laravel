@@ -16,8 +16,28 @@ use Illuminate\Http\Request;
  */
 class MessagingController extends Controller
 {
-    public function __construct(private MessagingService $messaging, private \App\Services\ChunkedUploadService $chunks)
+    public function __construct(private MessagingService $messaging, private \App\Services\ChunkedUploadService $chunks, private \App\Services\ChatMediaPolicyService $mediaPolicy)
     {
+    }
+
+    private function role(Request $request): ?string
+    {
+        $r = (string) $request->attributes->get('uip_role', '');
+        return $r === '' ? null : $r;
+    }
+
+    /** Admin → Chat Media switches: throws (422 via handle()) when this person's portal may not use the feature. */
+    private function mediaGuard(bool $allowed, string $what): void
+    {
+        if (!$allowed) {
+            throw new \RuntimeException($what . ' are turned off for your account by the platform admin.');
+        }
+    }
+
+    /** GET /api/v1/messaging/media-policy — which GIF / sticker features this person may use (the picker hides the rest). */
+    public function mediaPolicy(Request $request)
+    {
+        return $this->apiSuccess($this->mediaPolicy->forClient($this->role($request)), 'Media policy retrieved.');
     }
 
     private function uid(Request $request): int
@@ -471,10 +491,13 @@ class MessagingController extends Controller
     /** POST /api/v1/messaging/stickers — multipart: sticker (file), label? */
     public function createSticker(Request $request)
     {
-        return $this->handle(fn () => $this->apiSuccess(
-            $this->messaging->createSticker($this->uid($request), $request->file('sticker'), $request->input('label')),
-            'Sticker saved.', 201
-        ));
+        return $this->handle(function () use ($request) {
+            $this->mediaGuard($this->mediaPolicy->canCreateSticker($this->role($request)), 'Creating stickers');
+            return $this->apiSuccess(
+                $this->messaging->createSticker($this->uid($request), $request->file('sticker'), $request->input('label')),
+                'Sticker saved.', 201
+            );
+        });
     }
 
     /** DELETE /api/v1/messaging/stickers/{id} */
@@ -517,10 +540,13 @@ class MessagingController extends Controller
     /** POST /api/v1/messaging/sticker-packs — name, sticker_id?|attachment_id? (يضيف الستيكر للباك الجديدة) */
     public function createStickerPack(Request $request)
     {
-        return $this->handle(fn () => $this->apiSuccess(
-            $this->messaging->createStickerPack($this->uid($request), (string) $request->input('name', ''), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
-            'Sticker pack created.', 201
-        ));
+        return $this->handle(function () use ($request) {
+            $this->mediaGuard($this->mediaPolicy->packsEnabled($this->role($request)), 'Sticker packs');
+            return $this->apiSuccess(
+                $this->messaging->createStickerPack($this->uid($request), (string) $request->input('name', ''), $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+                'Sticker pack created.', 201
+            );
+        });
     }
 
     /** PATCH /api/v1/messaging/sticker-packs/{id} — name */
@@ -538,10 +564,13 @@ class MessagingController extends Controller
     /** POST /api/v1/messaging/sticker-packs/{id}/items — sticker_id | attachment_id */
     public function addToStickerPack(Request $request, $id)
     {
-        return $this->handle(fn () => $this->apiSuccess(
-            $this->messaging->addToStickerPack($this->uid($request), (int) $id, $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
-            'Added to the pack.'
-        ));
+        return $this->handle(function () use ($request, $id) {
+            $this->mediaGuard($this->mediaPolicy->packsEnabled($this->role($request)), 'Sticker packs');
+            return $this->apiSuccess(
+                $this->messaging->addToStickerPack($this->uid($request), (int) $id, $this->intOrNull($request, 'sticker_id'), $this->intOrNull($request, 'attachment_id')),
+                'Added to the pack.'
+            );
+        });
     }
 
     /** DELETE /api/v1/messaging/sticker-packs/{id}/items/{stickerId} */
@@ -568,6 +597,10 @@ class MessagingController extends Controller
     public function sendSticker(Request $request, $id)
     {
         return $this->handle(function () use ($request, $id) {
+            $this->mediaGuard($this->mediaPolicy->canSendSticker($this->role($request)), 'Stickers');
+            if ($request->hasFile('sticker')) {
+                $this->mediaGuard($this->mediaPolicy->canCreateSticker($this->role($request)), 'Creating stickers');
+            }
             $message = $this->messaging->sendSticker(
                 (int) $id, $this->uid($request), $request->file('sticker'),
                 $request->filled('sticker_id') ? (int) $request->input('sticker_id') : null,
@@ -581,13 +614,18 @@ class MessagingController extends Controller
     /** GET /api/v1/messaging/gifs?q=&offset= */
     public function searchGifs(Request $request)
     {
-        return $this->handle(fn () => $this->apiSuccess($this->messaging->searchGifs((string) $request->query('q', ''), max(0, (int) $request->query('offset', 0))), 'GIFs retrieved.'));
+        return $this->handle(function () use ($request) {
+            $q = trim((string) $request->query('q', ''));
+            $this->mediaGuard($this->mediaPolicy->canBrowseGifs($this->role($request), $q !== ''), 'GIFs');
+            return $this->apiSuccess($this->messaging->searchGifs($q, max(0, (int) $request->query('offset', 0))), 'GIFs retrieved.');
+        });
     }
 
     /** POST /api/v1/messaging/conversations/{id}/gif-message — body: url, title?, preview? */
     public function sendGif(Request $request, $id)
     {
         return $this->handle(function () use ($request, $id) {
+            $this->mediaGuard($this->mediaPolicy->canSendGif($this->role($request)), 'GIFs');
             $message = $this->messaging->sendGif((int) $id, $this->uid($request), (string) $request->input('url', ''), $request->input('title'), $request->input('preview'));
             return $this->apiSuccess($message, 'GIF sent.', 201);
         });
