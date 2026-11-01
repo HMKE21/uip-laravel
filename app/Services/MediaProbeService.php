@@ -112,7 +112,9 @@ class MediaProbeService
         // قبل ما يستسلم.
         foreach (['00:00:00.5', '00:00:00.0'] as $seekTo) {
             if ($this->extractFrame($absoluteVideoPath, $targetPath, $seekTo)) {
-                return trim($relativeDir, '/') . '/thumbnails/' . $thumbName;
+                $rel = trim($relativeDir, '/') . '/thumbnails/' . $thumbName;
+                \App\Support\UploadMirror::push($rel, $targetPath); // الصورة المصغّرة تتنسخ على S3 كمان
+                return $rel;
             }
         }
 

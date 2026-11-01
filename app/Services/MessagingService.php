@@ -768,6 +768,7 @@ class MessagingService
                 $duration = app(\App\Services\MediaProbeService::class)->normalizeAudio($absolutePath);
                 clearstatcache(true, $absolutePath);
                 $storedSize = @filesize($absolutePath) ?: $storedSize;
+                \App\Support\UploadMirror::push($stored['stored_path'], $absolutePath); // النسخة المعدّلة (remux) هي اللي تتحفظ
             } catch (\Throwable $e) {
                 \Log::warning('Audio normalize failed for chat attachment', ['error' => $e->getMessage()]);
             }

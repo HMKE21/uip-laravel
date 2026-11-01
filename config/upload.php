@@ -207,6 +207,20 @@ return [
     */
     'private_categories' => ['messages'],
 
+    /*
+    |--------------------------------------------------------------------------
+    | نسخة دائمة على S3 (UploadMirror)
+    |--------------------------------------------------------------------------
+    | ديسك Railway بيتمسح مع كل Deploy، فكل ملف مرفوع بيتنسخ على S3 وبيتسحب منه تلقائيًا لو اتمسح محليًا.
+    | شغّال تلقائيًا لو AWS_BUCKET متظبط. UPLOAD_MIRROR_DISK=off بيوقفه، أو اسم disk تاني من config/filesystems.php.
+    */
+    'mirror' => [
+        'disk'   => env('UPLOAD_MIRROR_DISK', env('AWS_BUCKET') ? 's3' : ''),
+        'prefix' => env('UPLOAD_MIRROR_PREFIX', 'app-files'),
+        // فئات عامة (public/uploads/...) مسموح لـ route الـ fallback يرجّعها من S3 لو الملف اتمسح (الباقي إما خاص أو بيتخدم بصلاحيات).
+        'public_serve' => ['uploads/avatars', 'uploads/chat-wallpapers', 'uploads/logos', 'uploads/branding', 'uploads/question-images', 'uploads/projects', 'uploads/feed', 'uploads/announcements'],
+    ],
+
     // صلاحية الرابط الموقّع للوسائط (ثواني) — للـ <video> والتطبيق الأصلي اللي مابيبعتوش Authorization header.
     'signed_media_ttl' => (int) env('UPLOAD_SIGNED_MEDIA_TTL', 600),
 ];

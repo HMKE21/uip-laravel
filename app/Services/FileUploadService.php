@@ -99,6 +99,9 @@ class FileUploadService
             throw new \RuntimeException('Failed to save the uploaded file.');
         }
 
+        // نسخة دائمة على S3 — الديسك المحلي بيتمسح مع كل Deploy (شوف UploadMirror). fail-open.
+        \App\Support\UploadMirror::push($relativeDir . '/' . $storedName, $targetDir . '/' . $storedName);
+
         return [
             'stored_path'   => $relativeDir . '/' . $storedName,
             'original_name' => basename($file->getClientOriginalName()),
@@ -143,6 +146,7 @@ class FileUploadService
                 @unlink($full);
             }
         }
+        \App\Support\UploadMirror::forget($rel);
     }
 
     /** المسارات النسبية (مثلًا uploads/messages) لكل فئة خاصة — config('upload.private_categories'). */
@@ -187,14 +191,24 @@ class FileUploadService
     {
         $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
         if (!self::isPrivatePath($rel)) {
-            return public_path($rel);
+            $pub = public_path($rel);
+            // الديسك اتمسح بعد Deploy؟ نرجّع الملف من S3.
+            if (!is_file($pub)) {
+                \App\Support\UploadMirror::restore($rel, $pub);
+            }
+            return $pub;
         }
         $private = self::privateRoot() . '/' . $rel;
         if (is_file($private)) {
             return $private;
         }
         $legacy = public_path($rel);
-        return is_file($legacy) ? $legacy : $private;
+        if (is_file($legacy)) {
+            return $legacy;
+        }
+        // الديسك اتمسح بعد Deploy؟ نرجّع الملف من S3 لنفس المكان الخاص.
+        \App\Support\UploadMirror::restore($rel, $private);
+        return $private;
     }
 
     /** نفس assertContentMatchesExtension() القديمة حرف بحرف — magic-byte sniffing، مش ثقة في الامتداد بس. */
