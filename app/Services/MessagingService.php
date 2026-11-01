@@ -1514,6 +1514,11 @@ class MessagingService
             ->get(['kind', 'item_key', 'url', 'label', 'created_at'])->all();
     }
 
+    public function removeFavouriteSticker($userId, string $key): void
+    {
+        DB::table('favourite_stickers')->where('user_id', (int) $userId)->where('item_key', $key)->delete();
+    }
+
     /** @return array{is_favourite:bool,item_key:string} toggle */
     public function toggleFavouriteSticker($userId, int $messageId): array
     {

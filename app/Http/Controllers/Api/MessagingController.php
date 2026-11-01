@@ -443,6 +443,15 @@ class MessagingController extends Controller
         });
     }
 
+    /** DELETE /api/v1/messaging/favourites/stickers/{key} — يشيل ملصق/GIF من المفضلة مباشرة من الـ picker */
+    public function removeFavouriteSticker(Request $request, $key)
+    {
+        return $this->handle(function () use ($request, $key) {
+            $this->messaging->removeFavouriteSticker($this->uid($request), (string) $key);
+            return $this->apiSuccess(null, 'Removed from favourites.');
+        });
+    }
+
     /** POST /api/v1/messaging/messages/{id}/favourite — toggle (ملصق / GIF بس) */
     public function toggleFavourite(Request $request, $id)
     {

@@ -2131,6 +2131,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/messages/{id}/favourite', [MessagingController::class, 'toggleFavourite'])->where('id', '[0-9]+');
         Route::get('/starred', [MessagingController::class, 'starred']);
         Route::get('/favourites/stickers', [MessagingController::class, 'favouriteStickers']);
+        Route::delete('/favourites/stickers/{key}', [MessagingController::class, 'removeFavouriteSticker'])->where('key', '[a-f0-9]{40}');
         // ستيكراتي (New sticker) + إرسال ستيكر/GIF. الثابتة هنا قبل أي /conversations/{id} عشان مفيش تعارض.
         Route::get('/stickers', [MessagingController::class, 'myStickers']);
         Route::post('/stickers', [MessagingController::class, 'createSticker'])->middleware('throttle:60,1');
