@@ -521,22 +521,45 @@ class PostInteractionService
         });
     }
 
+    /** إعجاب سريع (توافق مع القديم): بيعمل like لو مفيش تفاعل، وبيشيله لو فيه. */
     public function toggleCommentLike(int $uid, int $commentId): array
+    {
+        $cur = DB::table('post_comment_likes')->where('comment_id', $commentId)->where('user_id', $uid)->exists();
+        return $this->reactComment($uid, $commentId, $cur ? null : 'like');
+    }
+
+    /**
+     * تفاعل على تعليق بنفس أنواع تفاعلات المنشور (like/love/…): تفاعل واحد لكل مستخدم، تبديل النوع، أو إزالته (type = null).
+     * @return array{my_reaction:?string,liked:bool,likes_count:int,reactions:array}
+     */
+    public function reactComment(int $uid, int $commentId, ?string $type): array
     {
         $c = DB::table('post_comments')->where('id', $commentId)->whereNull('deleted_at')->first();
         if (!$c) {
             throw new \RuntimeException('Comment not found.');
         }
         $this->visiblePublished($uid, (int) $c->post_id);
-        $exists = DB::table('post_comment_likes')->where('comment_id', $commentId)->where('user_id', $uid)->exists();
-        if ($exists) {
-            DB::table('post_comment_likes')->where('comment_id', $commentId)->where('user_id', $uid)->delete();
-            DB::table('post_comments')->where('id', $commentId)->where('likes_count', '>', 0)->decrement('likes_count');
-        } else {
-            DB::table('post_comment_likes')->insertOrIgnore(['comment_id' => $commentId, 'user_id' => $uid, 'created_at' => now()]);
-            DB::table('post_comments')->where('id', $commentId)->increment('likes_count');
+        if ($type !== null && !in_array($type, (array) config('posts.reactions'), true)) {
+            throw new \RuntimeException('Invalid reaction.');
         }
-        return ['liked' => !$exists, 'likes_count' => (int) DB::table('post_comments')->where('id', $commentId)->value('likes_count')];
+        DB::transaction(function () use ($uid, $commentId, $type) {
+            $q = DB::table('post_comment_likes')->where('comment_id', $commentId)->where('user_id', $uid);
+            if ($type === null) {
+                $q->delete();
+            } elseif (!(clone $q)->exists()) {
+                DB::table('post_comment_likes')->insertOrIgnore(['comment_id' => $commentId, 'user_id' => $uid, 'type' => $type, 'created_at' => now()]);
+            } else {
+                $q->update(['type' => $type]);
+            }
+            // العدّاد بيتحسب من الجدول نفسه (مش increment) عشان ما يتفكش مع الضغط المتزامن.
+            DB::table('post_comments')->where('id', $commentId)->update(['likes_count' => DB::table('post_comment_likes')->where('comment_id', $commentId)->count()]);
+        });
+        return [
+            'my_reaction' => $type,
+            'liked'       => $type !== null,
+            'likes_count' => (int) DB::table('post_comments')->where('id', $commentId)->value('likes_count'),
+            'reactions'   => DB::table('post_comment_likes')->where('comment_id', $commentId)->selectRaw('type, COUNT(*) c')->groupBy('type')->pluck('c', 'type')->all(),
+        ];
     }
 
     // ---------------------------------------------------------------- interests (وقود الترتيب)
@@ -588,9 +611,24 @@ class PostInteractionService
         $ids = array_map(fn ($r) => (int) $r->id, $rows);
         return [
             'liked'      => $ids ? array_flip(DB::table('post_comment_likes')->where('user_id', $uid)->whereIn('comment_id', $ids)->pluck('comment_id')->all()) : [],
+            'mine'       => $ids ? DB::table('post_comment_likes')->where('user_id', $uid)->whereIn('comment_id', $ids)->pluck('type', 'comment_id')->all() : [],
+            'breakdown'  => $this->commentBreakdown($ids),
             'post_owner' => (int) DB::table('posts')->where('id', $postId)->value('user_id'),
             'mod'        => $this->vis->viewer($uid)['is_moderator'],
         ];
+    }
+
+    /** @return array<int,array<string,int>> comment_id => [type => count] */
+    private function commentBreakdown(array $ids): array
+    {
+        if (!$ids) {
+            return [];
+        }
+        $out = [];
+        foreach (DB::table('post_comment_likes')->whereIn('comment_id', $ids)->selectRaw('comment_id, type, COUNT(*) c')->groupBy('comment_id', 'type')->get() as $r) {
+            $out[(int) $r->comment_id][(string) $r->type] = (int) $r->c;
+        }
+        return $out;
     }
 
     private function shapeComment(object $r, int $uid, array $ctx): array
@@ -606,6 +644,8 @@ class PostInteractionService
             'created_at'    => $r->created_at,
             'edited_at'     => $r->edited_at,
             'liked_by_me'   => isset($ctx['liked'][(int) $r->id]),
+            'my_reaction'   => isset($ctx['liked'][(int) $r->id]) ? (($ctx['mine'][(int) $r->id] ?? null) ?: 'like') : null,
+            'reactions'     => $ctx['breakdown'][(int) $r->id] ?? (object) [],
             'author'        => [
                 'id'          => (int) $r->user_id,
                 'full_name'   => $r->full_name,

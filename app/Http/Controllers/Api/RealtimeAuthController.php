@@ -19,7 +19,9 @@ class RealtimeAuthController extends Controller
         $socketId = (string) $request->input('socket_id', '');
         $channel = (string) $request->input('channel_name', '');
 
-        if (!$uid || !preg_match('/^\d+\.\d+$/', $socketId) || $channel !== 'private-App.Models.User.' . $uid) {
+        // قناتين بس: قناة الشخص نفسه، وقناة المنشورات العامة المشتركة (ids بس — شوف PostsPing).
+        $allowed = $channel === 'private-App.Models.User.' . $uid || $channel === 'private-posts.feed';
+        if (!$uid || !preg_match('/^\d+\.\d+$/', $socketId) || !$allowed) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 

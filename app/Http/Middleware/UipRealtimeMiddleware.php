@@ -50,6 +50,7 @@ class UipRealtimeMiddleware
                 'messaging'     => $this->messaging($request, $response, $uid),
                 'drive'         => $this->drive($request, $uid),
                 'notifications' => Realtime::toUsers([$uid], 'notification', ['sync' => true]),
+                'posts'         => $this->posts($request, $response, $uid),
                 default         => null,
             };
         } catch (\Throwable $e) {
@@ -98,6 +99,62 @@ class UipRealtimeMiddleware
         if ($kind === 'message') {
             Realtime::toUsers(array_diff(Realtime::conversationMembers($cid), [$uid]), 'notification', ['sync' => true]);
         }
+    }
+
+    /**
+     * المنشورات: بعد أي كتابة (تفاعل، تعليق، رد، حفظ، مشاركة، تعديل، حذف، نشر) بنبعت ping فيه id المنشور ونوع التغيير.
+     * المنشور العام → القناة المشتركة posts.feed؛ غير كده → صاحب المنشور + المعلّقين + المتفاعلين + الجمهور المحدّد بس.
+     */
+    private function posts(Request $request, $response, int $uid): void
+    {
+        $path = $request->path(); // api/v1/posts/...
+        if (preg_match('#/posts/(media|collections|follow|authors|config)#', $path) || str_ends_with($path, '/view') || str_contains($path, '/hide') || str_contains($path, '/report')) {
+            return; // مشاهدات، رفع ملفات، متابعة… مش بتغيّر شكل منشور قدام حد
+        }
+        $route = $request->route();
+        $postId = null;
+        $commentId = null;
+        $kind = 'change';
+
+        if (str_contains($path, '/comments/') && $route && $route->parameter('commentId') !== null) {
+            $commentId = (int) $route->parameter('commentId');
+            $row = DB::table('post_comments')->where('id', $commentId)->first(['post_id', 'parent_id']);
+            $postId = $row ? (int) $row->post_id : null;
+            $parentId = $row && $row->parent_id ? (int) $row->parent_id : null;
+            $kind = (str_ends_with($path, '/like') || str_ends_with($path, '/react')) ? 'comment_react' : ($request->isMethod('DELETE') ? 'comment_delete' : 'comment_edit');
+        } elseif ($route && $route->parameter('id') !== null) {
+            $postId = (int) $route->parameter('id');
+            if (str_ends_with($path, '/react')) {
+                $kind = 'react';
+            } elseif (str_ends_with($path, '/comments') && $request->isMethod('POST')) {
+                $kind = 'comment';
+                $parentId = (int) $request->input('parent_id') ?: null;
+            } elseif (str_ends_with($path, '/save')) {
+                $kind = 'save';
+            } elseif (str_ends_with($path, '/publish')) {
+                $kind = 'new';
+            } elseif ($request->isMethod('DELETE') && !str_contains($path, '/media/')) {
+                $kind = 'removed';
+            } elseif ($request->isMethod('PATCH')) {
+                $kind = 'edit';
+            }
+        } elseif ($request->isMethod('POST') && preg_match('#/posts$#', $path) && method_exists($response, 'getContent')) {
+            // منشور جديد: الـ id في رد الـ API
+            $json = json_decode((string) $response->getContent(), true);
+            $d = is_array($json) ? ($json['data'] ?? []) : [];
+            $postId = isset($d['id']) ? (int) $d['id'] : null;
+            $kind = (($d['status'] ?? 'published') === 'published') ? 'new' : 'change';
+        }
+        if (!$postId) {
+            return;
+        }
+        $post = DB::table('posts')->where('id', $postId)->first(['id', 'user_id', 'visibility', 'status']);
+        if (!$post) {
+            // اتحذف: لسه محتاجين نبلّغ اللي شايفينه
+            \App\Support\PostsRealtime::publish($postId, $kind, ['actor' => $uid, 'comment_id' => $commentId, 'parent_id' => $parentId ?? null], null);
+            return;
+        }
+        \App\Support\PostsRealtime::publish($postId, $kind, ['actor' => $uid, 'comment_id' => $commentId, 'parent_id' => $parentId ?? null], $post);
     }
 
     private function conversationId(Request $request, $response): ?int

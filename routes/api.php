@@ -1756,7 +1756,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/following', [NetworkApiController::class, 'following']);
     });
 
-    Route::prefix('posts')->middleware(['uip.auth', 'uip.can:posts.use'])->group(function () {
+    Route::prefix('posts')->middleware(['uip.auth', 'uip.can:posts.use', 'uip.realtime:posts'])->group(function () {
         Route::get('/config', [PostsApiController::class, 'config']);
         Route::get('/feed', [PostsApiController::class, 'feed']);
         Route::get('/tags/trending', [PostsApiController::class, 'trendingTags']);
@@ -1787,6 +1787,7 @@ Route::prefix('v1')->group(function () {
         Route::patch('/comments/{commentId}', [PostsApiController::class, 'editComment'])->where('commentId', '[0-9]+');
         Route::delete('/comments/{commentId}', [PostsApiController::class, 'deleteComment'])->where('commentId', '[0-9]+');
         Route::post('/comments/{commentId}/like', [PostsApiController::class, 'likeComment'])->where('commentId', '[0-9]+');
+        Route::post('/comments/{commentId}/react', [PostsApiController::class, 'reactComment'])->where('commentId', '[0-9]+')->middleware('throttle:120,1');
 
         Route::post('/', [PostsApiController::class, 'store'])->middleware('throttle:20,1');
         Route::get('/{id}', [PostsApiController::class, 'show'])->where('id', '[0-9]+');

@@ -301,6 +301,15 @@ class PostsApiController extends Controller
         });
     }
 
+    /** POST /posts/comments/{commentId}/react  body: type (like|love|…) — فاضي = شيل التفاعل */
+    public function reactComment(Request $request, $commentId)
+    {
+        return $this->run(function () use ($request, $commentId) {
+            $type = $request->filled('type') ? (string) $request->input('type') : null;
+            return $this->apiSuccess($this->act->reactComment($this->uid($request), (int) $commentId, $type), 'Reaction saved.');
+        });
+    }
+
     public function likeComment(Request $request, $commentId)
     {
         return $this->run(fn () => $this->apiSuccess($this->act->toggleCommentLike($this->uid($request), (int) $commentId), 'Comment like updated.'));
