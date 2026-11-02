@@ -35,7 +35,13 @@ class ChatSettingsService
     public const BIO_STYLES = ['classic', 'mint', 'sunset', 'ocean', 'lavender', 'night', 'glass', 'spark'];
     public const LIST_MAX = 300;
     public const AUDIENCES = ['everyone', 'contacts', 'contacts_except', 'only', 'nobody'];
-    public const FIELDS = ['avatar', 'bio', 'last_seen', 'stories', 'messages', 'calls', 'groups'];
+    /**
+     * messages / calls = الناس الجديدة (محدش فيهم اتواصل معايا وأنا رديت عليه).
+     * messages_contacts / calls_contacts = اللي اتواصلوا معايا بالفعل ورديت عليهم.
+     */
+    public const FIELDS = ['avatar', 'bio', 'last_seen', 'stories', 'messages', 'calls', 'groups', 'messages_contacts', 'calls_contacts'];
+    /** تايمر التواصل: ينطبق على الجداد / الحاليين / الكل. */
+    public const SCHEDULE_SCOPES = ['new', 'contacts', 'all'];
     public const FONT_SIZES = ['sm', 'md', 'lg'];
     public const STORY_EXPIRY = [6, 12, 24, 48];
     /** خلفيات الشات الجاهزة — لازم تطابق WALLPAPERS في الفرونت؛ الصور الشخصية بتبقى `img:<id>`. */
@@ -65,7 +71,10 @@ class ChatSettingsService
                 'messages'  => $open,
                 'calls'     => $open,
                 'groups'    => $open,
+                'messages_contacts' => $open,
+                'calls_contacts'    => $open,
             ],
+            'schedule' => self::defaultSchedule(),
             'read_receipts_enabled' => true,
             'typing_indicator'      => true,
             'discoverable'          => true,
@@ -78,6 +87,104 @@ class ChatSettingsService
             'sounds'                => true,
             'wallpaper'             => ['default' => 'dots', 'per_chat' => (object) [], 'anim' => false],
         ];
+    }
+
+    public static function defaultSchedule(): array
+    {
+        return [
+            'enabled'    => false,
+            'days'       => [0, 1, 2, 3, 4],          // 0 = الأحد … 6 = السبت
+            'start'      => '09:00',
+            'end'        => '16:00',
+            'tz'         => 'Africa/Cairo',
+            'applies_to' => 'all',                      // new | contacts | all
+            'affects'    => ['messages' => true, 'calls' => true],
+        ];
+    }
+
+    /** @param mixed $in */
+    private function cleanSchedule($in, array $base): array
+    {
+        $out = $base;
+        if (!is_array($in)) {
+            return $out;
+        }
+        if (array_key_exists('enabled', $in)) {
+            $out['enabled'] = filter_var($in['enabled'], FILTER_VALIDATE_BOOLEAN);
+        }
+        if (array_key_exists('days', $in)) {
+            $days = [];
+            foreach ((array) $in['days'] as $d) {
+                $d = (int) $d;
+                if ($d >= 0 && $d <= 6) {
+                    $days[$d] = $d;
+                }
+            }
+            $out['days'] = array_values($days);
+            sort($out['days']);
+        }
+        foreach (['start', 'end'] as $k) {
+            if (array_key_exists($k, $in)) {
+                if (!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $in[$k])) {
+                    throw new \InvalidArgumentException('Invalid time.');
+                }
+                $out[$k] = (string) $in[$k];
+            }
+        }
+        if (array_key_exists('tz', $in)) {
+            if (!in_array((string) $in['tz'], \DateTimeZone::listIdentifiers(), true)) {
+                throw new \InvalidArgumentException('Invalid time zone.');
+            }
+            $out['tz'] = (string) $in['tz'];
+        }
+        if (array_key_exists('applies_to', $in)) {
+            if (!in_array($in['applies_to'], self::SCHEDULE_SCOPES, true)) {
+                throw new \InvalidArgumentException('Invalid schedule scope.');
+            }
+            $out['applies_to'] = $in['applies_to'];
+        }
+        if (isset($in['affects']) && is_array($in['affects'])) {
+            foreach (['messages', 'calls'] as $k) {
+                if (array_key_exists($k, $in['affects'])) {
+                    $out['affects'][$k] = filter_var($in['affects'][$k], FILTER_VALIDATE_BOOLEAN);
+                }
+            }
+        }
+        if ($out['enabled'] && !$out['days']) {
+            throw new \InvalidArgumentException('Pick at least one day.');
+        }
+        if ($out['enabled'] && $out['start'] === $out['end']) {
+            throw new \InvalidArgumentException('Start and end time must be different.');
+        }
+        return $out;
+    }
+
+    /** هل الوقت الحالي (بتوقيت صاحب الإعداد) جوه ساعات التواصل؟ بيدعم الفترات اللي بتعدّي نص الليل. */
+    public function scheduleOpenNow(array $sch, ?\DateTimeInterface $now = null): bool
+    {
+        if (empty($sch['enabled'])) {
+            return true;
+        }
+        $tz = new \DateTimeZone($sch['tz'] ?? 'Africa/Cairo');
+        $n = $now ? \DateTimeImmutable::createFromInterface($now)->setTimezone($tz) : new \DateTimeImmutable('now', $tz);
+        $mins = (int) $n->format('G') * 60 + (int) $n->format('i');
+        [$sh, $sm] = array_map('intval', explode(':', $sch['start']));
+        [$eh, $em] = array_map('intval', explode(':', $sch['end']));
+        $start = $sh * 60 + $sm;
+        $end = $eh * 60 + $em;
+        $dow = (int) $n->format('w');
+        $days = array_map('intval', (array) $sch['days']);
+        if ($start < $end) {
+            return in_array($dow, $days, true) && $mins >= $start && $mins < $end;
+        }
+        // overnight (e.g. 22:00 → 06:00): the part after midnight belongs to the previous day's window
+        if ($mins >= $start) {
+            return in_array($dow, $days, true);
+        }
+        if ($mins < $end) {
+            return in_array(($dow + 6) % 7, $days, true);
+        }
+        return false;
     }
 
     /** الإعدادات الكاملة (مدموجة مع الافتراضيات) بعد ما نطبّق المفاتيح القديمة. */
@@ -107,6 +214,11 @@ class ChatSettingsService
             if (array_key_exists($k, $saved)) {
                 $out[$k] = (bool) $saved[$k];
             }
+        }
+        try {
+            $out['schedule'] = $this->cleanSchedule($saved['schedule'] ?? null, self::defaultSchedule());
+        } catch (\InvalidArgumentException $e) {
+            $out['schedule'] = self::defaultSchedule();
         }
         $out['read_receipts_enabled'] = $this->settings->get('messaging_read_receipts_enabled', 'user', $userId, '1') === '1';
         if (isset($saved['stories_expiry_hours']) && in_array((int) $saved['stories_expiry_hours'], self::STORY_EXPIRY, true)) {
@@ -180,6 +292,7 @@ class ChatSettingsService
         $cur = $this->get($userId);
         $store = [
             'privacy' => $cur['privacy'],
+            'schedule' => $cur['schedule'],
             'typing_indicator' => $cur['typing_indicator'], 'discoverable' => $cur['discoverable'],
             'notify_messages' => $cur['notify_messages'], 'notify_preview' => $cur['notify_preview'],
             'stories_allow_replies' => $cur['stories_allow_replies'], 'stories_expiry_hours' => $cur['stories_expiry_hours'],
@@ -203,6 +316,10 @@ class ChatSettingsService
                 throw new \InvalidArgumentException('Pick at least one person.');
             }
             $store['privacy'][$field] = ['audience' => $audience, 'ids' => $ids];
+        }
+
+        if (isset($in['schedule'])) {
+            $store['schedule'] = $this->cleanSchedule($in['schedule'], $store['schedule']);
         }
 
         foreach (['typing_indicator', 'discoverable', 'notify_messages', 'notify_preview', 'stories_allow_replies', 'enter_to_send', 'sounds'] as $k) {
@@ -321,6 +438,63 @@ class ChatSettingsService
                 return in_array($viewerId, $p['ids'], true);
         }
         return true;
+    }
+
+    /**
+     * هل $viewerId يقدر يوصل لـ $ownerId بـ $what (messages | calls)؟
+     * - "اتواصلوا معايا بالفعل" = بينا محادثة مباشرة وأنا (صاحب الإعداد) بعتّ فيها رسالة واحدة على الأقل.
+     * - الناس الجديدة بتتفحص على messages/calls، اللي بالفعل على messages_contacts/calls_contacts.
+     * - بعد كده تايمر التواصل (لو مفعّل وينطبق على الشريحة دي).
+     * @return array{ok:bool,reason:?string,schedule:?array,engaged:bool}
+     */
+    public function reach(int $ownerId, ?int $viewerId, string $what): array
+    {
+        $what = $what === 'calls' ? 'calls' : 'messages';
+        if ($viewerId !== null && $ownerId === $viewerId) {
+            return ['ok' => true, 'reason' => null, 'schedule' => null, 'engaged' => true];
+        }
+        $engaged = $viewerId !== null && $this->isEngaged($ownerId, $viewerId);
+        $field = $engaged ? $what . '_contacts' : $what;
+        if (!$this->allows($ownerId, $viewerId, $field)) {
+            return ['ok' => false, 'reason' => 'privacy', 'schedule' => null, 'engaged' => $engaged];
+        }
+        $sch = $this->get($ownerId)['schedule'];
+        $applies = $sch['applies_to'] === 'all' || ($sch['applies_to'] === 'contacts' && $engaged) || ($sch['applies_to'] === 'new' && !$engaged);
+        if (!empty($sch['enabled']) && !empty($sch['affects'][$what]) && $applies && !$this->scheduleOpenNow($sch)) {
+            return ['ok' => false, 'reason' => 'schedule', 'schedule' => $sch, 'engaged' => $engaged];
+        }
+        return ['ok' => true, 'reason' => null, 'schedule' => null, 'engaged' => $engaged];
+    }
+
+    /** "رديت عليهم": محادثة مباشرة بين الاتنين وصاحب الإعداد بعت فيها رسالة (مش رسالة نظام). */
+    public function isEngaged(int $ownerId, int $viewerId): bool
+    {
+        $key = 'e:' . $ownerId . ':' . $viewerId;
+        if (!array_key_exists($key, $this->contactCache)) {
+            $this->contactCache[$key] = DB::table('conversations as c')
+                ->join('conversation_participants as pa', function ($j) use ($ownerId) {
+                    $j->on('pa.conversation_id', '=', 'c.id')->where('pa.user_id', '=', $ownerId);
+                })
+                ->join('conversation_participants as pb', function ($j) use ($viewerId) {
+                    $j->on('pb.conversation_id', '=', 'c.id')->where('pb.user_id', '=', $viewerId);
+                })
+                ->where('c.is_group', 0)
+                ->whereNull('c.saved_for_user_id')
+                ->whereExists(function ($q) use ($ownerId) {
+                    $q->select(DB::raw(1))->from('messages as m')
+                        ->whereColumn('m.conversation_id', 'c.id')
+                        ->where('m.sender_id', $ownerId)
+                        ->where('m.message_type', '!=', 'system');
+                })
+                ->exists();
+        }
+        return $this->contactCache[$key];
+    }
+
+    /** جملة قصيرة للخطأ/الإشعار: "متاح من 09:00 إلى 16:00". */
+    public static function scheduleLabel(array $sch): string
+    {
+        return $sch['start'] . ' – ' . $sch['end'] . ' (' . $sch['tz'] . ')';
     }
 
     /** جهات الاتصال = بينهم محادثة مباشرة (مش مجموعة ولا "الرسائل المحفوظة"). */

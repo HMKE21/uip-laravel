@@ -33,7 +33,7 @@ class ChatSettingsApiController extends Controller
         try {
             $in = $request->only([
                 'privacy', 'bio', 'bio_style', 'read_receipts_enabled', 'typing_indicator', 'discoverable', 'notify_messages', 'notify_preview',
-                'stories_allow_replies', 'stories_expiry_hours', 'enter_to_send', 'font_size', 'sounds', 'wallpaper',
+                'stories_allow_replies', 'stories_expiry_hours', 'enter_to_send', 'font_size', 'sounds', 'wallpaper', 'schedule',
             ]);
             return $this->apiSuccess($this->settings->update($this->uid($request), $in), 'Chat settings saved successfully.');
         } catch (\InvalidArgumentException $e) {

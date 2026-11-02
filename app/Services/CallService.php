@@ -81,8 +81,11 @@ class CallService
             throw new \RuntimeException('You cannot call this user.');
         }
         // إعداد "مين يقدر يتصل بيا" عند الطرف التاني.
-        if (!app(ChatSettingsService::class)->allows($peerId, $userId, 'calls')) {
-            throw new \RuntimeException('This person is not accepting calls from you.');
+        $reach = app(ChatSettingsService::class)->reach($peerId, $userId, 'calls');
+        if (!$reach['ok']) {
+            throw new \RuntimeException($reach['reason'] === 'schedule'
+                ? 'This person takes calls ' . ChatSettingsService::scheduleLabel($reach['schedule']) . '. Try again then.'
+                : 'This person is not accepting calls from you.');
         }
 
         // حد بدء المكالمات في الدقيقة (حماية من إزعاج/رنّات متكررة).

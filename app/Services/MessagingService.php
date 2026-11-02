@@ -222,7 +222,7 @@ class MessagingService
                 $r['avatar_path'] = null;
             }
             // مين مسموح يبدأ معاه محادثة جديدة؟ الفرونت بيعرض "مش بيستقبل رسائل" بدل ما الإرسال يفشل.
-            $r['can_message'] = $this->chatSettings->allows((int) $r['id'], $viewer, 'messages') || $this->chatSettings->isContact((int) $r['id'], $viewer);
+            $r['can_message'] = $this->chatSettings->reach((int) $r['id'], $viewer, 'messages')['ok'];
             $r['can_add_to_group'] = $this->chatSettings->allows((int) $r['id'], $viewer, 'groups');
         }
         unset($r);
@@ -288,10 +288,17 @@ class MessagingService
             $conversationOut['peer_id'] = $peerId;
             $conversationOut['blocked_by_me'] = $blockDir === 'me';
             // إعدادات الخصوصية عند الطرف التاني: "مين يقدر يراسلني / يتصل بيا" — الفرونت بيقفل الكتابة والمكالمات ويعرض إشعار.
-            $acceptsMessages = !$peerId || $this->chatSettings->allows($peerId, (int) $userId, 'messages');
-            $acceptsCalls = !$peerId || $this->chatSettings->allows($peerId, (int) $userId, 'calls');
+            $rm = $peerId ? $this->chatSettings->reach($peerId, (int) $userId, 'messages') : ['ok' => true, 'reason' => null, 'schedule' => null];
+            $rc = $peerId ? $this->chatSettings->reach($peerId, (int) $userId, 'calls') : ['ok' => true, 'reason' => null, 'schedule' => null];
+            $acceptsMessages = $rm['ok'];
+            $acceptsCalls = $rc['ok'];
             $conversationOut['peer_accepts_messages'] = $acceptsMessages;
             $conversationOut['peer_accepts_calls'] = $acceptsCalls;
+            // why it is closed: 'privacy' (they turned it off) or 'schedule' (outside their hours; the hours are sent for the notice)
+            $conversationOut['peer_messages_reason'] = $rm['reason'];
+            $conversationOut['peer_calls_reason'] = $rc['reason'];
+            $sch = $rm['schedule'] ?? $rc['schedule'];
+            $conversationOut['peer_schedule'] = $sch ? ['start' => $sch['start'], 'end' => $sch['end'], 'days' => $sch['days'], 'tz' => $sch['tz']] : null;
             $conversationOut['can_send'] = !$peerDeleted && $blockDir === null && $acceptsMessages;
             // 'blocked_by_peer' بيتعرض للمحظور كرسالة عامة (مبنقولوش إن حد حظره صراحةً).
             $conversationOut['send_block'] = $peerDeleted ? 'peer_deleted' : ($blockDir === 'me' ? 'blocked_by_me' : ($blockDir === 'peer' ? 'blocked_by_peer' : (!$acceptsMessages ? 'peer_no_messages' : null)));
@@ -518,12 +525,23 @@ class MessagingService
         return (int) $conversation->id;
     }
 
-    /** إعداد "مين يقدر يبدأ معايا محادثة": بيتطبّق على المحادثات الجديدة بس (القديمة بتفضل شغالة). */
+    /** إعداد "مين يقدر يبدأ معايا محادثة" (الناس الجديدة) + تايمر التواصل — بيتطبّق قبل فتح محادثة جديدة. */
     private function assertRecipientAcceptsMessages(int $senderId, int $recipientId): void
     {
-        if (!$this->chatSettings->allows($recipientId, $senderId, 'messages')) {
-            throw new \RuntimeException('This person is not accepting new messages from you.');
+        $this->assertReach($recipientId, $senderId, 'messages');
+    }
+
+    /** يرمي خطأ مفهوم لو الطرف التاني قافل الخاصية دي (خصوصية) أو برّه ساعات التواصل (تايمر). */
+    private function assertReach(int $ownerId, int $viewerId, string $what): void
+    {
+        $r = $this->chatSettings->reach($ownerId, $viewerId, $what);
+        if ($r['ok']) {
+            return;
         }
+        if ($r['reason'] === 'schedule') {
+            throw new \RuntimeException('This person is available ' . ChatSettingsService::scheduleLabel($r['schedule']) . '. Try again then.');
+        }
+        throw new \RuntimeException($what === 'calls' ? 'This person is not accepting calls from you.' : 'This person is not accepting messages from you.');
     }
 
     /**
@@ -1265,8 +1283,8 @@ class MessagingService
     private function assertPeerAcceptsMessages(int $conversationId, int $userId): void
     {
         $peerId = $this->safety->directPeerId($conversationId, $userId);
-        if ($peerId !== null && $peerId !== $userId && !$this->chatSettings->allows($peerId, $userId, 'messages')) {
-            throw new \RuntimeException('This person is not accepting messages from you.');
+        if ($peerId !== null && $peerId !== $userId) {
+            $this->assertReach($peerId, $userId, 'messages');
         }
     }
 
