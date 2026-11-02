@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\SavedDashboardsApiController;
 use App\Http\Controllers\Api\AnnouncementsApiController;
 use App\Http\Controllers\Api\FeedApiController;
 use App\Http\Controllers\Api\PostMediaApiController;
+use App\Http\Controllers\Api\PostPublicController;
 use App\Http\Controllers\Api\PostsAdminApiController;
 use App\Http\Controllers\Api\PostsApiController;
 use App\Http\Controllers\Api\StudentsApiController;
@@ -2424,6 +2425,17 @@ Route::prefix('v1')->group(function () {
             Route::get('/', [DriveShareApiController::class, 'show']);
             Route::get('/file', [DriveShareApiController::class, 'file']);
             Route::get('/zip', [DriveShareApiController::class, 'zip'])->middleware('throttle:20,1');
+        });
+        // صفحة المنشور العامة (/post/{id} في الفرونت) — منشورات visibility=public بس، من غير تسجيل دخول. راجع PostPublicController.
+        Route::prefix('posts')->where(['id' => '[0-9]+'])->middleware('throttle:240,1')->group(function () {
+            Route::get('/media/{id}/file', [PostPublicController::class, 'file']);
+            Route::get('/media/{id}/thumbnail', [PostPublicController::class, 'thumbnail']);
+            Route::get('/media/{id}/preview', [PostPublicController::class, 'preview']);
+            Route::get('/media/{id}/link', [PostPublicController::class, 'link']);
+            Route::get('/media/{id}/text', [PostPublicController::class, 'text']);
+            Route::get('/media/{id}/download', [PostPublicController::class, 'download'])->middleware('throttle:60,1');
+            Route::get('/{id}', [PostPublicController::class, 'show']);
+            Route::get('/{id}/comments', [PostPublicController::class, 'comments']);
         });
         Route::get('/projects', [PublicApiController::class, 'projects']);
         Route::get('/projects/{slug}', [PublicApiController::class, 'projectShow']);
