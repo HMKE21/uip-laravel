@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Services\DriveAdminSettings;
 use App\Services\DriveContentSearchService;
 use App\Services\DriveService;
+use App\Models\DriveLibraryState;
 use App\Support\DriveException;
+use App\Support\LibraryStateSanitizer;
 use Illuminate\Http\Request;
 
 /**
@@ -44,6 +46,8 @@ use Illuminate\Http\Request;
  *   GET    /drive/trash   |  DELETE /drive/trash (تفريغ)
  *   GET    /drive/config              إعدادات الواجهة: direct_upload + بيانات Google/Microsoft للنسخ الاحتياطي
  *   GET    /drive/manifest            كل الملفات/المجلدات (metadata) للنسخ الاحتياطي التزايدي
+ *   GET    /drive/library-state       تفضيلات "مكتبتي" (مفضلة/تاجات/مخفي/مجلدات ذكية) — متزامنة بين الأجهزة
+ *   PUT    /drive/library-state       {marks?, library?} بيستبدل القسم المبعوت بس (بعد التنضيف)
  *   POST   /drive/upload/init|complete          رفع مباشر لـ S3/R2 (رابط PUT موقّع ثم تأكيد)
  *   POST   /drive/nodes/{id}/replace/init|complete   حفظ مباشر فوق ملف موجود
  *   GET    /drive/nodes/{id}/download-url       رابط تنزيل موقّع مباشر
@@ -351,6 +355,38 @@ class DriveApiController extends Controller
     public function manifest(Request $request)
     {
         return $this->guard($request, fn ($uid) => $this->apiSuccess(['items' => $this->drive->manifest($uid)], 'OK'));
+    }
+
+    /** @return array{marks:?array,library:?array,updated_at:?string} */
+    private function libraryPayload(?DriveLibraryState $row): array
+    {
+        return [
+            'marks'      => $row?->marks,
+            'library'    => $row?->library,
+            'updated_at' => optional($row?->updated_at)->toIso8601String(),
+        ];
+    }
+
+    public function libraryState(Request $request)
+    {
+        return $this->guard($request, fn ($uid) => $this->apiSuccess(
+            $this->libraryPayload(DriveLibraryState::where('user_id', $uid)->first()), 'OK'));
+    }
+
+    public function saveLibraryState(Request $request)
+    {
+        return $this->guard($request, function ($uid) use ($request) {
+            $v = $request->validate(['marks' => 'sometimes|nullable|array', 'library' => 'sometimes|nullable|array']);
+            $row = DriveLibraryState::firstOrNew(['user_id' => $uid]);
+            if (array_key_exists('marks', $v)) {
+                $row->marks = LibraryStateSanitizer::marks($v['marks']);
+            }
+            if (array_key_exists('library', $v)) {
+                $row->library = LibraryStateSanitizer::library($v['library']);
+            }
+            $row->save();
+            return $this->apiSuccess($this->libraryPayload($row), 'Saved.');
+        });
     }
 
     public function uploadInit(Request $request)

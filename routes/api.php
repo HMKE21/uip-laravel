@@ -290,6 +290,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/templates', [DriveApiController::class, 'templates']);
         Route::get('/config', [DriveApiController::class, 'config']);
         Route::get('/manifest', [DriveApiController::class, 'manifest'])->middleware('throttle:60,1');
+        Route::get('/library-state', [DriveApiController::class, 'libraryState'])->middleware('throttle:60,1');
+        Route::put('/library-state', [DriveApiController::class, 'saveLibraryState'])->middleware('throttle:60,1');
         Route::post('/upload/init', [DriveApiController::class, 'uploadInit'])->middleware('throttle:240,1');
         Route::post('/upload/complete', [DriveApiController::class, 'uploadComplete'])->middleware('throttle:240,1');
         Route::post('/folders', [DriveApiController::class, 'createFolder'])->middleware('throttle:120,1');
