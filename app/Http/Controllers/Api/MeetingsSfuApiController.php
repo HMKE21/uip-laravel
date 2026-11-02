@@ -78,12 +78,22 @@ class MeetingsSfuApiController extends Controller
         ));
     }
 
+    /** الـ SDP لازم ينتهي بـ \r\n (أي trim في الطريق بيخلي Cloudflare يرفضه بـ 400). */
+    private function sdp(string $sdp): string
+    {
+        return rtrim($sdp, "\r\n") . "\r\n";
+    }
+
     private function upstream(array $r, string $what): JsonResponse
     {
         if (!$r['ok']) {
             $code = $r['status'] === 503 ? 503 : ($r['status'] === 504 ? 504 : 502);
 
-            return $this->apiError("SFU {$what} failed.", ['code' => $r['data']['error'] ?? 'sfu_error', 'upstream_status' => $r['status']], $code);
+            return $this->apiError("SFU {$what} failed.", [
+                'code' => $r['data']['error'] ?? 'sfu_error',
+                'upstream_status' => $r['status'],
+                'upstream_detail' => mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200),
+            ], $code);
         }
 
         return $this->apiSuccess($r['data'], 'OK');
@@ -201,7 +211,7 @@ class MeetingsSfuApiController extends Controller
         if ($request->filled('sessionDescription')) {
             $body['sessionDescription'] = [
                 'type' => $request->input('sessionDescription.type'),
-                'sdp'  => $request->input('sessionDescription.sdp'),
+                'sdp'  => $this->sdp((string) $request->input('sessionDescription.sdp')),
             ];
         }
 
@@ -243,7 +253,7 @@ class MeetingsSfuApiController extends Controller
         }
 
         return $this->upstream($this->sfu->renegotiate($sessionId, [
-            'sessionDescription' => ['type' => $request->input('sessionDescription.type'), 'sdp' => $request->input('sessionDescription.sdp')],
+            'sessionDescription' => ['type' => $request->input('sessionDescription.type'), 'sdp' => $this->sdp((string) $request->input('sessionDescription.sdp'))],
         ]), 'renegotiate');
     }
 
@@ -278,7 +288,7 @@ class MeetingsSfuApiController extends Controller
         if ($request->filled('sessionDescription')) {
             $body['sessionDescription'] = [
                 'type' => $request->input('sessionDescription.type'),
-                'sdp'  => $request->input('sessionDescription.sdp'),
+                'sdp'  => $this->sdp((string) $request->input('sessionDescription.sdp')),
             ];
         }
 

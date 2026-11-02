@@ -60,24 +60,42 @@ class CloudflareSfuService
         $c = MeetingAdminSettings::sfu();
         $url = config('webrtc.sfu.base_url') . '/apps/' . rawurlencode($c['app_id']) . '/' . $path;
 
-        try {
-            $req = Http::withToken($c['app_secret'])
-                ->acceptJson()
-                ->timeout((int) config('webrtc.sfu.timeout', 8));
-            if ($method === 'POST' && $body === []) {
-                // sessions/new: لازم يتبعت من غير body خالص. أي JSON (حتى {}) Cloudflare بيعامله كـ "offer" وبيرجّع
-                // 400 "Body JSON validation error: sessionDescription".
-                $res = $req->send('POST', $url);
-            } elseif ($method === 'PUT') {
-                $res = $req->asJson()->put($url, $body);
-            } else {
-                $res = $req->asJson()->post($url, $body);
+        // سحب ترَكات (remote) من غير offer = آمن يتعاد؛ النشر/الـ renegotiate مابنعيدوش عشان مانكرّرش جلسة.
+        $retryable = $method === 'POST' && $body !== [] && !isset($body['sessionDescription']);
+        $attempts = $retryable ? 2 : 1;
+        $res = null;
+        for ($i = 1; $i <= $attempts; $i++) {
+            try {
+                $req = Http::withToken($c['app_secret'])
+                    ->acceptJson()
+                    ->timeout((int) config('webrtc.sfu.timeout', 15));
+                if ($method === 'POST' && $body === []) {
+                    // sessions/new: لازم يتبعت من غير body خالص. أي JSON (حتى {}) Cloudflare بيعامله كـ "offer" وبيرجّع
+                    // 400 "Body JSON validation error: sessionDescription".
+                    $res = $req->send('POST', $url);
+                } elseif ($method === 'PUT') {
+                    $res = $req->asJson()->put($url, $body);
+                } else {
+                    $res = $req->asJson()->post($url, $body);
+                }
+                if ($res->serverError() && $i < $attempts) {
+                    usleep(300000);
+                    continue;
+                }
+                break;
+            } catch (ConnectionException $e) {
+                if ($i < $attempts) {
+                    usleep(300000);
+                    continue;
+                }
+                \Illuminate\Support\Facades\Log::warning('Meetings SFU unreachable', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
+
+                return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('Meetings SFU call failed', ['path' => $path, 'error' => $e->getMessage()]);
+
+                return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
             }
-        } catch (ConnectionException $e) {
-            return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable']];
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning('Meetings SFU call failed', ['path' => $path, 'error' => $e->getMessage()]);
-            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
         }
 
         $data = $res->json();

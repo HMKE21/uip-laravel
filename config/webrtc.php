@@ -73,7 +73,7 @@ return [
         'app_id'     => env('CF_SFU_APP_ID'),
         'app_secret' => env('CF_SFU_APP_SECRET'),
         'base_url'   => rtrim((string) env('CF_SFU_BASE_URL', 'https://rtc.live.cloudflare.com/v1'), '/'),
-        'timeout'    => (int) env('CF_SFU_TIMEOUT', 8),
+        'timeout'    => (int) env('CF_SFU_TIMEOUT', 15),
 
         // أقل عدد حاضرين (شاملك) يخلّي الغرفة تتحول SFU. فوق maxMeshParticipants بتتحول غصب حتى لو الرقم ده أكبر.
         'min_participants' => (int) env('MEETINGS_SFU_MIN_PARTICIPANTS', 5),
