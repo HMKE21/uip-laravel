@@ -1059,6 +1059,7 @@ Route::prefix('v1')->group(function () {
             Route::get('settings', [$c, 'settings']);
             Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
             Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
+            Route::post('sfu/test', [$c, 'testSfu'])->middleware('throttle:10,1');
 
             Route::get('blocked-users', [$c, 'blockedUsers']);
             Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:60,1');

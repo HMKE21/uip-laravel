@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -11,7 +12,8 @@ use Illuminate\Support\Facades\DB;
  * (meeting_default_duration_minutes ...) فأي قيمة متخزنة قديمة بتفضل شغالة.
  * لو مفيش override بنرجع للقيمة الافتراضية (config/meetings.php أو الافتراضي المكتوب هنا).
  *
- * الأنواع: bool | int | string | list_int | list_str
+ * الأنواع: bool | int | string | enum | secret | list_int | list_str
+ * secret بيتخزن مشفّر (Crypt) ومابيرجعش للمتصفح أبدًا (snapshot بيرجّع قناع بس)، وبيتسجّل في الـ audit كـ [secret].
  * القوائم بتتخزن JSON.
  */
 class MeetingAdminSettings
@@ -23,7 +25,7 @@ class MeetingAdminSettings
     private static int $cacheAt = 0;
 
     /** مجموعات العرض في لوحة الأدمن (بالترتيب). */
-    public const GROUPS = ['system', 'creation', 'limits', 'access', 'features', 'defaults', 'recording'];
+    public const GROUPS = ['system', 'creation', 'limits', 'access', 'features', 'defaults', 'recording', 'video'];
 
     /**
      * @return array<string, array{group:string,type:string,default:mixed,min?:int,max?:int,max_length?:int}>
@@ -83,6 +85,16 @@ class MeetingAdminSettings
             // -- التسجيل ---------------------------------------------------
             'recording_max_kb'         => ['group' => 'recording', 'type' => 'int', 'default' => (int) config('meetings.recording_max_kb', 512000), 'min' => 1024, 'max' => 5242880],
             'recording_process_inline' => ['group' => 'recording', 'type' => 'bool', 'default' => (bool) config('meetings.recording_process_inline', true)],
+
+            // -- الفيديو: Cloudflare Realtime SFU (الافتراضي من .env / config/webrtc.php، والتعديل من اللوحة بيغلب) --
+            'sfu_enabled'                 => ['group' => 'video', 'type' => 'bool', 'default' => (bool) config('webrtc.sfu.enabled', false)],
+            'sfu_mode'                    => ['group' => 'video', 'type' => 'enum', 'default' => in_array(config('webrtc.sfu.force'), ['auto', 'sfu', 'mesh'], true) ? config('webrtc.sfu.force') : 'auto', 'options' => ['auto', 'sfu', 'mesh']],
+            'sfu_min_participants'        => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.min_participants', 5), 'min' => 2, 'max' => 500],
+            'sfu_max_video_subscriptions' => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.max_video_subscriptions', 25), 'min' => 1, 'max' => 200],
+            'sfu_block_seconds'           => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.block_seconds', 300), 'min' => 10, 'max' => 86400],
+            'sfu_min_dwell_seconds'       => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.min_dwell_seconds', 30), 'min' => 0, 'max' => 600],
+            'sfu_app_id'                  => ['group' => 'video', 'type' => 'string', 'default' => (string) config('webrtc.sfu.app_id', ''), 'max_length' => 64],
+            'sfu_app_secret'              => ['group' => 'video', 'type' => 'secret', 'default' => (string) config('webrtc.sfu.app_secret', ''), 'max_length' => 200],
         ];
     }
 
@@ -193,6 +205,29 @@ class MeetingAdminSettings
         ]);
     }
 
+    /**
+     * إعدادات الـ SFU الفعلية (اللوحة تغلب الـ env). app_id الفاضي = ارجع للـ env.
+     * @return array{enabled:bool,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
+     */
+    public static function sfu(): array
+    {
+        $appId = trim((string) self::get('sfu_app_id'));
+        if ($appId === '') {
+            $appId = (string) config('webrtc.sfu.app_id', '');
+        }
+
+        return [
+            'enabled'                 => (bool) self::get('sfu_enabled'),
+            'app_id'                  => $appId,
+            'app_secret'              => (string) self::get('sfu_app_secret'),
+            'mode'                    => (string) self::get('sfu_mode'),
+            'min_participants'        => (int) self::get('sfu_min_participants'),
+            'max_video_subscriptions' => (int) self::get('sfu_max_video_subscriptions'),
+            'block_seconds'           => (int) self::get('sfu_block_seconds'),
+            'min_dwell_seconds'       => (int) self::get('sfu_min_dwell_seconds'),
+        ];
+    }
+
     // ------------------------------------------------------------------
     // الكتابة
     // ------------------------------------------------------------------
@@ -250,7 +285,9 @@ class MeetingAdminSettings
             self::flush();
             $new = self::get($key);
             if ($old !== $new) {
-                $changed[$key] = ['old' => $old, 'new' => $new];
+                $changed[$key] = $catalog[$key]['type'] === 'secret'
+                    ? ['old' => '[secret]', 'new' => '[secret]'] // السر ماينفعش يتسجّل في الـ audit
+                    : ['old' => $old, 'new' => $new];
             }
         }
         self::flush();
@@ -275,15 +312,21 @@ class MeetingAdminSettings
     {
         $values = [];
         foreach (self::catalog() as $key => $def) {
+            $secret = $def['type'] === 'secret';
+            $current = self::get($key);
             $values[$key] = [
                 'group'      => $def['group'],
                 'type'       => $def['type'],
-                'value'      => self::get($key),
-                'default'    => $def['default'],
+                // السر مابيخرجش من السيرفر: قناع (آخر 4 حروف) + مصدره (panel = اتحفظ من اللوحة، env = من ملف .env)
+                'value'      => $secret ? '' : $current,
+                'default'    => $secret ? '' : $def['default'],
                 'overridden' => self::isOverridden($key),
                 'min'        => $def['min'] ?? null,
                 'max'        => $def['max'] ?? null,
                 'max_length' => $def['max_length'] ?? null,
+                'options'    => $def['options'] ?? null,
+                'masked'     => $secret ? (is_string($current) && $current !== '' ? '••••••••' . substr($current, -4) : '') : null,
+                'source'     => $secret ? (self::isOverridden($key) ? 'panel' : ((string) $def['default'] !== '' ? 'env' : 'none')) : null,
             ];
         }
 
@@ -303,7 +346,8 @@ class MeetingAdminSettings
         return match ($type) {
             'bool'      => $val ? '1' : '0',
             'int'       => (string) (int) $val,
-            'string'    => (string) $val,
+            'string', 'enum' => (string) $val,
+            'secret'    => Crypt::encryptString((string) $val),
             default     => json_encode(array_values((array) $val), JSON_UNESCAPED_UNICODE),
         };
     }
@@ -317,6 +361,14 @@ class MeetingAdminSettings
                 return is_numeric($raw) ? (int) $raw : $default;
             case 'string':
                 return $raw;
+            case 'enum':
+                return $raw;
+            case 'secret':
+                try {
+                    return Crypt::decryptString($raw);
+                } catch (\Throwable $e) {
+                    return $default; // APP_KEY اتغيّر أو القيمة بايظة: نرجع للـ env بدل ما نكسر الاجتماعات
+                }
             case 'list_int':
                 $arr = json_decode($raw, true);
 
@@ -353,6 +405,20 @@ class MeetingAdminSettings
                 $s = trim((string) $raw);
                 if (isset($def['max_length']) && mb_strlen($s) > $def['max_length']) {
                     return [false, null, 'Maximum length is ' . $def['max_length'] . '.'];
+                }
+
+                return [true, $s, ''];
+            case 'enum':
+                $s = trim((string) $raw);
+
+                return in_array($s, (array) ($def['options'] ?? []), true) ? [true, $s, ''] : [false, null, 'Must be one of: ' . implode(', ', (array) ($def['options'] ?? [])) . '.'];
+            case 'secret':
+                $s = trim((string) $raw);
+                if ($s === '') {
+                    return [false, null, 'Secret cannot be empty (use Reset to go back to the .env value).'];
+                }
+                if (!preg_match('/^[A-Za-z0-9._\-]{16,200}$/', $s)) {
+                    return [false, null, 'Secret must be 16–200 letters/digits with no spaces.'];
                 }
 
                 return [true, $s, ''];

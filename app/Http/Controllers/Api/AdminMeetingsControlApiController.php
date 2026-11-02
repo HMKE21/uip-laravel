@@ -87,6 +87,30 @@ class AdminMeetingsControlApiController extends Controller
         return $this->apiSuccess(MeetingAdminSettings::snapshot(), 'Settings saved.');
     }
 
+    /** POST sfu/test — بيعمل session تجريبية على Cloudflare بالإعدادات المحفوظة حاليًا ويقول الاتصال سليم ولا لأ (من غير ما يكشف السر). */
+    public function testSfu(Request $request)
+    {
+        $svc = app(\App\Services\CloudflareSfuService::class);
+        $cfg = MeetingAdminSettings::sfu();
+        if ($cfg['app_id'] === '' || $cfg['app_secret'] === '') {
+            return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'App ID / secret are not set.');
+        }
+        if (!$cfg['enabled']) {
+            return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
+        }
+
+        $r = $svc->newSession();
+        $code = $r['ok'] ? 'ok' : match (true) {
+            in_array($r['status'], [401, 403], true) => 'bad_secret',
+            $r['status'] === 404 => 'bad_app_id',
+            $r['status'] === 504 => 'unreachable',
+            default => 'error',
+        };
+        $this->log($request, 'sfu_tested', null, null, ['result' => $code], 'MeetingSettings');
+
+        return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status']], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
+    }
+
     public function resetSettings(Request $request)
     {
         $n = MeetingAdminSettings::resetAll();

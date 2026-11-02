@@ -157,9 +157,10 @@ class MeetingTransportService
             // فشل SFU: غرفة صغيرة (mesh ينفع) → فشل واحد يكفي. غرفة كبيرة → لازم ≥30% (وإلا العميل الواحد يعيد المحاولة بس).
             $blockNow = $presentCount <= $maxMesh ? $failed >= 1 : ($failed / $n) >= 0.3;
             if ($blockNow) {
-                $s['blocked_until'] = $now + (int) config('webrtc.sfu.block_seconds', 300);
+                $s['blocked_until'] = $now + MeetingAdminSettings::sfu()['block_seconds'];
             }
 
+            $cfg = MeetingAdminSettings::sfu();
             $d = self::decide([
                 'current'          => (string) $s['mode'],
                 'changed_at'       => (int) $s['changed_at'],
@@ -167,10 +168,10 @@ class MeetingTransportService
                 'count'            => $presentCount,
                 'sfu_available'    => $this->sfu->enabled(),
                 'blocked'          => $now < (int) $s['blocked_until'],
-                'force'            => (string) config('webrtc.sfu.force', 'auto'),
-                'min_participants' => (int) config('webrtc.sfu.min_participants', 5),
+                'force'            => $cfg['mode'],
+                'min_participants' => $cfg['min_participants'],
                 'max_mesh'         => $maxMesh,
-                'min_dwell'        => $blockNow ? 0 : (int) config('webrtc.sfu.min_dwell_seconds', 30),
+                'min_dwell'        => $blockNow ? 0 : $cfg['min_dwell_seconds'],
                 'mesh_poor_ratio'  => $poor / $meshN,
                 'sfu_sample_ok'    => $sfuSampleOk,
             ]);

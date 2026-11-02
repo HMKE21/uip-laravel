@@ -21,9 +21,9 @@ class CloudflareSfuService
 {
     public function enabled(): bool
     {
-        return (bool) config('webrtc.sfu.enabled')
-            && (string) config('webrtc.sfu.app_id') !== ''
-            && (string) config('webrtc.sfu.app_secret') !== '';
+        $c = MeetingAdminSettings::sfu(); // اللوحة (Admin → Meetings Control → Video) تغلب الـ env
+
+        return $c['enabled'] && $c['app_id'] !== '' && $c['app_secret'] !== '';
     }
 
     /** @return array{ok:bool,status:int,data:array<string,mixed>} */
@@ -57,10 +57,11 @@ class CloudflareSfuService
             return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_disabled']];
         }
 
-        $url = config('webrtc.sfu.base_url') . '/apps/' . rawurlencode((string) config('webrtc.sfu.app_id')) . '/' . $path;
+        $c = MeetingAdminSettings::sfu();
+        $url = config('webrtc.sfu.base_url') . '/apps/' . rawurlencode($c['app_id']) . '/' . $path;
 
         try {
-            $req = Http::withToken((string) config('webrtc.sfu.app_secret'))
+            $req = Http::withToken($c['app_secret'])
                 ->acceptJson()
                 ->asJson()
                 ->timeout((int) config('webrtc.sfu.timeout', 8));

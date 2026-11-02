@@ -105,7 +105,7 @@ class MeetingsSfuApiController extends Controller
             'mode'                    => $state['mode'],
             'epoch'                   => $state['epoch'],
             'reason'                  => $state['reason'],
-            'max_video_subscriptions' => (int) config('webrtc.sfu.max_video_subscriptions', 25),
+            'max_video_subscriptions' => \App\Services\MeetingAdminSettings::sfu()['max_video_subscriptions'],
             'peers'                   => $this->livePeers($meeting, $actor),
         ], 'SFU config retrieved successfully.');
     }
