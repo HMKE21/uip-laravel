@@ -13,7 +13,7 @@ return [
     'max_mentions'    => 20,
     'code_text_bytes' => 524288,   // أقصى حجم كود بيتبعت كنص للمعاينة (512KB)
 
-    'visibilities'    => ['public', 'followers', 'contacts', 'university', 'faculty', 'selected', 'private'],
+    'visibilities'    => ['public', 'followers', 'connections', 'contacts', 'university', 'faculty', 'selected', 'private'],
     'comments_modes'  => ['everyone', 'followers', 'contacts', 'none'],
     'reactions'       => ['like', 'love', 'insightful', 'celebrate', 'support', 'funny'],
     'share_channels'  => ['link', 'chat', 'external'],

@@ -65,7 +65,7 @@ class PostInteractionService
     public function reactors(int $uid, int $postId, ?string $type, int $page, int $perPage): array
     {
         $post = $this->visiblePublished($uid, $postId);
-        if ($post->hide_counts && (int) $post->user_id !== $uid) {
+        if ($post->hide_counts && (int) $post->user_id !== $uid && empty($this->vis->viewer($uid)['is_moderator'])) {
             throw new \RuntimeException('The author hid the reactions on this post.');
         }
         $q = DB::table('post_reactions as r')->join('users as u', 'u.id', '=', 'r.user_id')
@@ -74,12 +74,73 @@ class PostInteractionService
         if ($type && in_array($type, (array) config('posts.reactions'), true)) {
             $q->where('r.type', $type);
         }
-        $rows = $q->orderByDesc('r.created_at')->forPage($page, $perPage)->get(['u.id', 'u.full_name', 'u.avatar_path', 'r.type']);
+        $rows = $q->orderByDesc('r.created_at')->forPage($page, $perPage)->get(['u.id', 'u.full_name', 'u.avatar_path', 'r.type', 'r.created_at']);
         return $rows->map(fn ($r) => [
             'id'          => (int) $r->id,
             'full_name'   => $r->full_name,
             'avatar_path' => $this->messaging->isAvatarHidden((int) $r->id, $uid) ? null : $r->avatar_path,
             'type'        => $r->type,
+            'at'          => $r->created_at,
+        ])->all();
+    }
+
+    /**
+     * مين شارك المنشور: مشاركات (رابط / شات / خارجي) + إعادات النشر (مع تعليقهم).
+     * $kind: all | share | repost. نفس قاعدة الإخفاء بتاعة reactors (المالك والمشرف يشوفوا دايمًا).
+     *
+     * @return array<int,array>
+     */
+    public function sharers(int $uid, int $postId, string $kind, int $page, int $perPage): array
+    {
+        $post = $this->visiblePublished($uid, $postId);
+        if ($post->hide_counts && (int) $post->user_id !== $uid && empty($this->vis->viewer($uid)['is_moderator'])) {
+            throw new \RuntimeException('The author hid the counts on this post.');
+        }
+        $block = 'NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = ?))';
+        $take = $page * $perPage;
+        $out = [];
+
+        if ($kind === 'all' || $kind === 'share') {
+            $rows = DB::table('post_shares as s')->join('users as u', 'u.id', '=', 's.user_id')
+                ->where('s.post_id', $postId)->whereNull('u.deleted_at')->whereRaw($block, [$uid, $uid])
+                ->orderByDesc('s.created_at')->limit($take)->get(['u.id', 'u.full_name', 'u.avatar_path', 's.channel', 's.created_at']);
+            foreach ($rows as $r) {
+                $out[] = ['kind' => 'share', 'id' => (int) $r->id, 'full_name' => $r->full_name, 'avatar_path' => $this->messaging->isAvatarHidden((int) $r->id, $uid) ? null : $r->avatar_path,
+                    'channel' => $r->channel, 'at' => $r->created_at];
+            }
+        }
+        if ($kind === 'all' || $kind === 'repost') {
+            $rows = DB::table('posts as p')->join('users as u', 'u.id', '=', 'p.user_id')
+                ->where('p.repost_of_id', $postId)->where('p.status', 'published')->whereNull('p.deleted_at')->whereNull('u.deleted_at')->whereRaw($block, [$uid, $uid])
+                ->orderByDesc('p.created_at')->limit($take)->get(['u.id', 'u.full_name', 'u.avatar_path', 'p.id as post_id', 'p.body', 'p.created_at']);
+            foreach ($rows as $r) {
+                $out[] = ['kind' => 'repost', 'id' => (int) $r->id, 'full_name' => $r->full_name, 'avatar_path' => $this->messaging->isAvatarHidden((int) $r->id, $uid) ? null : $r->avatar_path,
+                    'post_id' => (int) $r->post_id, 'body' => $r->body, 'at' => $r->created_at];
+            }
+        }
+        usort($out, fn ($a, $b) => strcmp((string) $b['at'], (string) $a['at']));
+        return array_slice($out, ($page - 1) * $perPage, $perPage);
+    }
+
+    /** مين شاف المنشور (المالك والمشرف بس): عدد المشاهدات، مدة المكوث، هل خلّصه، آخر مشاهدة. */
+    public function viewers(int $uid, int $postId, int $page, int $perPage): array
+    {
+        $post = $this->visiblePublished($uid, $postId);
+        if ((int) $post->user_id !== $uid && empty($this->vis->viewer($uid)['is_moderator'])) {
+            throw new \RuntimeException('Only the author can see who viewed this post.');
+        }
+        $rows = DB::table('post_views as v')->join('users as u', 'u.id', '=', 'v.viewer_id')
+            ->where('v.post_id', $postId)->whereNull('u.deleted_at')
+            ->orderByDesc('v.last_viewed_at')->forPage($page, $perPage)
+            ->get(['u.id', 'u.full_name', 'u.avatar_path', 'v.views', 'v.dwell_ms', 'v.completed', 'v.last_viewed_at']);
+        return $rows->map(fn ($r) => [
+            'id'          => (int) $r->id,
+            'full_name'   => $r->full_name,
+            'avatar_path' => $this->messaging->isAvatarHidden((int) $r->id, $uid) ? null : $r->avatar_path,
+            'views'       => (int) $r->views,
+            'dwell_ms'    => (int) $r->dwell_ms,
+            'completed'   => (bool) $r->completed,
+            'at'          => $r->last_viewed_at,
         ])->all();
     }
 

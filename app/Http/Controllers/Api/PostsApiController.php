@@ -154,6 +154,25 @@ class PostsApiController extends Controller
         });
     }
 
+    /** GET /posts/{id}/shares?kind=all|share|repost&page&per_page — مين شارك / أعاد النشر */
+    public function sharers(Request $request, $id)
+    {
+        return $this->run(function () use ($request, $id) {
+            $per = max(1, min(50, (int) $request->input('per_page', 30)));
+            $kind = in_array($request->input('kind'), ['share', 'repost'], true) ? (string) $request->input('kind') : 'all';
+            return $this->apiSuccess($this->act->sharers($this->uid($request), (int) $id, $kind, max(1, (int) $request->input('page', 1)), $per), 'Shares retrieved successfully.');
+        });
+    }
+
+    /** GET /posts/{id}/viewers?page&per_page — مين شاف المنشور (المالك/المشرف فقط) */
+    public function viewers(Request $request, $id)
+    {
+        return $this->run(function () use ($request, $id) {
+            $per = max(1, min(50, (int) $request->input('per_page', 30)));
+            return $this->apiSuccess($this->act->viewers($this->uid($request), (int) $id, max(1, (int) $request->input('page', 1)), $per), 'Viewers retrieved successfully.');
+        });
+    }
+
     public function save(Request $request, $id)
     {
         return $this->run(function () use ($request, $id) {

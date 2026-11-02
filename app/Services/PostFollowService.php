@@ -22,6 +22,15 @@ class PostFollowService
             throw new \RuntimeException('You cannot follow yourself.');
         }
         $this->assertReachable($uid, $targetId);
+        // حساب بموافقة يدوية: المتابعة بتبقى طلب معلّق (إلا لو بينهم اتصال مقبول).
+        $already = DB::table('post_follows')->where('follower_id', $uid)->where('followee_id', $targetId)->exists();
+        if (!$already && $this->requiresApproval($targetId) && !$this->connected($uid, $targetId)) {
+            $new = DB::table('post_follow_requests')->insertOrIgnore(['follower_id' => $uid, 'followee_id' => $targetId, 'created_at' => now()]);
+            if ($new) {
+                $this->notifyNetwork($targetId, $uid, 'follow_request', 'asked to follow you');
+            }
+            return $this->counts($uid, $targetId);
+        }
         $new = DB::table('post_follows')->insertOrIgnore(['follower_id' => $uid, 'followee_id' => $targetId, 'created_at' => now()]);
         if ($new) {
             $this->notifier->notify($targetId, $uid, 'post_follow', 'started following you');
@@ -32,7 +41,51 @@ class PostFollowService
     public function unfollow(int $uid, int $targetId): array
     {
         DB::table('post_follows')->where('follower_id', $uid)->where('followee_id', $targetId)->delete();
+        DB::table('post_follow_requests')->where('follower_id', $uid)->where('followee_id', $targetId)->delete(); // إلغاء طلب معلّق
         return $this->counts($uid, $targetId);
+    }
+
+    /** صاحب الحساب $uid يقبل طلب متابعة من $followerId. */
+    public function acceptRequest(int $uid, int $followerId, bool $notify = true): array
+    {
+        $req = DB::table('post_follow_requests')->where('followee_id', $uid)->where('follower_id', $followerId)->exists();
+        if (!$req) {
+            throw new \RuntimeException('Request not found.');
+        }
+        DB::table('post_follows')->insertOrIgnore(['follower_id' => $followerId, 'followee_id' => $uid, 'created_at' => now()]);
+        DB::table('post_follow_requests')->where('followee_id', $uid)->where('follower_id', $followerId)->delete();
+        if ($notify) {
+            $this->notifyNetwork($followerId, $uid, 'follow_accepted', 'accepted your follow request');
+        }
+        return $this->counts($followerId, $uid);
+    }
+
+    private function requiresApproval(int $userId): bool
+    {
+        return (bool) DB::table('user_network_settings')->where('user_id', $userId)->value('follow_approval');
+    }
+
+    private function connected(int $a, int $b): bool
+    {
+        return DB::table('user_connections')->where('status', 'accepted')->where(function ($w) use ($a, $b) {
+            $w->where(fn ($x) => $x->where('requester_id', $a)->where('addressee_id', $b))->orWhere(fn ($x) => $x->where('requester_id', $b)->where('addressee_id', $a));
+        })->exists();
+    }
+
+    /** إشعار شبكة (طلب متابعة / قبول) — يودّي لصفحة الشبكة. أي فشل بيتبلع. */
+    private function notifyNetwork(int $toId, int $fromId, string $type, string $verb): void
+    {
+        try {
+            if ($this->notifier->blocked($toId, $fromId)) {
+                return;
+            }
+            $name = (string) DB::table('users')->where('id', $fromId)->value('full_name');
+            $portal = \App\Repositories\NotificationRepository::portalsForRole($this->roles->primaryRoleFor($toId))[0] ?? 'student';
+            $tab = $type === 'follow_accepted' ? 'following' : 'requests';
+            app(NotificationService::class)->notify($toId, $type, trim($name . ' ' . $verb), null, "/{$portal}/network?tab={$tab}");
+        } catch (\Throwable $e) {
+            // best-effort
+        }
     }
 
     /** @return array{followers:array,has_more:bool} */
@@ -102,13 +155,14 @@ class PostFollowService
 
     // ----------------------------------------------------------------
 
-    /** @return array{followers_count:int,following_count:int,is_following:bool} */
+    /** @return array{followers_count:int,following_count:int,is_following:bool,follow_requested:bool} */
     public function counts(int $uid, int $userId): array
     {
         return [
             'followers_count' => (int) DB::table('post_follows')->where('followee_id', $userId)->count(),
             'following_count' => (int) DB::table('post_follows')->where('follower_id', $userId)->count(),
             'is_following'    => DB::table('post_follows')->where('follower_id', $uid)->where('followee_id', $userId)->exists(),
+            'follow_requested' => DB::table('post_follow_requests')->where('follower_id', $uid)->where('followee_id', $userId)->exists(),
         ];
     }
 

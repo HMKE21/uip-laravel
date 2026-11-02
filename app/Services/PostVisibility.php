@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
  *   public     أي مستخدم نشط
  *   followers  اللي بيتابعوا صاحب المنشور (post_follows)
  *   contacts   ناس بينهم وبين صاحب المنشور محادثة مباشرة (نفس تعريف الاستوري)
+ *   connections اتصالاته المقبولة (user_connections — صفحة الشبكة)
  *   university نفس جامعة صاحب المنشور وقت النشر
  *   faculty    نفس كلية صاحب المنشور وقت النشر
  *   selected   المختارين بس (post_audience)
@@ -23,6 +24,7 @@ class PostVisibility
     private const NOT_BLOCKED = 'NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = p.user_id)
                     OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?))';
     private const FOLLOWS = 'EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id)';
+    private const CONNECTED = 'EXISTS (SELECT 1 FROM user_connections k WHERE k.status = \'accepted\' AND ((k.requester_id = ? AND k.addressee_id = p.user_id) OR (k.addressee_id = ? AND k.requester_id = p.user_id)))';
     private const CONTACT = 'EXISTS (SELECT 1 FROM conversations c
                     JOIN conversation_participants pa ON pa.conversation_id = c.id AND pa.user_id = ?
                     JOIN conversation_participants pb ON pb.conversation_id = c.id AND pb.user_id = p.user_id
@@ -71,6 +73,7 @@ class PostVisibility
                         $a->where('p.visibility', 'public')
                             ->orWhere(fn ($c) => $c->where('p.visibility', 'followers')->whereRaw(self::FOLLOWS, [$uid]))
                             ->orWhere(fn ($c) => $c->where('p.visibility', 'contacts')->whereRaw(self::CONTACT, [$uid]))
+                            ->orWhere(fn ($c) => $c->where('p.visibility', 'connections')->whereRaw(self::CONNECTED, [$uid, $uid]))
                             ->orWhere(fn ($c) => $c->where('p.visibility', 'selected')->whereRaw(self::IN_AUDIENCE, [$uid]));
                         if ($uni) {
                             $a->orWhere(fn ($c) => $c->where('p.visibility', 'university')->where('p.university_id', $uni));

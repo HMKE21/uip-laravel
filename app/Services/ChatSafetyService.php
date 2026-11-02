@@ -41,6 +41,12 @@ class ChatSafetyService
             'blocked_user_id' => $blockedId,
             'created_at'      => now(),
         ]);
+        // الحظر بيفض أي اتصال/متابعة/طلب بين الطرفين (صفحة الشبكة).
+        try {
+            app(NetworkService::class)->purgeBetween($blockerId, $blockedId);
+        } catch (\Throwable $e) {
+            // الجداول ممكن لسه ماتعملتش (migration) — الحظر نفسه مايتكسرش
+        }
     }
 
     public function unblock(int $blockerId, int $blockedId): void

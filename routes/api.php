@@ -42,6 +42,7 @@ use App\Http\Controllers\Api\FeedApiController;
 use App\Http\Controllers\Api\PostMediaApiController;
 use App\Http\Controllers\Api\PostPublicController;
 use App\Http\Controllers\Api\PostsAdminApiController;
+use App\Http\Controllers\Api\NetworkApiController;
 use App\Http\Controllers\Api\PostsApiController;
 use App\Http\Controllers\Api\StudentsApiController;
 use App\Http\Controllers\Api\BulkApiController;
@@ -1732,6 +1733,29 @@ Route::prefix('v1')->group(function () {
         ->middleware(['signed:relative', 'throttle:240,1'])
         ->name('posts.media.signed');
 
+    // "شبكتي" — الاتصالات وطلبات الصداقة/المتابعة والبحث عن الناس (NetworkApiController). مربوطة بالمنشورات والمراسلات.
+    Route::prefix('network')->middleware(['uip.auth', 'uip.can:posts.use'])->group(function () {
+        Route::get('/summary', [NetworkApiController::class, 'summary']);
+        Route::get('/settings', [NetworkApiController::class, 'settings']);
+        Route::patch('/settings', [NetworkApiController::class, 'saveSettings'])->middleware('throttle:30,1');
+        Route::get('/search', [NetworkApiController::class, 'search'])->middleware('throttle:120,1');
+        Route::get('/suggestions', [NetworkApiController::class, 'suggestions']);
+        Route::get('/people/{userId}', [NetworkApiController::class, 'person'])->where('userId', '[0-9]+');
+        Route::get('/connections', [NetworkApiController::class, 'connections']);
+        Route::delete('/connections/{userId}', [NetworkApiController::class, 'removeConnection'])->where('userId', '[0-9]+');
+        Route::post('/connect/{userId}', [NetworkApiController::class, 'connect'])->where('userId', '[0-9]+')->middleware('throttle:60,1');
+        Route::get('/requests', [NetworkApiController::class, 'requests']);
+        Route::post('/requests/{id}/accept', [NetworkApiController::class, 'accept'])->where('id', '[0-9]+');
+        Route::post('/requests/{id}/decline', [NetworkApiController::class, 'decline'])->where('id', '[0-9]+');
+        Route::delete('/requests/{id}', [NetworkApiController::class, 'withdraw'])->where('id', '[0-9]+');
+        Route::get('/follow-requests', [NetworkApiController::class, 'followRequests']);
+        Route::post('/follow-requests/{userId}/accept', [NetworkApiController::class, 'acceptFollow'])->where('userId', '[0-9]+');
+        Route::post('/follow-requests/{userId}/decline', [NetworkApiController::class, 'declineFollow'])->where('userId', '[0-9]+');
+        Route::get('/followers', [NetworkApiController::class, 'followers']);
+        Route::delete('/followers/{userId}', [NetworkApiController::class, 'removeFollower'])->where('userId', '[0-9]+');
+        Route::get('/following', [NetworkApiController::class, 'following']);
+    });
+
     Route::prefix('posts')->middleware(['uip.auth', 'uip.can:posts.use'])->group(function () {
         Route::get('/config', [PostsApiController::class, 'config']);
         Route::get('/feed', [PostsApiController::class, 'feed']);
@@ -1777,6 +1801,8 @@ Route::prefix('v1')->group(function () {
 
         Route::post('/{id}/react', [PostsApiController::class, 'react'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::get('/{id}/reactions', [PostsApiController::class, 'reactors'])->where('id', '[0-9]+');
+        Route::get('/{id}/shares', [PostsApiController::class, 'sharers'])->where('id', '[0-9]+');
+        Route::get('/{id}/viewers', [PostsApiController::class, 'viewers'])->where('id', '[0-9]+');
         Route::post('/{id}/save', [PostsApiController::class, 'save'])->where('id', '[0-9]+');
         Route::get('/collections', [PostsApiController::class, 'collections']);
         Route::post('/collections', [PostsApiController::class, 'createCollection'])->middleware('throttle:30,1');
