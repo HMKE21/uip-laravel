@@ -52,6 +52,20 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('public-visits-read', fn (Request $r) => Limit::perMinute(240)->by('pvr|' . $fingerprint($r)));
         RateLimiter::for('public-visits-write', fn (Request $r) => Limit::perMinute(60)->by('pvw|' . $fingerprint($r)));
 
+        // Admin → Meetings Control: the plain throttle:N,1 is keyed by IP only (the JWT user is not a Laravel Auth user), and every
+        // unnamed throttle on the same IP shares ONE counter — so the admin got "too many attempts" on "Test connection" after a few
+        // clicks plus normal page traffic (or other people behind the same proxy IP). Now the bucket is the signed-in admin themself.
+        $adminActor = static function (Request $request) use ($fingerprint): string {
+            $uid = (int) $request->attributes->get('uip_user_id');
+
+            return $uid > 0 ? 'u' . $uid : 'f' . $fingerprint($request);
+        };
+        // The admin role (shown as "سوبر أدمن" in the UI — there is no separate super-admin role in the API) is never throttled here;
+        // anyone else who somehow reaches these routes (uip.admin blocks them first) still gets a per-person cap.
+        $isAdmin = static fn (Request $r): bool => $r->attributes->get('uip_role') === 'admin';
+        RateLimiter::for('admin-control-test', fn (Request $r) => $isAdmin($r) ? Limit::none() : Limit::perMinute(20)->by('act|' . $adminActor($r)));
+        RateLimiter::for('admin-control-write', fn (Request $r) => $isAdmin($r) ? Limit::none() : Limit::perMinute(120)->by('acw|' . $adminActor($r)));
+
         // Settings saved on Admin → Platform Policy override the matching .env values at runtime (unset ones keep the .env value).
         \App\Support\PlatformPolicy::applyRuntimeConfig();
 

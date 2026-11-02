@@ -1059,14 +1059,14 @@ Route::prefix('v1')->group(function () {
             $c = \App\Http\Controllers\Api\AdminMeetingsControlApiController::class;
             Route::get('overview', [$c, 'overview']);
             Route::get('settings', [$c, 'settings']);
-            Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
-            Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
-            Route::post('sfu/test', [$c, 'testSfu'])->middleware('throttle:10,1');
+            Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:admin-control-write');
+            Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:admin-control-write');
+            Route::post('sfu/test', [$c, 'testSfu'])->middleware('throttle:admin-control-test');
 
             Route::get('blocked-users', [$c, 'blockedUsers']);
-            Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:60,1');
+            Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:admin-control-write');
             Route::delete('blocked-users/{id}', [$c, 'unblockUser'])->where('id', '[0-9]+');
-            Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
+            Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:admin-control-write');
 
             Route::get('audit', [$c, 'audit']);
             Route::get('audit/{id}', [$c, 'auditShow'])->where('id', '[0-9]+');
