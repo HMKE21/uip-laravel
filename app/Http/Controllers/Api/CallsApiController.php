@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\CallService;
+use App\Services\GroupCallService;
 use Illuminate\Http\Request;
 
 /**
@@ -18,10 +19,12 @@ use Illuminate\Http\Request;
  *  POST /calls/{id}/decline
  *  POST /calls/{id}/end       { reason? }
  *  POST /calls/{id}/signal    { client_id, kind: offer|answer|ice|state|resume, payload }
+ *  POST /calls/group          { conversation_id, type? }  → start-or-join the group's live call (an instant meeting attached to the chat)
+ *  GET  /calls/group/{conversationId}                     → the group's live call or null
  */
 class CallsApiController extends Controller
 {
-    public function __construct(private CallService $calls)
+    public function __construct(private CallService $calls, private GroupCallService $groupCalls)
     {
     }
 
@@ -60,6 +63,23 @@ class CallsApiController extends Controller
             );
             return $this->apiSuccess($call, 'Call started.', 201);
         });
+    }
+
+    public function startGroup(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $res = $this->groupCalls->start(
+                $this->uid($request),
+                (int) $request->input('conversation_id'),
+                (string) $request->input('type', 'audio')
+            );
+            return $this->apiSuccess($res, $res['created'] ? 'Group call started.' : 'Joined the live group call.');
+        });
+    }
+
+    public function groupActive(Request $request, $conversationId)
+    {
+        return $this->handle(fn () => $this->apiSuccess(['call' => $this->groupCalls->activeFor($this->uid($request), (int) $conversationId)], 'Group call.'));
     }
 
     public function accept(Request $request, $id)

@@ -306,8 +306,17 @@ class CallService
             $incoming[] = $this->present($r, $userId);
         }
 
+        // مكالمات الجروبات اللي بترن عليّا (لو الميزة مقفولة/فشلت: مفيش تأثير على المكالمات 1:1).
+        $groupIncoming = [];
+        try {
+            $groupIncoming = app(GroupCallService::class)->incomingFor($userId);
+        } catch (\Throwable $e) {
+            Log::warning('Calls: group incoming failed', ['error' => $e->getMessage()]);
+        }
+
         return [
-            'server_time' => now()->toIso8601String(),
+            'server_time'    => now()->toIso8601String(),
+            'group_incoming' => $groupIncoming,
             'incoming'    => $incoming,
             'call'        => $callOut,
             'signals'     => $signals,

@@ -143,6 +143,15 @@ class MeetingLobbyService
             return ['status' => 'admitted', 'participant' => $participant];
         }
 
+        // مكالمة جماعية متربطة بشات: أعضاء الشات بس هم اللي يدخلوا (اللينك لوحده مش كفاية)، وبيدخلوا من غير waiting room.
+        $isChatMember = false;
+        if ($meeting->attachable_type === GroupCallService::TYPE) {
+            if ($authUserId === null || !app(GroupCallService::class)->userMayEnter($meeting, $authUserId)) {
+                throw new \InvalidArgumentException('This call is only for members of the group chat.');
+            }
+            $isChatMember = true;
+        }
+
         $isGuest = $authUserId === null;
 
         if ($isGuest && !\App\Services\MeetingAdminSettings::on('guests')) {
@@ -168,7 +177,7 @@ class MeetingLobbyService
 
         $existing = $authUserId !== null ? $this->meetings->pendingJoinRequestForUser($meeting->id, $authUserId) : null;
 
-        if (!$meeting->waiting_room_enabled) {
+        if (!$meeting->waiting_room_enabled || $isChatMember) {
             // مفيش انتظار — يدخل على طول. الهوست مايعرفش بالدخول ده إلا
             // عن طريق إشعار (مافيش قرار هو اتخده)، عكس decide() تحت.
             if ($authUserId !== null) {

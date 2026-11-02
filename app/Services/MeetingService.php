@@ -218,6 +218,11 @@ class MeetingService
         );
         $this->signaling?->broadcastStatus($meeting);
 
+        // مكالمة جماعية في شات: كارت الشات يتحوّل من "شغّالة" لـ "انتهت · المدة".
+        if ($meeting->attachable_type === GroupCallService::TYPE) {
+            app(GroupCallService::class)->onMeetingEnded($meeting);
+        }
+
         return $meeting;
     }
 

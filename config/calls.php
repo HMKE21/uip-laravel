@@ -18,6 +18,9 @@ return [
     'enabled'       => (bool) env('CALLS_ENABLED', true),
     'video_enabled' => (bool) env('CALLS_VIDEO_ENABLED', false),   // المرحلة 2
 
+    // مكالمات الجروبات (اجتماع فوري مربوط بالشات؛ الـ SFU/mesh بتتحكم فيه إعدادات Admin ▸ Meetings Control ▸ Video زي الاجتماعات بالظبط)
+    'group_enabled'        => (bool) env('CALLS_GROUP_ENABLED', true),
+    'group_ring_seconds'   => (int) env('CALLS_GROUP_RING_SECONDS', 45),   // الرنّة على شاشة الأعضاء؛ بعدها يفضل كارت "انضم" في الشات
     'ring_seconds'         => (int) env('CALLS_RING_SECONDS', 45),    // بعدها المكالمة تتحسب "فايتة"
     'stale_seconds'        => (int) env('CALLS_STALE_SECONDS', 25),   // طرف مبعتش نبضة المدة دي => المكالمة تنتهي
     'max_signals_per_call' => (int) env('CALLS_MAX_SIGNALS', 600),

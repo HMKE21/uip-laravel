@@ -67,9 +67,15 @@ class MeetingRepository
     /** @return Meeting[] كل الاجتماعات اللي المستخدم ده مضيفها أو مشارك مدعو فيها. */
     public function forUser($userId): array
     {
-        return Meeting::where('host_user_id', $userId)
-            ->orWhereHas('participants', function ($q) use ($userId) {
-                $q->where('user_id', $userId);
+        return Meeting::where(function ($q) use ($userId) {
+                $q->where('host_user_id', $userId)
+                    ->orWhereHas('participants', function ($q2) use ($userId) {
+                        $q2->where('user_id', $userId);
+                    });
+            })
+            // مكالمات الجروبات (اجتماع فوري مربوط بالشات) ليها مكانها في الشات، مش في قائمة الاجتماعات
+            ->where(function ($q) {
+                $q->whereNull('attachable_type')->orWhere('attachable_type', '!=', 'conversation');
             })
             ->orderByDesc('id')
             ->get()
@@ -511,6 +517,9 @@ class MeetingRepository
             ->where(function ($q) use ($start, $end) {
                 $q->whereBetween('scheduled_start_at', [$start, $end])
                     ->orWhereBetween('started_at', [$start, $end]);
+            })
+            ->where(function ($q) {
+                $q->whereNull('attachable_type')->orWhere('attachable_type', '!=', 'conversation');
             })
             ->orderBy('scheduled_start_at')
             ->get()
