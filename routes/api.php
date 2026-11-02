@@ -273,6 +273,8 @@ Route::prefix('v1')->group(function () {
     // "جهازي" (My PC) — نظام ملفات شخصي معزول لكل طالب. راجع docblock الـ DriveApiController.
     // الروتس الثابتة (tree/search/trash/...) قبل nodes/{id} عشان Laravel ميطابقهاش كـ {id}.
     // Realtime (Reverb): handshake for the person's own private channel — the browser keeps ONE socket open for everything.
+    // Public: where the browser should open its WebSocket (key/host/port/scheme only, never the secret).
+    Route::get('realtime/config', [\App\Http\Controllers\Api\RealtimeConfigController::class, 'show'])->middleware('throttle:120,1');
     Route::post('realtime/auth', [\App\Http\Controllers\Api\RealtimeAuthController::class, 'auth'])->middleware(['uip.auth', 'throttle:240,1']);
 
     Route::prefix('drive')->middleware(['uip.auth', 'uip.realtime:drive'])->group(function () {
