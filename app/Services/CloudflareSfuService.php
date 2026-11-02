@@ -70,7 +70,7 @@ class CloudflareSfuService
             return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable']];
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('Meetings SFU call failed', ['path' => $path, 'error' => $e->getMessage()]);
-            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error']];
+            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
         }
 
         $data = $res->json();

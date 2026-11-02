@@ -108,7 +108,10 @@ class AdminMeetingsControlApiController extends Controller
         };
         $this->log($request, 'sfu_tested', null, null, ['result' => $code], 'MeetingSettings');
 
-        return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status']], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
+        // تفاصيل الخطأ اللي رجعت من Cloudflare (مفيهاش السر) عشان الأدمن يعرف السبب الحقيقي.
+        $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
+
+        return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
     }
 
     public function resetSettings(Request $request)
