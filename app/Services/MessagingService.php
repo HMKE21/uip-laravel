@@ -340,6 +340,7 @@ class MessagingService
         }
 
         $this->assertNotBlocked($conversationId, (int) $userId);
+        $this->assertPeerAcceptsMessages($conversationId, (int) $userId);
 
         $maxLen = (int) config('messaging.max_message_length', 8000);
         if (mb_strlen($body) > $maxLen) {
@@ -1249,6 +1250,18 @@ class MessagingService
         $peerId = $this->safety->directPeerId($conversationId, $userId);
         if ($peerId !== null) {
             $this->assertNotBlockedPair($userId, $peerId);
+        }
+    }
+
+    /**
+     * إعداد "مين يقدر يراسلني": بيتطبّق على كل رسالة في المحادثة المباشرة (مش بس لما تتفتح) — لو الطرف التاني مقفلها قدامك
+     * ("لا أحد" / مش في القايمة) الإرسال بيترفض حتى في محادثة قديمة. المجموعات و"الرسائل المحفوظة" مش داخلين.
+     */
+    private function assertPeerAcceptsMessages(int $conversationId, int $userId): void
+    {
+        $peerId = $this->safety->directPeerId($conversationId, $userId);
+        if ($peerId !== null && $peerId !== $userId && !$this->chatSettings->allows($peerId, $userId, 'messages')) {
+            throw new \RuntimeException('This person is not accepting messages from you.');
         }
     }
 
