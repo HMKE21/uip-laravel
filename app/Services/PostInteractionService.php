@@ -253,9 +253,6 @@ class PostInteractionService
         if ($post->repost_of_id) {
             $post = $this->visiblePublished($uid, (int) $post->repost_of_id);
         }
-        if ((int) $post->user_id === $uid) {
-            throw new \RuntimeException('You cannot repost your own post.');
-        }
         if ($post->visibility !== 'public' || !$post->allow_repost) {
             throw new \RuntimeException('This post cannot be reposted.');
         }

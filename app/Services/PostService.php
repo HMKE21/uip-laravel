@@ -458,7 +458,7 @@ class PostService
                     'edit'     => $isOwner && $r['status'] !== 'removed',
                     'delete'   => $isOwner || $viewer['is_moderator'],
                     'comment'  => $canComment,
-                    'repost'   => !$isOwner && $allowReposts && $r['status'] === 'published' && $r['visibility'] === 'public' && (bool) $r['allow_repost'],
+                    'repost'   => $allowReposts && $r['status'] === 'published' && $r['visibility'] === 'public' && (bool) $r['allow_repost'],
                     'download' => $isOwner || (bool) $r['allow_download'],
                     'run'      => $isOwner || (bool) $r['allow_run'],
                     'report'   => !$isOwner,
