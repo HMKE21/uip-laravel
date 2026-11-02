@@ -287,9 +287,14 @@ class MessagingService
             $conversationOut['peer_deleted'] = $peerDeleted;
             $conversationOut['peer_id'] = $peerId;
             $conversationOut['blocked_by_me'] = $blockDir === 'me';
-            $conversationOut['can_send'] = !$peerDeleted && $blockDir === null;
+            // إعدادات الخصوصية عند الطرف التاني: "مين يقدر يراسلني / يتصل بيا" — الفرونت بيقفل الكتابة والمكالمات ويعرض إشعار.
+            $acceptsMessages = !$peerId || $this->chatSettings->allows($peerId, (int) $userId, 'messages');
+            $acceptsCalls = !$peerId || $this->chatSettings->allows($peerId, (int) $userId, 'calls');
+            $conversationOut['peer_accepts_messages'] = $acceptsMessages;
+            $conversationOut['peer_accepts_calls'] = $acceptsCalls;
+            $conversationOut['can_send'] = !$peerDeleted && $blockDir === null && $acceptsMessages;
             // 'blocked_by_peer' بيتعرض للمحظور كرسالة عامة (مبنقولوش إن حد حظره صراحةً).
-            $conversationOut['send_block'] = $peerDeleted ? 'peer_deleted' : ($blockDir === 'me' ? 'blocked_by_me' : ($blockDir === 'peer' ? 'blocked_by_peer' : null));
+            $conversationOut['send_block'] = $peerDeleted ? 'peer_deleted' : ($blockDir === 'me' ? 'blocked_by_me' : ($blockDir === 'peer' ? 'blocked_by_peer' : (!$acceptsMessages ? 'peer_no_messages' : null)));
         }
         if ($conversation->is_group) {
             $conversationOut = array_merge($conversationOut, $this->groups->threadExtras($conversationId, $userId));
