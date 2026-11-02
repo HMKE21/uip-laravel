@@ -63,9 +63,16 @@ class CloudflareSfuService
         try {
             $req = Http::withToken($c['app_secret'])
                 ->acceptJson()
-                ->asJson()
                 ->timeout((int) config('webrtc.sfu.timeout', 8));
-            $res = $method === 'PUT' ? $req->put($url, $body) : $req->post($url, $body ?: (object) []);
+            if ($method === 'POST' && $body === []) {
+                // sessions/new: لازم يتبعت من غير body خالص. أي JSON (حتى {}) Cloudflare بيعامله كـ "offer" وبيرجّع
+                // 400 "Body JSON validation error: sessionDescription".
+                $res = $req->send('POST', $url);
+            } elseif ($method === 'PUT') {
+                $res = $req->asJson()->put($url, $body);
+            } else {
+                $res = $req->asJson()->post($url, $body);
+            }
         } catch (ConnectionException $e) {
             return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable']];
         } catch (\Throwable $e) {

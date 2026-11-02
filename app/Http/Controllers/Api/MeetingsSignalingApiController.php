@@ -209,7 +209,18 @@ class MeetingsSignalingApiController extends Controller
         if ($sid !== null && $sid !== '') {
             // الحضور: refresh/قفل تابة = خروج حقيقي (الدخول الجديد بعده هيتسجّل دخول تاني).
             $this->signaling->recordPageUnload($meeting, $actor, $sid);
-            $this->signaling->releaseSession($meeting, $actor, $sid);
+            $owned = $this->signaling->releaseSession($meeting, $actor, $sid);
+
+            // refresh/قفل تابة: نشيل كارت الشخص من عند الباقيين فورًا (من غير ما نستنى Reverb يكتشف إن الـ socket اتقفل، ومن غير ما
+            // نسجّل status=left عشان الريفريش يرجّعه لنفس الغرفة بنفس الهوية). لو رجع، presence joining بيرجّع الكارت.
+            // لو تابة تانية هي صاحبة الجلسة (owned=false) مانشيلهوش.
+            if ($owned) {
+                try {
+                    event(new \App\Events\Meetings\ParticipantLeftMeeting($meeting->uuid, $actor['key'], (string) $actor['display_name']));
+                } catch (\Throwable $e) {
+                    // البث فشل: presence leaving هو الاحتياطي
+                }
+            }
         }
 
         return $this->apiSuccess(null, 'Session released.');

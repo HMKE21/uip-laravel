@@ -534,13 +534,18 @@ class MeetingSignalingService
         $this->attendance?->recordPageUnload($meeting, $actor, $sessionId);
     }
 
-    public function releaseSession(Meeting $meeting, array $actor, ?string $sessionId): void
+    /** @return bool true لو الجلسة دي كانت هي الحية (أو مفيش جلسة) واتحررت؛ false لو تابة تانية هي صاحبة الجلسة. */
+    public function releaseSession(Meeting $meeting, array $actor, ?string $sessionId): bool
     {
         $key = $this->sessionKey($meeting, $actor);
         $current = \Illuminate\Support\Facades\Cache::get($key);
         if ($sessionId === null || $sessionId === '' || $current === null || $current === $sessionId) {
             \Illuminate\Support\Facades\Cache::forget($key);
+
+            return true;
         }
+
+        return false;
     }
 
 
