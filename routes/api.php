@@ -1777,6 +1777,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/react', [PostsApiController::class, 'react'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::get('/{id}/reactions', [PostsApiController::class, 'reactors'])->where('id', '[0-9]+');
         Route::post('/{id}/save', [PostsApiController::class, 'save'])->where('id', '[0-9]+');
+        Route::get('/collections', [PostsApiController::class, 'collections']);
+        Route::post('/collections', [PostsApiController::class, 'createCollection'])->middleware('throttle:30,1');
+        Route::patch('/collections/{id}', [PostsApiController::class, 'renameCollection'])->where('id', '[0-9]+');
+        Route::delete('/collections/{id}', [PostsApiController::class, 'deleteCollection'])->where('id', '[0-9]+');
         Route::post('/{id}/repost', [PostsApiController::class, 'repost'])->where('id', '[0-9]+')->middleware('throttle:20,1');
         Route::post('/{id}/share', [PostsApiController::class, 'share'])->where('id', '[0-9]+');
         Route::post('/{id}/view', [PostsApiController::class, 'view'])->where('id', '[0-9]+')->middleware('throttle:300,1');

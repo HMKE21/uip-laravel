@@ -60,7 +60,7 @@ class PostsApiController extends Controller
     public function feed(Request $request)
     {
         return $this->run(function () use ($request) {
-            $res = $this->feed->feed($this->uid($request), $request->only(['mode', 'page', 'per_page', 'q', 'tag', 'user_id', 'status', 'refresh']));
+            $res = $this->feed->feed($this->uid($request), $request->only(['mode', 'page', 'per_page', 'q', 'tag', 'user_id', 'status', 'refresh', 'collection']));
             return $this->apiSuccess($res['items'], 'Posts retrieved successfully.', 200, $res['meta']);
         });
     }
@@ -156,7 +156,38 @@ class PostsApiController extends Controller
 
     public function save(Request $request, $id)
     {
-        return $this->run(fn () => $this->apiSuccess($this->act->toggleSave($this->uid($request), (int) $id), 'Saved state updated.'));
+        return $this->run(function () use ($request, $id) {
+            $action = in_array($request->input('action'), ['save', 'unsave'], true) ? $request->input('action') : null;
+            $cid = $request->filled('collection_id') ? (int) $request->input('collection_id') : null;
+            return $this->apiSuccess($this->act->toggleSave($this->uid($request), (int) $id, $action, $cid), 'Saved state updated.');
+        });
+    }
+
+    /** GET /posts/collections */
+    public function collections(Request $request)
+    {
+        return $this->run(fn () => $this->apiSuccess($this->act->collections($this->uid($request)), 'Collections retrieved successfully.'));
+    }
+
+    /** POST /posts/collections  body: name */
+    public function createCollection(Request $request)
+    {
+        return $this->run(fn () => $this->apiSuccess($this->act->createCollection($this->uid($request), (string) $request->input('name', '')), 'Collection created.', 201));
+    }
+
+    /** PATCH /posts/collections/{id}  body: name */
+    public function renameCollection(Request $request, $id)
+    {
+        return $this->run(fn () => $this->apiSuccess($this->act->renameCollection($this->uid($request), (int) $id, (string) $request->input('name', '')), 'Collection renamed.'));
+    }
+
+    /** DELETE /posts/collections/{id} — المنشورات بترجع بدون مجلد */
+    public function deleteCollection(Request $request, $id)
+    {
+        return $this->run(function () use ($request, $id) {
+            $this->act->deleteCollection($this->uid($request), (int) $id);
+            return $this->apiSuccess(null, 'Collection deleted.');
+        });
     }
 
     /** POST /posts/{id}/repost  body: body (تعليق اختياري) */

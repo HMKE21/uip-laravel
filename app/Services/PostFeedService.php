@@ -94,11 +94,17 @@ class PostFeedService
         }
 
         if ($mode === 'saved') {
-            return $this->vis->visibleQuery($viewer)
+            $col = $opts['collection'] ?? null;
+            $q = $this->vis->visibleQuery($viewer)
                 ->join('post_saves as s', function ($j) use ($uid) {
                     $j->on('s.post_id', '=', 'p.id')->where('s.user_id', '=', $uid);
-                })
-                ->orderByDesc('s.created_at');
+                });
+            if ($col === 'none') {
+                $q->whereNull('s.collection_id');
+            } elseif ($col !== null && $col !== '' && ctype_digit((string) $col)) {
+                $q->where('s.collection_id', (int) $col);
+            }
+            return $q->orderByDesc('s.created_at');
         }
 
         $q = $this->vis->excludeHidden($this->vis->visibleQuery($viewer), $uid);

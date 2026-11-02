@@ -373,7 +373,8 @@ class PostService
             $tagsBy[(int) $t->post_id][] = $t->tag;
         }
         $myReaction = DB::table('post_reactions')->where('user_id', $uid)->whereIn('post_id', $ids)->pluck('type', 'post_id')->all();
-        $saved = array_flip(DB::table('post_saves')->where('user_id', $uid)->whereIn('post_id', $ids)->pluck('post_id')->all());
+        $savedRows = DB::table('post_saves')->where('user_id', $uid)->whereIn('post_id', $ids)->pluck('collection_id', 'post_id')->all();
+        $saved = $savedRows;
         $following = array_flip(DB::table('post_follows')->where('follower_id', $uid)->whereIn('followee_id', $authorIds)->pluck('followee_id')->all());
         $contacts = [];
         if (array_filter($rows, fn ($r) => $r['comments_mode'] === 'contacts')) {
@@ -447,7 +448,8 @@ class PostService
                 'media'          => $media[$id] ?? [],
                 'hashtags'       => $tagsBy[$id] ?? [],
                 'my_reaction'    => $myReaction[$id] ?? null,
-                'saved'          => isset($saved[$id]),
+                'saved'          => array_key_exists($id, $saved),
+                'saved_collection_id' => isset($saved[$id]) ? (int) $saved[$id] : null,
                 'audience_count' => $isOwner && $r['visibility'] === 'selected' ? (int) ($audienceCount[$id] ?? 0) : null,
                 'repost_of'      => $r['repost_of_id'] ? ($originals[(int) $r['repost_of_id']] ?? ['id' => (int) $r['repost_of_id'], 'unavailable' => true]) : null,
                 'can'            => [

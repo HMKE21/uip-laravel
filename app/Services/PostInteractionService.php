@@ -85,19 +85,89 @@ class PostInteractionService
 
     // ---------------------------------------------------------------- save / share / repost
 
-    public function toggleSave(int $uid, int $postId): array
+    /**
+     * حفظ / إلغاء حفظ / نقل لمجلد.
+     * $action: 'save' (يحفظ أو ينقل لمجلد $collectionId — null = بدون مجلد) | 'unsave' | null (toggle قديم).
+     */
+    public function toggleSave(int $uid, int $postId, ?string $action = null, ?int $collectionId = null): array
     {
         $this->visiblePublished($uid, $postId);
-        $exists = DB::table('post_saves')->where('post_id', $postId)->where('user_id', $uid)->exists();
-        if ($exists) {
+        if ($collectionId !== null && !DB::table('post_collections')->where('id', $collectionId)->where('user_id', $uid)->exists()) {
+            throw new \RuntimeException('Collection not found.');
+        }
+        $row = DB::table('post_saves')->where('post_id', $postId)->where('user_id', $uid)->first();
+        $exists = (bool) $row;
+        $wantSave = $action === 'save' ? true : ($action === 'unsave' ? false : !$exists);
+
+        if ($exists && !$wantSave) {
             DB::table('post_saves')->where('post_id', $postId)->where('user_id', $uid)->delete();
             DB::table('posts')->where('id', $postId)->where('saves_count', '>', 0)->decrement('saves_count');
-        } else {
-            DB::table('post_saves')->insertOrIgnore(['post_id' => $postId, 'user_id' => $uid, 'created_at' => now()]);
+        } elseif ($exists && $wantSave) {
+            if ($action === 'save') {
+                DB::table('post_saves')->where('post_id', $postId)->where('user_id', $uid)->update(['collection_id' => $collectionId]);
+            }
+        } elseif (!$exists && $wantSave) {
+            DB::table('post_saves')->insertOrIgnore(['post_id' => $postId, 'user_id' => $uid, 'collection_id' => $collectionId, 'created_at' => now()]);
             DB::table('posts')->where('id', $postId)->increment('saves_count');
             $this->bumpInterests($uid, $postId, 1.5);
         }
-        return ['saved' => !$exists, 'saves_count' => (int) DB::table('posts')->where('id', $postId)->value('saves_count')];
+        $saved = $wantSave;
+        return [
+            'saved'         => $saved,
+            'collection_id' => $saved ? $collectionId : null,
+            'saves_count'   => (int) DB::table('posts')->where('id', $postId)->value('saves_count'),
+        ];
+    }
+
+    /** مجلدات المحفوظات + عدد المنشورات في كل مجلد (+ عدد غير المصنّف). */
+    public function collections(int $uid): array
+    {
+        $counts = DB::table('post_saves')->where('user_id', $uid)->selectRaw('collection_id, COUNT(*) c')->groupBy('collection_id')->pluck('c', 'collection_id')->all();
+        $items = DB::table('post_collections')->where('user_id', $uid)->orderBy('name')->get()
+            ->map(fn ($c) => ['id' => (int) $c->id, 'name' => $c->name, 'count' => (int) ($counts[$c->id] ?? 0)])->all();
+        return ['items' => $items, 'uncategorized' => (int) ($counts[''] ?? $counts[0] ?? 0), 'total' => (int) array_sum($counts)];
+    }
+
+    public function createCollection(int $uid, string $name): array
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', $name));
+        if ($name === '' || mb_strlen($name) > 60) {
+            throw new \RuntimeException('Collection name must be 1-60 characters.');
+        }
+        if (DB::table('post_collections')->where('user_id', $uid)->count() >= 50) {
+            throw new \RuntimeException('You reached the maximum number of collections.');
+        }
+        if (DB::table('post_collections')->where('user_id', $uid)->where('name', $name)->exists()) {
+            throw new \RuntimeException('A collection with this name already exists.');
+        }
+        $id = DB::table('post_collections')->insertGetId(['user_id' => $uid, 'name' => $name, 'created_at' => now()]);
+        return ['id' => (int) $id, 'name' => $name, 'count' => 0];
+    }
+
+    public function renameCollection(int $uid, int $id, string $name): array
+    {
+        $name = trim(preg_replace('/\s+/u', ' ', $name));
+        if ($name === '' || mb_strlen($name) > 60) {
+            throw new \RuntimeException('Collection name must be 1-60 characters.');
+        }
+        if (!DB::table('post_collections')->where('id', $id)->where('user_id', $uid)->exists()) {
+            throw new \RuntimeException('Collection not found.');
+        }
+        if (DB::table('post_collections')->where('user_id', $uid)->where('name', $name)->where('id', '!=', $id)->exists()) {
+            throw new \RuntimeException('A collection with this name already exists.');
+        }
+        DB::table('post_collections')->where('id', $id)->update(['name' => $name]);
+        return ['id' => $id, 'name' => $name];
+    }
+
+    /** حذف المجلد بس — المنشورات المحفوظة فيه بترجع "بدون مجلد" ومبتتمسحش. */
+    public function deleteCollection(int $uid, int $id): void
+    {
+        if (!DB::table('post_collections')->where('id', $id)->where('user_id', $uid)->exists()) {
+            throw new \RuntimeException('Collection not found.');
+        }
+        DB::table('post_saves')->where('user_id', $uid)->where('collection_id', $id)->update(['collection_id' => null]);
+        DB::table('post_collections')->where('id', $id)->delete();
     }
 
     public function share(int $uid, int $postId, string $channel): array
