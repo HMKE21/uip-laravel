@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Log;
 class PostsApiController extends Controller
 {
     private const CONTENT_KEYS = [
-        'title', 'body', 'link_url', 'visibility', 'comments_mode', 'allow_repost', 'allow_download', 'hide_counts', 'is_sensitive',
+        'title', 'body', 'link_url', 'visibility', 'comments_mode', 'allow_repost', 'allow_download', 'allow_run', 'hide_counts', 'is_sensitive',
         'draft', 'status', 'scheduled_at', 'expires_in_hours', 'tags', 'mentioned_user_ids', 'audience_ids', 'media_ids', 'media_details',
     ];
 

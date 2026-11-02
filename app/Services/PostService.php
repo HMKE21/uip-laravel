@@ -102,6 +102,7 @@ class PostService
                 'comments_mode'  => $f['comments_mode'],
                 'allow_repost'   => $f['allow_repost'],
                 'allow_download' => $f['allow_download'],
+                'allow_run'      => $f['allow_run'],
                 'hide_counts'    => $f['hide_counts'],
                 'is_sensitive'   => $f['is_sensitive'],
                 'scheduled_at'   => $scheduledAt,
@@ -160,7 +161,7 @@ class PostService
             }
             $upd['comments_mode'] = $m;
         }
-        foreach (['allow_repost', 'allow_download', 'hide_counts', 'is_sensitive'] as $flag) {
+        foreach (['allow_repost', 'allow_download', 'allow_run', 'hide_counts', 'is_sensitive'] as $flag) {
             if (array_key_exists($flag, $in)) {
                 $upd[$flag] = filter_var($in[$flag], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
             }
@@ -424,6 +425,7 @@ class PostService
                 'comments_mode'  => $mode,
                 'allow_repost'   => (bool) $r['allow_repost'],
                 'allow_download' => (bool) $r['allow_download'],
+                'allow_run'      => (bool) $r['allow_run'],
                 'hide_counts'    => (bool) $r['hide_counts'],
                 'is_sensitive'   => (bool) $r['is_sensitive'],
                 'is_pinned'      => !empty($r['pinned_at']),
@@ -458,6 +460,7 @@ class PostService
                     'comment'  => $canComment,
                     'repost'   => !$isOwner && $allowReposts && $r['status'] === 'published' && $r['visibility'] === 'public' && (bool) $r['allow_repost'],
                     'download' => $isOwner || (bool) $r['allow_download'],
+                    'run'      => $isOwner || (bool) $r['allow_run'],
                     'report'   => !$isOwner,
                     'pin'      => $isOwner && $r['status'] === 'published',
                 ],
@@ -528,6 +531,7 @@ class PostService
             'comments_mode'  => $mode,
             'allow_repost'   => $flag('allow_repost', 1),
             'allow_download' => $flag('allow_download', 1),
+            'allow_run'      => $flag('allow_run', 0),
             'hide_counts'    => $flag('hide_counts', 0),
             'is_sensitive'   => $flag('is_sensitive', 0),
         ];
@@ -705,7 +709,7 @@ class PostService
         $out = [];
         foreach ((array) $raw as $k => $d) {
             if (is_array($d) && (int) $k > 0) {
-                $out[(int) $k] = ['alt_text' => $d['alt_text'] ?? null, 'caption' => $d['caption'] ?? null];
+                $out[(int) $k] = ['alt_text' => $d['alt_text'] ?? null, 'caption' => $d['caption'] ?? null] + (array_key_exists('output', $d) ? ['output' => $d['output']] : []);
             }
         }
         return $out;

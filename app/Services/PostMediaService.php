@@ -150,13 +150,40 @@ class PostMediaService
                 throw new \RuntimeException('One of the attachments is not available.');
             }
             $d = $details[$mid] ?? [];
-            DB::table('post_media')->where('id', $mid)->update([
+            $upd = [
                 'post_id'    => $postId,
                 'sort_order' => $order,
                 'alt_text'   => isset($d['alt_text']) ? mb_substr(trim((string) $d['alt_text']), 0, 300) ?: null : $row->alt_text,
                 'caption'    => isset($d['caption']) ? mb_substr(trim((string) $d['caption']), 0, 300) ?: null : $row->caption,
-            ]);
+            ];
+            // ناتج تشغيل نشره الكاتب مع الكود (نص بس، بحد أقصى) — بيتعرض للقراء من غير ما يشغّلوا حاجة.
+            if ($row->kind === 'code' && array_key_exists('output', $d)) {
+                $meta = $row->meta ? (array) json_decode((string) $row->meta, true) : [];
+                $out = self::cleanOutput((string) ($d['output'] ?? ''));
+                if ($out === '') {
+                    unset($meta['output']);
+                } else {
+                    $meta['output'] = ['text' => $out, 'at' => now()->toDateTimeString()];
+                }
+                $upd['meta'] = $meta ? json_encode($meta, JSON_UNESCAPED_UNICODE) : null;
+            }
+            DB::table('post_media')->where('id', $mid)->update($upd);
         }
+    }
+
+    public const OUTPUT_MAX = 8000;
+
+    /** نص ناتج آمن للتخزين: من غير رموز ANSI / تحكّم، وبحد أقصى (آخر جزء لو طويل). */
+    public static function cleanOutput(string $raw): string
+    {
+        $s = preg_replace('/\x1B\[[0-?]*[ -\/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\\\)|\x1B[@-Z\\\\-_]/', '', $raw) ?? '';
+        $s = str_replace(["\r\n", "\r"], "\n", $s);
+        $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $s) ?? '';
+        $s = trim($s);
+        if (mb_strlen($s) > self::OUTPUT_MAX) {
+            $s = '… ' . mb_substr($s, -self::OUTPUT_MAX);
+        }
+        return $s;
     }
 
     /** يشيل (صفوف + ملفات) مرفقات منشور مش موجودة في $keepIds — للتعديل. */

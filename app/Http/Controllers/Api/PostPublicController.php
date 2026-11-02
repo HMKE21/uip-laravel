@@ -152,7 +152,7 @@ class PostPublicController extends Controller
             'text'      => $raw,
             'language'  => $meta['language'] ?? strtolower((string) $m->extension),
             // التشغيل داخل sandbox محتاج حساب؛ الـ html بيشتغل في iframe معزول فبيفضل متاح.
-            'runner'    => ($meta['runner'] ?? 'none') === 'html' ? 'html' : 'none',
+            'runner'    => (($meta['runner'] ?? 'none') === 'html' && (bool) ($m->_post->allow_run ?? true)) ? 'html' : 'none',
             'truncated' => (int) $m->size_bytes > $limit,
         ], 'File text retrieved successfully.');
     }
@@ -272,6 +272,7 @@ class PostPublicController extends Controller
             'language'       => $r['language'],
             'comments_mode'  => $r['comments_mode'],
             'allow_download' => (bool) $r['allow_download'],
+            'allow_run'      => (bool) $r['allow_run'],
             'is_sensitive'   => (bool) $r['is_sensitive'],
             'published_at'   => $r['published_at'],
             'edited_at'      => $r['edited_at'],

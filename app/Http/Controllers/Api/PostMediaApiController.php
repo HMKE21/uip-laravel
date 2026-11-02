@@ -128,7 +128,7 @@ class PostMediaApiController extends Controller
         return $this->apiSuccess([
             'text'      => $raw,
             'language'  => $meta['language'] ?? strtolower((string) $m->extension),
-            'runner'    => $meta['runner'] ?? 'none',
+            'runner'    => $this->canRun($m, $this->uid($request)) ? ($meta['runner'] ?? 'none') : 'none',
             'truncated' => (int) $m->size_bytes > $limit,
         ], 'File text retrieved successfully.');
     }
@@ -166,6 +166,9 @@ class PostMediaApiController extends Controller
         if (!$m || $m->kind !== 'code' || ($meta['runner'] ?? 'none') !== 'sandbox') {
             return $this->apiError('This file cannot be run.', null, 400);
         }
+        if (!$this->canRun($m, $uid)) {
+            return $this->apiError('The author did not allow running this code.', null, 403);
+        }
         $url = rtrim((string) config('services.sandbox.url'), '/');
         $secret = (string) config('services.sandbox.secret');
         if ($url === '' || strlen($secret) < 32) {
@@ -201,6 +204,15 @@ class PostMediaApiController extends Controller
         }
         $m->_post = $post;
         return $m;
+    }
+
+    /** التشغيل: صاحب المنشور (أو الملف لو لسه يتيم) دايمًا، وغيره بس لو الكاتب فعّل allow_run. */
+    private function canRun(object $m, int $uid): bool
+    {
+        if (!isset($m->_post)) {
+            return (int) $m->user_id === $uid;
+        }
+        return (int) $m->_post->user_id === $uid || (bool) ($m->_post->allow_run ?? true);
     }
 
     private function canDownload(object $m, int $uid): bool
