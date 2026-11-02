@@ -120,10 +120,15 @@ class PostMediaApiController extends Controller
             return $this->apiError('File not found on server.', null, 404);
         }
         $limit = (int) config('posts.code_text_bytes', 524288);
-        $raw = (string) @file_get_contents($path, false, null, 0, $limit);
+        $raw = (string) @file_get_contents($path, false, null, 0, $limit + 4);
+        if (strlen($raw) > $limit) {
+            // قصّ على حدّ حرف كامل (مش في نص حرف UTF-8) عشان الـ JSON ما يفشلش على ملفات أكبر من الحد.
+            $raw = mb_strcut($raw, 0, $limit, 'UTF-8');
+        }
         if (!mb_check_encoding($raw, 'UTF-8')) {
             $raw = mb_convert_encoding($raw, 'UTF-8', 'UTF-8, Windows-1256, Windows-1252, ISO-8859-1');
         }
+        $raw = mb_scrub($raw, 'UTF-8'); // أي بايتات تالفة متتحوّلش لخطأ 500 في json_encode
         $meta = $m->meta ? (array) json_decode((string) $m->meta, true) : [];
         return $this->apiSuccess([
             'text'      => $raw,
