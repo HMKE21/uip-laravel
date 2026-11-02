@@ -39,6 +39,9 @@ use App\Http\Controllers\Api\DataAnalysisWorkspaceApiController;
 use App\Http\Controllers\Api\SavedDashboardsApiController;
 use App\Http\Controllers\Api\AnnouncementsApiController;
 use App\Http\Controllers\Api\FeedApiController;
+use App\Http\Controllers\Api\PostMediaApiController;
+use App\Http\Controllers\Api\PostsAdminApiController;
+use App\Http\Controllers\Api\PostsApiController;
 use App\Http\Controllers\Api\StudentsApiController;
 use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
@@ -1718,6 +1721,83 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/comments', [FeedApiController::class, 'comment'])->middleware('feed.comment_rate_limit');
         Route::post('/{id}/share', [FeedApiController::class, 'share']);
         Route::post('/{id}/report', [FeedApiController::class, 'report']);
+    });
+
+    // Social Posts (منفصل عن University Feed أعلاه) — /api/v1/posts/*. راجع PostsApiController / PostMediaApiController.
+    // رابط موقّع نسبي لمرفقات المنشورات: بره uip.auth عمدًا (<video> وpdf.js والتطبيق الأصلي مابيبعتوش Authorization)؛
+    // التوقيع + فحص الرؤية (PostVisibility) بيتفحصوا جوه.
+    Route::get('/posts/media/signed/{id}/{variant}', [PostMediaApiController::class, 'signed'])
+        ->where(['id' => '[0-9]+', 'variant' => 'file|thumbnail|preview'])
+        ->middleware(['signed:relative', 'throttle:240,1'])
+        ->name('posts.media.signed');
+
+    Route::prefix('posts')->middleware(['uip.auth', 'uip.can:posts.use'])->group(function () {
+        Route::get('/config', [PostsApiController::class, 'config']);
+        Route::get('/feed', [PostsApiController::class, 'feed']);
+        Route::get('/tags/trending', [PostsApiController::class, 'trendingTags']);
+        Route::get('/tags/suggest', [PostsApiController::class, 'suggestTags']);
+        Route::get('/people/suggestions', [PostsApiController::class, 'suggestions']);
+
+        Route::get('/profile/{userId}', [PostsApiController::class, 'profile'])->where('userId', '[0-9]+');
+        Route::post('/follow/{userId}', [PostsApiController::class, 'follow'])->where('userId', '[0-9]+');
+        Route::delete('/follow/{userId}', [PostsApiController::class, 'unfollow'])->where('userId', '[0-9]+');
+        Route::get('/follows/{userId}/followers', [PostsApiController::class, 'followers'])->where('userId', '[0-9]+');
+        Route::get('/follows/{userId}/following', [PostsApiController::class, 'following'])->where('userId', '[0-9]+');
+        Route::post('/authors/{userId}/mute', [PostsApiController::class, 'muteAuthor'])->where('userId', '[0-9]+');
+        Route::delete('/authors/{userId}/mute', [PostsApiController::class, 'unmuteAuthor'])->where('userId', '[0-9]+');
+
+        // مرفقات (لازم قبل /{id})
+        Route::post('/media', [PostMediaApiController::class, 'upload'])->middleware('throttle:120,1');
+        Route::delete('/media/{id}', [PostMediaApiController::class, 'destroy'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/file', [PostMediaApiController::class, 'file'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/thumbnail', [PostMediaApiController::class, 'thumbnail'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/preview', [PostMediaApiController::class, 'preview'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/download', [PostMediaApiController::class, 'download'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/text', [PostMediaApiController::class, 'text'])->where('id', '[0-9]+');
+        Route::get('/media/{id}/link', [PostMediaApiController::class, 'link'])->where('id', '[0-9]+');
+        Route::post('/media/{id}/run-token', [PostMediaApiController::class, 'runToken'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+
+        // تعليقات (بالـ commentId — قبل /{id})
+        Route::get('/comments/{commentId}/replies', [PostsApiController::class, 'replies'])->where('commentId', '[0-9]+');
+        Route::patch('/comments/{commentId}', [PostsApiController::class, 'editComment'])->where('commentId', '[0-9]+');
+        Route::delete('/comments/{commentId}', [PostsApiController::class, 'deleteComment'])->where('commentId', '[0-9]+');
+        Route::post('/comments/{commentId}/like', [PostsApiController::class, 'likeComment'])->where('commentId', '[0-9]+');
+
+        Route::post('/', [PostsApiController::class, 'store'])->middleware('throttle:20,1');
+        Route::get('/{id}', [PostsApiController::class, 'show'])->where('id', '[0-9]+');
+        Route::patch('/{id}', [PostsApiController::class, 'update'])->where('id', '[0-9]+');
+        Route::delete('/{id}', [PostsApiController::class, 'destroy'])->where('id', '[0-9]+');
+
+        Route::post('/{id}/publish', [PostsApiController::class, 'publish'])->where('id', '[0-9]+');
+        Route::post('/{id}/archive', [PostsApiController::class, 'archive'])->where('id', '[0-9]+');
+        Route::post('/{id}/unarchive', [PostsApiController::class, 'unarchive'])->where('id', '[0-9]+');
+        Route::post('/{id}/pin', [PostsApiController::class, 'pin'])->where('id', '[0-9]+');
+        Route::post('/{id}/unpin', [PostsApiController::class, 'unpin'])->where('id', '[0-9]+');
+
+        Route::post('/{id}/react', [PostsApiController::class, 'react'])->where('id', '[0-9]+')->middleware('throttle:120,1');
+        Route::get('/{id}/reactions', [PostsApiController::class, 'reactors'])->where('id', '[0-9]+');
+        Route::post('/{id}/save', [PostsApiController::class, 'save'])->where('id', '[0-9]+');
+        Route::post('/{id}/repost', [PostsApiController::class, 'repost'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+        Route::post('/{id}/share', [PostsApiController::class, 'share'])->where('id', '[0-9]+');
+        Route::post('/{id}/view', [PostsApiController::class, 'view'])->where('id', '[0-9]+')->middleware('throttle:300,1');
+        Route::post('/{id}/hide', [PostsApiController::class, 'hide'])->where('id', '[0-9]+');
+        Route::delete('/{id}/hide', [PostsApiController::class, 'unhide'])->where('id', '[0-9]+');
+        Route::post('/{id}/report', [PostsApiController::class, 'report'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+
+        Route::get('/{id}/comments', [PostsApiController::class, 'comments'])->where('id', '[0-9]+');
+        Route::post('/{id}/comments', [PostsApiController::class, 'addComment'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+    });
+
+    // Social Posts — لوحة الأدمن (إعدادات + بلاغات + منشورات معلّقة).
+    Route::prefix('posts-admin')->middleware(['uip.auth', 'uip.can:posts.moderate'])->group(function () {
+        Route::get('/stats', [PostsAdminApiController::class, 'stats']);
+        Route::get('/settings', [PostsAdminApiController::class, 'settings']);
+        Route::put('/settings', [PostsAdminApiController::class, 'updateSettings']);
+        Route::get('/reports', [PostsAdminApiController::class, 'reports']);
+        Route::post('/reports/{id}/resolve', [PostsAdminApiController::class, 'resolveReport'])->where('id', '[0-9]+');
+        Route::get('/pending', [PostsAdminApiController::class, 'pending']);
+        Route::post('/{id}/approve', [PostsAdminApiController::class, 'approve'])->where('id', '[0-9]+');
+        Route::post('/{id}/reject', [PostsAdminApiController::class, 'reject'])->where('id', '[0-9]+');
     });
 
     // بند 23 — Analytics (سطح /api/v1/analytics/* واحد مشترك بين admin/

@@ -151,6 +151,17 @@ return [
         // SvgGuard للـ SVG. لو الأدمن فعّل سياسة "restrict_extensions" في
         // الإعدادات العامة بتفضل هي صاحبة القرار (راجع effectiveAllowed).
         'meetings' => ['*'],
+        // Social Posts (/api/v1/posts/media) — منشورات بمرفقات متنوعة: صور/فيديو/صوت/PDF/عروض/مستندات/كود/أرشيف.
+        // الكود (php/html ...) بيتخزّن بسوفكس .txt (FileUploadService::storedExtension) فمفيش حاجة بتتنفّذ من السيرفر.
+        // الأدمن يضيّق القايمة وقت التشغيل من FileUploadPolicyService (مش بيوسّعها).
+        'posts' => [
+            'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
+            'mp4', 'webm', 'mov', 'mkv',
+            'mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'weba',
+            'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odp', 'odt', 'rtf', 'csv', 'json', 'xml', 'txt', 'md', 'log',
+            'zip', 'rar', '7z',
+            'php', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'html', 'css', 'sql', 'sh', 'yml', 'yaml',
+        ],
         // Generic REST API Files/Uploads module (spec section 9 "File
         // Upload APIs") — the standalone /api/v1/files surface used when an
         // upload isn't tied to one of the domain-specific categories above.
@@ -195,6 +206,7 @@ return [
         // تتخزن في مجلد مستقل، أسهل في الأرشفة/التنظيف لاحقًا.
         'meeting-recordings' => 'uploads/meeting-recordings',
         'general'   => 'uploads/general',
+        'posts'     => 'uploads/posts',
     ],
     /*
     |--------------------------------------------------------------------------
@@ -205,7 +217,7 @@ return [
     | الـ stored_path في الداتابيز بيفضل نسبي بنفس الشكل (uploads/messages/conv_N/xxx) — القديم لسه بيتقرأ من public/ لحد
     | ما `php artisan messages:privatize-attachments` ينقله.
     */
-    'private_categories' => ['messages'],
+    'private_categories' => ['messages', 'posts'],
 
     /*
     |--------------------------------------------------------------------------
