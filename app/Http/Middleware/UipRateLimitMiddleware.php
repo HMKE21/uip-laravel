@@ -49,23 +49,41 @@ class UipRateLimitMiddleware
             : ($isCall ? (int) config('calls.rate_limit_per_min', 300) : $this->resolveLimit());
 
         $window = (int) floor(time() / 60);
-        $key = 'ratelimit_' . ($isExamAttempt ? 'exam_' : ($isCall ? 'calls_' : '')) . preg_replace('/[^a-zA-Z0-9]/', '_', $this->actorKey($request)) . '_' . $window;
+        $actor = $this->actorKey($request);
+        $key = 'ratelimit_' . ($isExamAttempt ? 'exam_' : ($isCall ? 'calls_' : '')) . preg_replace('/[^a-zA-Z0-9]/', '_', $actor) . '_' . $window;
+
+        // قبل تسجيل الدخول مفيش Bearer، فالطلبات كانت بتتعدّ كلها على IP واحد. لو الـ IP مشترك (سيرفر Vercel لو UIP_PROXY_SECRET
+        // مش مضبوط، أو واي فاي الجامعة/NAT) كل الناس بتشارك 60 طلب/دقيقة فواحد مابيعملش ولا طلب ويجيله "طلبات كتير".
+        // دلوقتي الزائر غير المسجّل ليه bucket خاص بيه (IP + المتصفح + اللغة)، ومعاه سقف أعلى بكتير على الـ IP نفسه ضد الإساءة.
+        if (str_starts_with($actor, 'anon_')) {
+            $ipCap = max($limit * 10, 600);
+            $ipKey = 'ratelimit_ipcap_' . preg_replace('/[^a-zA-Z0-9]/', '_', (string) $request->ip()) . '_' . $window;
+            Cache::add($ipKey, 0, 65);
+            if ((int) Cache::increment($ipKey) > $ipCap) {
+                return $this->tooMany();
+            }
+        }
 
         // Cache::add + increment ذريّة (Redis) وبتقلل العمليات من 3 لـ 2 في كل ريكويست؛ والعدّ بعد الزيادة بيمنع تخطّي الحد في السباق.
         Cache::add($key, 0, 65); // TTL شوية أكبر من الدقيقة عشان أي تأخير بسيط في التوقيت بين الطلبات
         $count = (int) Cache::increment($key);
 
         if ($count > $limit) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many requests.',
-                'data'    => null,
-                'errors'  => null,
-                'meta'    => (object) [],
-            ], 429)->header('Retry-After', (string) (60 - (time() % 60)));
+            return $this->tooMany();
         }
 
         return $next($request);
+    }
+
+    private function tooMany(): Response
+    {
+        return response()->json([
+            'success' => false,
+            'message' => 'Too many requests.',
+            'data'    => null,
+            'errors'  => null,
+            'meta'    => (object) [],
+        ], 429)->header('Retry-After', (string) (60 - (time() % 60)));
     }
 
     /** مسارات الطالب اللي جوه محاولة امتحان: /api/v1/exam-system/attempts/{id}/... */
@@ -116,6 +134,10 @@ class UipRateLimitMiddleware
                 return 'user_' . $claims['sub'];
             }
         }
-        return 'ip_' . $request->ip();
+        return 'anon_' . sha1(implode('|', [
+            (string) $request->ip(),
+            (string) $request->userAgent(),
+            (string) $request->header('Accept-Language', ''),
+        ]));
     }
 }

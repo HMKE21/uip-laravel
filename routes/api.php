@@ -182,7 +182,7 @@ Route::prefix('v1')->group(function () {
         // بدون Middleware — يطابق القديم بالظبط
         Route::get('/staff-gate', [\App\Http\Controllers\Api\Auth\StaffGateController::class, 'status'])->middleware('throttle:60,1');
         Route::post('/staff-gate', [\App\Http\Controllers\Api\Auth\StaffGateController::class, 'submit'])->middleware('throttle:30,1');
-        Route::post('/login', [LoginController::class, 'submit'])->middleware('throttle:20,1');
+        Route::post('/login', [LoginController::class, 'submit'])->middleware('throttle:auth-login');
         Route::post('/register', [RegisterController::class, 'submit'])->middleware('throttle:10,1');
         // Sign in / sign up with Google (ويب + أندرويد).
         Route::get('/google/config', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'config']);

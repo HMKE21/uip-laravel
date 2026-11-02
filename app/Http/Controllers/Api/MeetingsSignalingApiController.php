@@ -215,6 +215,16 @@ class MeetingsSignalingApiController extends Controller
             // نسجّل status=left عشان الريفريش يرجّعه لنفس الغرفة بنفس الهوية). لو رجع، presence joining بيرجّع الكارت.
             // لو تابة تانية هي صاحبة الجلسة (owned=false) مانشيلهوش.
             if ($owned) {
+                // نعلّم حضوره "قديم" فورًا: roster() بيعدّ اللي last_seen_at بتاعه جوه presence_stale_seconds (90ث)، فكل ريفريش كان بيسيب
+                // "شبح" بيتحسب في عدد الغرفة ويحوّلها لـ SFU وهي أصلًا 2 بس. أول media-state/heartbeat بعد الرجوع بيرجّعه حاضر.
+                try {
+                    $m = $actor['model'];
+                    $ttl = max(30, (int) \App\Services\MeetingAdminSettings::get('presence_stale_seconds'));
+                    $m->last_seen_at = now()->subSeconds($ttl + 5);
+                    $m->save();
+                } catch (\Throwable $e) {
+                    // مش حرج: الـ TTL العادي هو الاحتياطي
+                }
                 try {
                     event(new \App\Events\Meetings\ParticipantLeftMeeting($meeting->uuid, $actor['key'], (string) $actor['display_name']));
                 } catch (\Throwable $e) {

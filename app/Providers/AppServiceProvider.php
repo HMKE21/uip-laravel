@@ -42,6 +42,13 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('meeting-join-info', fn (Request $r) => Limit::perMinute(90)->by('mji|' . $fingerprint($r)));
         RateLimiter::for('meeting-join-verify', fn (Request $r) => Limit::perMinute(30)->by('mjv|' . $fingerprint($r) . '|' . $r->route('joinToken')));
         RateLimiter::for('meeting-join-request', fn (Request $r) => Limit::perMinute(40)->by('mjr|' . $fingerprint($r) . '|' . $r->route('joinToken')));
+        // تسجيل الدخول: قبل كده throttle:20,1 على الـ IP بس، فطلاب الجامعة على نفس الواي فاي (أو كل الزوار لو الـ IP الحقيقي مش واصل)
+        // كانوا بيستهلكوا الحد مع بعض. دلوقتي: محاولات كل (إيميل + جهاز) محدودة، وفوقها سقف كبير للـ IP نفسه ضد التخمين الجماعي.
+        // قفل الحساب بعد المحاولات الفاشلة (AccountLockoutService) لسه شغال زي ما هو.
+        RateLimiter::for('auth-login', fn (Request $r) => [
+            Limit::perMinute(10)->by('lg|' . sha1(strtolower(trim((string) $r->input('email'))) . '|' . $fingerprint($r))),
+            Limit::perMinute(300)->by('lgip|' . $r->ip()),
+        ]);
         RateLimiter::for('public-visits-read', fn (Request $r) => Limit::perMinute(240)->by('pvr|' . $fingerprint($r)));
         RateLimiter::for('public-visits-write', fn (Request $r) => Limit::perMinute(60)->by('pvw|' . $fingerprint($r)));
 
