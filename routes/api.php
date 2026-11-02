@@ -846,6 +846,18 @@ Route::prefix('v1')->group(function () {
         Route::post('screen-share/stop', [MeetingsSignalingApiController::class, 'screenShareStop']);
     });
 
+    // Cloudflare Realtime SFU: بروكسي آمن + قرار mesh/SFU للغرفة (MeetingsSfuApiController). نفس uip.auth.optional بتاع signaling (الضيف بـ guest_token).
+    Route::prefix('meetings/{uuid}/sfu')->middleware('uip.auth.optional')->group(function () {
+        Route::get('config', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'config']);
+        Route::get('peers', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'peers']);
+        Route::post('session', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'session']);
+        Route::post('sessions/{sessionId}/tracks', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'tracks']);
+        Route::put('sessions/{sessionId}/renegotiate', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'renegotiate']);
+        Route::put('sessions/{sessionId}/tracks/close', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'closeTracks']);
+        Route::post('report', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'report']);
+        Route::post('leave', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'leave']);
+    });
+
     // التحكم عن بُعد في الشاشة المشاركة (زي Zoom) — لازم موافقة صاحب الشاشة، متحكم واحد في المرة.
     Route::prefix('meetings/{uuid}/remote-control')->middleware('uip.auth.optional')->group(function () {
         Route::post('request', [\App\Http\Controllers\Api\MeetingsRemoteControlApiController::class, 'request']);

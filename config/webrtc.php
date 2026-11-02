@@ -58,4 +58,32 @@ return [
     // يطلب iceServers() تاني. قصيرة نسبيًا (10 دقايق افتراضيًا) — نفس
     // فلسفة access token العادي، مش guest_session_ttl_minutes الطويلة.
     'turn_credential_ttl_seconds' => (int) env('TURN_CREDENTIAL_TTL_SECONDS', 600),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cloudflare Realtime SFU (Serverless SFU) — نظام الفيديو للاجتماعات الكبيرة
+    |--------------------------------------------------------------------------
+    | الـ mesh (RTCPeerConnection بين كل زوج) يفضل الوضع الافتراضي للاجتماعات الصغيرة. لما الاجتماع يكبر (أو الشبكة تبقى ضعيفة)
+    | MeetingTransportService بيحوّل الغرفة كلها لـ SFU تلقائيًا، ولو الـ SFU وقع بيرجع للـ mesh. المفتاح (app_secret) مابيسيبش
+    | السيرفر أبدًا: الفرونت بيكلم لارافيل (MeetingsSfuApiController) وهو اللي بيكلم Cloudflare.
+    | أنشئ التطبيق من: Cloudflare Dashboard ▸ Realtime ▸ SFU ▸ Create App.
+    */
+    'sfu' => [
+        'enabled'    => (bool) env('MEETINGS_SFU_ENABLED', false),
+        'app_id'     => env('CF_SFU_APP_ID'),
+        'app_secret' => env('CF_SFU_APP_SECRET'),
+        'base_url'   => rtrim((string) env('CF_SFU_BASE_URL', 'https://rtc.live.cloudflare.com/v1'), '/'),
+        'timeout'    => (int) env('CF_SFU_TIMEOUT', 8),
+
+        // أقل عدد حاضرين (شاملك) يخلّي الغرفة تتحول SFU. فوق maxMeshParticipants بتتحول غصب حتى لو الرقم ده أكبر.
+        'min_participants' => (int) env('MEETINGS_SFU_MIN_PARTICIPANTS', 5),
+        // 'auto' = القرار تلقائي | 'sfu' = دايمًا SFU (لو متاح) | 'mesh' = دايمًا mesh (SFU مقفول)
+        'force'            => strtolower((string) env('MEETINGS_SFU_FORCE', 'auto')),
+        // أقصى عدد فيديوهات بيسحبها المتصفح الواحد (الصوت دايمًا للكل). بيحمي جهاز المشاهد في الاجتماعات الكبيرة.
+        'max_video_subscriptions' => (int) env('MEETINGS_SFU_MAX_VIDEO_SUBS', 25),
+        // لو الـ SFU فشل عند ناس كتير يتقفل المدة دي (ثواني) والغرفة ترجع mesh.
+        'block_seconds'    => (int) env('MEETINGS_SFU_BLOCK_SECONDS', 300),
+        // أقل مدة بين تحويلين (ثواني) — يمنع الرجوع والتحويل المتكرر.
+        'min_dwell_seconds' => (int) env('MEETINGS_SFU_MIN_DWELL', 30),
+    ],
 ];
