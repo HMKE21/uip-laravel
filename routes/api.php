@@ -2180,6 +2180,13 @@ Route::prefix('v1')->group(function () {
         ->middleware(['signed:relative', 'throttle:240,1'])
         ->name('messaging.media.signed');
 
+    // وسائط الاستوري (uploads/messages/stories/..) فئة خاصة مش بتتخدم من /uploads — رابط موقّع نسبي زي وسائط الشات.
+    // بيتولّد جوه StoryService::shape (media_url / thumbnail_url)، والرؤية (جمهور/حظر/انتهاء) بتتفحص وقت التسليم.
+    Route::get('/messaging/stories/media/{id}/{variant}', [StoriesApiController::class, 'media'])
+        ->where(['id' => '[0-9]+', 'variant' => 'file|thumbnail'])
+        ->middleware(['signed:relative', 'throttle:240,1'])
+        ->name('stories.media.signed');
+
     Route::prefix('messaging')->middleware(['uip.auth', 'uip.can:messaging.use', 'uip.realtime:messaging'])->group(function () {
         Route::get('/inbox', [MessagingController::class, 'inbox']);
         // الاستوري (Status) — نص/صورة/فيديو بتختفي بعد مدة. ثابتة قبل /conversations/{id} فمفيش تعارض.

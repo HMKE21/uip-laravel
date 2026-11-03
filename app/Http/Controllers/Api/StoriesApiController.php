@@ -92,6 +92,44 @@ class StoriesApiController extends Controller
         });
     }
 
+    /**
+     * GET /api/v1/messaging/stories/media/{id}/{variant}?u=..&expires=..&signature=.. — بعد middleware signed:relative.
+     * variant = file | thumbnail. الرابط بيتولّد في StoryService::shape؛ والصلاحية بتتفحص هنا تاني وقت التسليم.
+     */
+    public function media(Request $request, $id, $variant)
+    {
+        $uid = (int) $request->query('u');
+        if ($uid <= 0 || !in_array($variant, ['file', 'thumbnail'], true)) {
+            return $this->apiError('Story media not found.', null, 404);
+        }
+        $rel = $this->stories->mediaPathForServing($uid, (int) $id, (string) $variant);
+        if ($rel === null) {
+            return $this->apiError('Story media not found.', null, 404);
+        }
+        $path = \App\Services\FileUploadService::absolutePath($rel);
+        if (!is_file($path)) {
+            return $this->apiError('File not found on server.', null, 404);
+        }
+        $mimes = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
+            'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mov' => 'video/quicktime',
+        ];
+        $mime = $mimes[strtolower(pathinfo($path, PATHINFO_EXTENSION))] ?? 'application/octet-stream';
+        if ($mime === 'application/octet-stream') {
+            return $this->apiError('Story media not found.', null, 404);
+        }
+
+        // response()->file بيدعم Range (تقديم/تأخير الفيديو).
+        return response()->file($path, [
+            'Content-Type'                 => $mime,
+            'Content-Disposition'          => 'inline',
+            'X-Content-Type-Options'       => 'nosniff',
+            'Content-Security-Policy'      => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'",
+            'Cross-Origin-Resource-Policy' => 'cross-origin',
+            'Cache-Control'                => 'private, max-age=300',
+        ]);
+    }
+
     private function handle(\Closure $action)
     {
         try {

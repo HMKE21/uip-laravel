@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\URL;
 
 /**
  * الاستوري (Status) — نص/صورة/فيديو بتختفي بعد مدة.
@@ -133,7 +134,7 @@ class StoryService
                     'stories'     => [],
                 ];
             }
-            $groups[$owner]['stories'][] = $this->shape($r, $isMine, $counts[(int) $r->id] ?? null);
+            $groups[$owner]['stories'][] = $this->shape($r, $isMine, $counts[(int) $r->id] ?? null, $uid);
         }
 
         foreach ($groups as &$g) {
@@ -166,7 +167,33 @@ class StoryService
         ];
     }
 
-    private function shape(object $r, bool $isMine, ?array $counts = null): array
+    /** رابط نسبي موقّع لوسائط استوري (بيتفتح من <img>/<video> من غير Authorization). ttl = upload.signed_story_ttl. */
+    private function signedMediaUrl(int $storyId, string $variant, int $uid): string
+    {
+        $ttl = max(300, (int) config('upload.signed_story_ttl', 3600));
+        return URL::temporarySignedRoute(
+            'stories.media.signed',
+            now()->addSeconds($ttl),
+            ['id' => $storyId, 'variant' => $variant, 'u' => $uid],
+            absolute: false
+        );
+    }
+
+    /**
+     * المسار النسبي لملف/صورة مصغّرة استوري لو المستخدم يقدر يشوفها دلوقتي (مش منتهية/محذوفة/محظور/جمهور مناسب)، وإلا null.
+     * بيتنادى وقت التسليم الفعلي (الرابط الموقّع لوحده مش كفاية: الحظر أو انتهاء الاستوري لازم يوقفوا التسليم).
+     */
+    public function mediaPathForServing(int $uid, int $storyId, string $variant): ?string
+    {
+        $row = $this->visibleStory($uid, $storyId);
+        if (!$row) {
+            return null;
+        }
+        $rel = $variant === 'thumbnail' ? (string) ($row->thumbnail_path ?? '') : (string) ($row->media_path ?? '');
+        return $rel !== '' ? $rel : null;
+    }
+
+    private function shape(object $r, bool $isMine, ?array $counts = null, ?int $uid = null): array
     {
         $out = [
             'id'               => (int) $r->id,
@@ -178,6 +205,9 @@ class StoryService
             'font'             => $r->font,
             'media_path'       => $r->media_path,
             'thumbnail_path'   => $r->thumbnail_path,
+            // ملفات الاستوري في فئة messages الخاصة (مش متاحة على /uploads/..) — فبنسلّمها برابط موقّع قصير العمر.
+            'media_url'        => ($uid && $r->media_path) ? $this->signedMediaUrl((int) $r->id, 'file', $uid) : null,
+            'thumbnail_url'    => ($uid && $r->thumbnail_path) ? $this->signedMediaUrl((int) $r->id, 'thumbnail', $uid) : null,
             'duration_seconds' => $r->duration_seconds !== null ? (int) $r->duration_seconds : null,
             'allow_replies'    => (bool) $r->allow_replies,
             'created_at'       => $r->created_at,
@@ -286,7 +316,7 @@ class StoryService
             $row['media_path'] = $stored['stored_path'];
 
             if ($isVideo) {
-                $abs = public_path($stored['stored_path']);
+                $abs = FileUploadService::absolutePath($stored['stored_path']); // الملف في storage/app/private مش public/
                 $dur = null;
                 try {
                     $dur = $this->probe->duration($abs);
@@ -324,7 +354,7 @@ class StoryService
         }
 
         $created = DB::table('stories')->where('id', $id)->first();
-        return $this->shape($created, true, ['views' => 0, 'reactions' => 0]);
+        return $this->shape($created, true, ['views' => 0, 'reactions' => 0], $uid);
     }
 
     public function delete(int $uid, int $storyId): void

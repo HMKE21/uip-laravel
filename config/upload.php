@@ -237,4 +237,7 @@ return [
 
     // صلاحية الرابط الموقّع للوسائط (ثواني) — للـ <video> والتطبيق الأصلي اللي مابيبعتوش Authorization header.
     'signed_media_ttl' => (int) env('UPLOAD_SIGNED_MEDIA_TTL', 600),
+
+    // صلاحية رابط وسائط الاستوري الموقّع (ثواني) — أطول من الشات لأن الـ feed بيفضل مفتوح وقت المشاهدة.
+    'signed_story_ttl' => (int) env('UPLOAD_SIGNED_STORY_TTL', 3600),
 ];
