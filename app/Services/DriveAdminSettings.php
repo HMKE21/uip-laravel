@@ -82,6 +82,8 @@ class DriveAdminSettings
             'feature_sharing'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
             'feature_archive'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
             'feature_terminal' => ['group' => 'features', 'type' => 'bool', 'default' => true],
+            'feature_vscode'   => ['group' => 'features', 'type' => 'bool', 'default' => true],
+            'feature_browser'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
 
             // -- الرفع -----------------------------------------------------
             'blocked_extensions' => ['group' => 'uploads', 'type' => 'list_ext', 'default' => []],
@@ -167,7 +169,7 @@ class DriveAdminSettings
     public static function featureMap(): array
     {
         $out = [];
-        foreach (['drive', 'uploads', 'sharing', 'archive', 'terminal'] as $f) {
+        foreach (['drive', 'uploads', 'sharing', 'archive', 'terminal', 'vscode', 'browser'] as $f) {
             $out[$f] = self::on($f);
         }
 

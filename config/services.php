@@ -79,6 +79,14 @@ return [
         'token_ttl' => (int) env('SANDBOX_TOKEN_TTL', 120),
     ],
 
+    // Desktop Browser app: web search page. Google's own Custom Search API ends on 2027-01-01, so the default is Serper (Google results).
+    // WEB_SEARCH_PROVIDER = serper | brave | google_cse. Without a key the app still opens any address and shows a "search is not set up" note.
+    'websearch' => [
+        'provider' => env('WEB_SEARCH_PROVIDER', 'serper'),
+        'key'      => env('WEB_SEARCH_KEY', ''),
+        'cx'       => env('WEB_SEARCH_CX', ''),
+    ],
+
     // GIF picker in chat (optional). Free key: https://developers.giphy.com — without it the GIF tab shows a "not set up" note.
     'giphy' => [
         'key' => env('GIPHY_API_KEY', ''),

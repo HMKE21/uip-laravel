@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Services\DriveAdminSettings;
 use App\Services\DriveContentSearchService;
 use App\Services\DriveService;
+use App\Services\WebProbeService;
+use App\Services\WebSearchService;
 use App\Models\DriveLibraryState;
 use App\Support\DriveException;
 use App\Support\LibraryStateSanitizer;
@@ -504,7 +506,9 @@ class DriveApiController extends Controller
             if (!$file) {
                 return $this->apiError('No file was uploaded.', null, 422);
             }
-            return $this->apiSuccess($this->drive->syncFolderFromZip($uid, (int) $id, $file), 'Folder updated.');
+            // folders the sandbox never sends back (node_modules, vendor…): when they are missing from the ZIP they are KEPT, not moved to the bin
+            $preserve = array_values(array_filter((array) $request->input('preserve', []), fn ($n) => is_string($n) && preg_match('/^[A-Za-z0-9._-]{1,64}$/', $n)));
+            return $this->apiSuccess($this->drive->syncFolderFromZip($uid, (int) $id, $file, array_slice($preserve, 0, 30)), 'Folder updated.');
         });
     }
 
@@ -563,6 +567,69 @@ class DriveApiController extends Controller
             $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
             return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
         });
+    }
+
+    /** POST /drive/vscode-token — token for the desktop VS Code app (one VS Code per user). */
+    public function vscodeToken(Request $request)
+    {
+        return $this->appToken($request, 'vscode', 'VS Code is turned off by the administrator.');
+    }
+
+    /** POST /drive/browser-token — token for the desktop cloud browser (one per user). */
+    public function browserToken(Request $request)
+    {
+        return $this->appToken($request, 'browser', 'The browser is turned off by the administrator.');
+    }
+
+    private function appToken(Request $request, string $app, string $offMessage)
+    {
+        if ($d = $this->featureOff($app, $offMessage)) {
+            return $d;
+        }
+        return $this->guard($request, function ($uid) use ($app) {
+            $url    = rtrim((string) config('services.sandbox.url'), '/');
+            $secret = (string) config('services.sandbox.secret');
+            if ($url === '' || strlen($secret) < 32) {
+                return $this->apiError('The sandbox is not configured on this server.', null, 503);
+            }
+            $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
+            $now = time();
+            $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+            $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
+            $body = $b64(json_encode([
+                'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $uid, 'pid' => $app, // the gateway lets terminal / vscode / browser run side by side
+                'iat' => $now, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(8)),
+            ]));
+            $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
+            return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
+        });
+    }
+
+    /** GET /drive/web-search?q=&lang= — results for the desktop Browser app's own search page. */
+    public function webSearch(Request $request, WebSearchService $search)
+    {
+        if ($d = $this->featureOff('browser', 'The browser is turned off by the administrator.')) {
+            return $d;
+        }
+        return $this->guard($request, function () use ($request, $search) {
+            $q = trim((string) $request->query('q', ''));
+            if ($q === '' || mb_strlen($q) > 200) {
+                return $this->apiError('Type something to search for.', null, 422);
+            }
+            if (!WebSearchService::configured()) {
+                return $this->apiSuccess(['configured' => false, 'results' => []], 'Web search is not set up.');
+            }
+            return $this->apiSuccess(['configured' => true, 'results' => $search->search($q, (string) $request->query('lang', 'en'))], 'Search results.');
+        });
+    }
+
+    /** GET /drive/web-probe?url= — can this page be shown in an iframe? (else the app opens it in the cloud browser) */
+    public function webProbe(Request $request, WebProbeService $probe)
+    {
+        if ($d = $this->featureOff('browser', 'The browser is turned off by the administrator.')) {
+            return $d;
+        }
+        return $this->guard($request, fn () => $this->apiSuccess($probe->probe((string) $request->query('url', '')), 'Probed.'));
     }
 
     // -- recycle bin ------------------------------------------------------------------------------------

@@ -1614,7 +1614,7 @@ class DriveService
      * ملفات اتغيّرت بتتستبدل، جديدة بتتضاف، واللي اتشال من الـ zip بيروح السلة (قابل للاسترجاع).
      * @return array{added:int,updated:int,removed:int}
      */
-    public function syncFolderFromZip(int $uid, int $folderId, UploadedFile $upload): array
+    public function syncFolderFromZip(int $uid, int $folderId, UploadedFile $upload, array $preserve = []): array
     {
         if (!$upload->isValid()) {
             throw new DriveException('The upload failed. Please try again.', 422);
@@ -1646,7 +1646,7 @@ class DriveService
             };
             $walk($folderId, '');
 
-            DB::transaction(function () use ($uid, $folderId, $zip, $entries, &$existing, &$written, &$oldBlobs, &$stats, &$touched) {
+            DB::transaction(function () use ($uid, $folderId, $zip, $entries, $preserve, &$existing, &$written, &$oldBlobs, &$stats, &$touched) {
                 usort($entries, fn ($a, $b) => count($a['segments']) <=> count($b['segments']));
                 $keep = [];
                 $budget = $this->maxZipBytes();
@@ -1704,6 +1704,9 @@ class DriveService
                 foreach ($existing as $rel => $node) {
                     if (isset($keep[$rel])) {
                         continue;
+                    }
+                    if ($preserve && array_intersect(explode('/', $rel), $preserve)) {
+                        continue; // node_modules / vendor… were not part of the ZIP on purpose
                     }
                     $parentRel = str_contains($rel, '/') ? substr($rel, 0, (int) strrpos($rel, '/')) : '';
                     if ($parentRel !== '' && !isset($keep[$parentRel])) {

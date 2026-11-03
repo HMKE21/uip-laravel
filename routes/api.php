@@ -346,6 +346,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/nodes/{id}/unzip', [DriveApiController::class, 'unzip'])->middleware('throttle:20,1');
         Route::post('/nodes/{id}/sync', [DriveApiController::class, 'sync'])->middleware('throttle:30,1');
         Route::post('/terminal-token', [DriveApiController::class, 'terminalToken'])->middleware('throttle:30,1');
+        Route::post('/vscode-token', [DriveApiController::class, 'vscodeToken'])->middleware('throttle:30,1');
+        Route::post('/browser-token', [DriveApiController::class, 'browserToken'])->middleware('throttle:30,1');
+        Route::get('/web-search', [DriveApiController::class, 'webSearch'])->middleware('throttle:40,1');
+        Route::get('/web-probe', [DriveApiController::class, 'webProbe'])->middleware('throttle:60,1');
         Route::post('/nodes/{id}/sandbox-token', [DriveApiController::class, 'sandboxToken'])->middleware('throttle:30,1');
     });
 
