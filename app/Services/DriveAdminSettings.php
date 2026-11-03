@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DriveUserLimit;
 use App\Support\DriveException;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -17,13 +18,19 @@ use Illuminate\Support\Facades\DB;
  * الحصص (الأولوية): تخصيص المستخدم (drive_user_limits.quota_mb) > حصة الدور (role_quota_mb) > الحصة العامة (quota_mb).
  * 0 = بلا حد. لو المستخدم عنده أكتر من دور (joker) بياخد أكبر حصة دور.
  *
- * الأنواع: bool | int | string | list_role | list_ext | map_int (role => MB).
+ * الأنواع: bool | int | string | enum (options) | secret (مشفّر في الداتابيز ومش بيرجع للمتصفح أبدًا) | list_role | list_ext | map_int (role => MB).
+ *
+ * مجموعة `tools` (البحث + VS Code + المتصفح): مزوّد البحث ورابط SearXNG والمفاتيح بتتظبط من هنا بدل .env. لو مفيش override بنرجع لـ
+ * config('services.websearch') (.env). WebSearchService بيقرا عن طريق webSearch() مباشرة، من غير ما نغيّر config.
  */
 class DriveAdminSettings
 {
     public const PREFIX = 'drive_';
 
-    public const GROUPS = ['system', 'access', 'limits', 'versions', 'features', 'uploads', 'sharing', 'admin'];
+    public const GROUPS = ['system', 'access', 'limits', 'versions', 'features', 'uploads', 'sharing', 'admin', 'tools'];
+
+    /** مزوّدات بحث المتصفح (نفس القيم اللي WebSearchService بيفهمها). */
+    public const SEARCH_PROVIDERS = ['serper', 'brave', 'google_cse', 'searxng'];
 
     public const STATUSES = ['active', 'readonly', 'blocked'];
 
@@ -49,8 +56,31 @@ class DriveAdminSettings
         return self::$base[$k];
     }
 
+    /** قيمة .env الأصلية لإعدادات البحث (config/services.php). مش بنعدّل config عشان تفضل مرجع ثابت. */
+    private static function searchBase(string $k, string $fallback): string
+    {
+        return (string) (config('services.websearch.' . $k) ?? $fallback);
+    }
+
     /**
-     * @return array<string, array{group:string,type:string,default:mixed,min?:int,max?:int,max_length?:int}>
+     * إعدادات البحث الفعلية (override الأدمن، وإلا .env). WebSearchService بيستخدمها.
+     *
+     * @return array{provider:string,url:string,key:string,cx:string}
+     */
+    public static function webSearch(): array
+    {
+        $provider = (string) self::get('web_search_provider');
+
+        return [
+            'provider' => in_array($provider, self::SEARCH_PROVIDERS, true) ? $provider : 'serper',
+            'url'      => trim((string) self::get('web_search_url')),
+            'key'      => (string) self::get('web_search_key'),
+            'cx'       => trim((string) self::get('web_search_cx')),
+        ];
+    }
+
+    /**
+     * @return array<string, array{group:string,type:string,default:mixed,min?:int,max?:int,max_length?:int,options?:array,blank_resets?:bool}>
      */
     public static function catalog(): array
     {
@@ -82,8 +112,14 @@ class DriveAdminSettings
             'feature_sharing'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
             'feature_archive'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
             'feature_terminal' => ['group' => 'features', 'type' => 'bool', 'default' => true],
-            'feature_vscode'   => ['group' => 'features', 'type' => 'bool', 'default' => true],
-            'feature_browser'  => ['group' => 'features', 'type' => 'bool', 'default' => true],
+
+            // -- VS Code + المتصفح + البحث (بدل .env) -----------------------
+            'feature_vscode'  => ['group' => 'tools', 'type' => 'bool', 'default' => true],
+            'feature_browser' => ['group' => 'tools', 'type' => 'bool', 'default' => true],
+            'web_search_provider' => ['group' => 'tools', 'type' => 'enum', 'options' => self::SEARCH_PROVIDERS, 'default' => self::searchBase('provider', 'serper')],
+            'web_search_url'      => ['group' => 'tools', 'type' => 'string', 'default' => self::searchBase('url', ''), 'max_length' => 300, 'blank_resets' => true, 'format' => 'url'],
+            'web_search_key'      => ['group' => 'tools', 'type' => 'secret', 'default' => self::searchBase('key', ''), 'max_length' => 500],
+            'web_search_cx'       => ['group' => 'tools', 'type' => 'string', 'default' => self::searchBase('cx', ''), 'max_length' => 200, 'blank_resets' => true],
 
             // -- الرفع -----------------------------------------------------
             'blocked_extensions' => ['group' => 'uploads', 'type' => 'list_ext', 'default' => []],
@@ -203,15 +239,22 @@ class DriveAdminSettings
     {
         $values = [];
         foreach (self::catalog() as $key => $def) {
+            $secret = $def['type'] === 'secret';
+            $cur = (string) ($secret ? self::get($key) : '');
             $values[$key] = [
                 'group'      => $def['group'],
                 'type'       => $def['type'],
-                'value'      => self::get($key),
-                'default'    => $def['default'],
+                // الأسرار مبتخرجش من السيرفر أبدًا: بنرجّع بس هل فيه قيمة + آخر 4 حروف.
+                'value'      => $secret ? '' : self::get($key),
+                'default'    => $secret ? '' : $def['default'],
                 'overridden' => self::isOverridden($key),
                 'min'        => $def['min'] ?? null,
                 'max'        => $def['max'] ?? null,
                 'max_length' => $def['max_length'] ?? null,
+                'options'    => $def['options'] ?? null,
+                'is_set'     => $secret ? $cur !== '' : null,
+                'hint'       => $secret && $cur !== '' ? '••••' . mb_substr($cur, -4) : null,
+                'default_set' => $secret ? (string) $def['default'] !== '' : null,
             ];
         }
 
@@ -219,6 +262,7 @@ class DriveAdminSettings
             'groups'          => self::GROUPS,
             'values'          => $values,
             'available_roles' => array_values((array) config('roles.available', [])),
+            'search'          => ['configured' => \App\Services\WebSearchService::configured(), 'provider' => self::webSearch()['provider']],
             'disk'            => ['name' => (string) config('drive.disk'), 'driver' => (string) config('filesystems.disks.' . config('drive.disk') . '.driver')],
         ];
     }
@@ -398,8 +442,9 @@ class DriveAdminSettings
                 $errors[$key] = 'Unknown setting.';
                 continue;
             }
-            if ($raw === null) {
-                $clean[$key] = null;
+            $blank = is_string($raw) && trim($raw) === '';
+            if ($raw === null || ($blank && (($catalog[$key]['blank_resets'] ?? false) || $catalog[$key]['type'] === 'secret'))) {
+                $clean[$key] = null; // فاضي في سر/حقل اختياري = رجّع للافتراضي (.env)
                 continue;
             }
             [$ok, $val, $err] = self::coerce($catalog[$key], $raw);
@@ -426,6 +471,7 @@ class DriveAdminSettings
         $changed = [];
         foreach ($clean as $key => $val) {
             $old = self::get($key);
+            $isSecret = $catalog[$key]['type'] === 'secret';
             if ($val === null) {
                 DB::table('settings')->where('scope', 'global')->whereNull('user_id')->where('key', self::PREFIX . $key)->delete();
             } else {
@@ -434,7 +480,10 @@ class DriveAdminSettings
             self::flush();
             $new = self::get($key);
             if ($old !== $new) {
-                $changed[$key] = ['old' => $old, 'new' => $new];
+                // سجل التدقيق مايحتويش السر نفسه.
+                $changed[$key] = $isSecret
+                    ? ['old' => $old !== '' ? '[set]' : '[empty]', 'new' => $new !== '' ? '[set]' : '[empty]']
+                    : ['old' => $old, 'new' => $new];
             }
         }
         self::flush();
@@ -460,7 +509,8 @@ class DriveAdminSettings
         return match ($type) {
             'bool'    => $val ? '1' : '0',
             'int'     => (string) (int) $val,
-            'string'  => (string) $val,
+            'string', 'enum' => (string) $val,
+            'secret'  => Crypt::encryptString((string) $val),
             'map_int' => json_encode((object) (array) $val, JSON_UNESCAPED_UNICODE),
             default   => json_encode(array_values((array) $val), JSON_UNESCAPED_UNICODE),
         };
@@ -475,6 +525,14 @@ class DriveAdminSettings
                 return is_numeric($raw) ? (int) $raw : $default;
             case 'string':
                 return $raw;
+            case 'enum':
+                return $raw !== '' ? $raw : $default;
+            case 'secret':
+                try {
+                    return Crypt::decryptString($raw);
+                } catch (\Throwable $e) { // APP_KEY اتغيّر أو القيمة بايظة -> الافتراضي (.env)
+                    return $default;
+                }
             case 'map_int':
                 $arr = json_decode($raw, true);
 
@@ -511,6 +569,23 @@ class DriveAdminSettings
                 $s = trim((string) $raw);
                 if (isset($def['max_length']) && mb_strlen($s) > $def['max_length']) {
                     return [false, null, 'Maximum length is ' . $def['max_length'] . '.'];
+                }
+                if (($def['format'] ?? '') === 'url' && $s !== '' && preg_match('#^https?://[^\s/]+#i', $s) !== 1) {
+                    return [false, null, 'Must start with http:// or https://.'];
+                }
+
+                return [true, $s, ''];
+            case 'enum':
+                $v = trim((string) $raw);
+
+                return in_array($v, (array) ($def['options'] ?? []), true) ? [true, $v, ''] : [false, null, 'Must be one of: ' . implode(', ', (array) ($def['options'] ?? [])) . '.'];
+            case 'secret':
+                if (!is_string($raw)) {
+                    return [false, null, 'Must be text.'];
+                }
+                $s = trim($raw);
+                if (mb_strlen($s) > ($def['max_length'] ?? 500)) {
+                    return [false, null, 'Maximum length is ' . ($def['max_length'] ?? 500) . '.'];
                 }
 
                 return [true, $s, ''];

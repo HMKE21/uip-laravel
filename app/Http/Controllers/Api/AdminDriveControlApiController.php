@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
  *   GET    overview                                   أرقام التخزين/المستخدمين/الروابط + التصنيفات + الرفع آخر 30 يوم + الأعلى استهلاكًا
  *   GET    settings            PUT settings           كتالوج الإعدادات / حفظ (null = رجّع الافتراضي)
  *   DELETE settings                                   رجّع كل الإعدادات للافتراضي
+ *   POST   search/test {q?, provider?, url?, key?, cx?}  جرّب مزوّد البحث (بالقيم الحالية أو المسودة اللي لسه ما اتحفظتش) من غير كاش
  *   GET    users ?q&scope=with_files|all&role&status&sort=used|files|name|activity|trash&dir&page   المستخدمين + الاستهلاك والحصة
  *   GET    users/search?q=                            بحث سريع
  *   GET    users/{id}                                 تفاصيل: الاستهلاك، التصنيفات، الحدود، الأكبر/الأحدث، سجل إجراءات الأدمن
@@ -127,6 +128,51 @@ class AdminDriveControlApiController extends Controller
         $this->log($request, 'settings_reset', null, ['overrides_removed' => $n], null, 'DriveSettings');
 
         return $this->apiSuccess(DriveAdminSettings::snapshot(), 'All My PC settings were reset to their defaults.');
+    }
+
+    /**
+     * POST search/test — يجرّب البحث فعليًا. أي حقل مبعوت بيتغلّب على المحفوظ (عشان الأدمن يجرّب قبل ما يحفظ)؛ المفتاح الفاضي = المحفوظ.
+     * مبيرجّعش المفتاح ولا بيكتبه في اللوج.
+     */
+    public function testSearch(Request $request, \App\Services\WebSearchService $search)
+    {
+        $c = DriveAdminSettings::webSearch();
+        if ($request->filled('provider')) {
+            $p = (string) $request->input('provider');
+            if (!in_array($p, DriveAdminSettings::SEARCH_PROVIDERS, true)) {
+                return $this->apiError('Unknown search provider.', null, 422);
+            }
+            $c['provider'] = $p;
+        }
+        foreach (['url', 'cx', 'key'] as $f) {
+            if ($request->has($f) && trim((string) $request->input($f)) !== '') {
+                $c[$f] = trim((string) $request->input($f));
+            }
+        }
+        if ($c['url'] !== '' && preg_match('#^https?://[^\s/]+#i', $c['url']) !== 1) {
+            return $this->apiError('The search address must start with http:// or https://.', null, 422);
+        }
+        if (!\App\Services\WebSearchService::configured($c)) {
+            return $this->apiSuccess(['configured' => false, 'ok' => false, 'provider' => $c['provider'], 'count' => 0, 'results' => [], 'error' => 'missing'], 'Search is not fully set up yet.');
+        }
+        $q = trim((string) $request->input('q', 'Cairo University'));
+        $t = microtime(true);
+        try {
+            $rows = $search->search(mb_substr($q !== '' ? $q : 'Cairo University', 0, 200), 'en', 5, $c);
+
+            return $this->apiSuccess([
+                'configured' => true, 'ok' => true, 'provider' => $c['provider'], 'count' => count($rows),
+                'ms' => (int) round((microtime(true) - $t) * 1000), 'results' => array_slice($rows, 0, 3),
+            ], count($rows) ? 'Search works.' : 'The provider answered but returned no results.');
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('web_search_test_failed', ['provider' => $c['provider'], 'error' => mb_substr($e->getMessage(), 0, 200)]);
+            $status = preg_match('/search_provider_failed:(\d{3})/', $e->getMessage(), $m) ? (int) $m[1] : 0;
+
+            return $this->apiSuccess([
+                'configured' => true, 'ok' => false, 'provider' => $c['provider'], 'count' => 0, 'results' => [],
+                'ms' => (int) round((microtime(true) - $t) * 1000), 'error' => $status ? 'http_' . $status : 'unreachable',
+            ], 'The search provider did not answer correctly.');
+        }
     }
 
     // ------------------------------------------------------------------

@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Http;
  *
  * Google's Custom Search JSON API is closed to new customers and ends on 2027-01-01, so the default provider is Serper
  * (real Google results through a paid-per-query API). Brave Search (independent index) and Google CSE (legacy keys) are supported too.
+ * Admin → My PC Control → "Search & browser" overrides these .env values at runtime (see DriveAdminSettings::webSearch()); .env stays the fallback.
  *   WEB_SEARCH_PROVIDER = serper | brave | google_cse | searxng
  *   WEB_SEARCH_KEY = the API key (not needed for searxng)   WEB_SEARCH_CX = engine id (google_cse only)   WEB_SEARCH_URL = base address of your own SearXNG (searxng only)
  *
@@ -20,9 +21,10 @@ use Illuminate\Support\Facades\Http;
  */
 class WebSearchService
 {
-    public static function configured(): bool
+    /** @param array|null $c إعدادات جاهزة (للتجربة قبل الحفظ)؛ وإلا من الأدمن/.env */
+    public static function configured(?array $c = null): bool
     {
-        $c = (array) config('services.websearch');
+        $c ??= DriveAdminSettings::webSearch();
         $provider = (string) ($c['provider'] ?? 'serper');
         if ($provider === 'searxng') {
             return preg_match('#^https?://#i', trim((string) ($c['url'] ?? ''))) === 1;
@@ -34,13 +36,13 @@ class WebSearchService
     }
 
     /** @return array<int,array{title:string,url:string,snippet:string,domain:string}> */
-    public function search(string $q, string $lang = 'en', int $num = 10): array
+    public function search(string $q, string $lang = 'en', int $num = 10, ?array $override = null): array
     {
         $q = trim(mb_substr($q, 0, 200));
         $lang = preg_match('/^[a-z]{2}$/', $lang) ? $lang : 'en';
         $num = max(1, min(10, $num));
-        return Cache::remember('websearch:' . sha1(config('services.websearch.provider') . "|$lang|$num|" . mb_strtolower($q)), 600, function () use ($q, $lang, $num) {
-            $c = (array) config('services.websearch');
+        $c = $override ?? DriveAdminSettings::webSearch();
+        $run = function () use ($q, $lang, $num, $c) {
             $key = (string) $c['key'];
             switch ($c['provider'] ?? 'serper') {
                 case 'brave':
@@ -62,7 +64,13 @@ class WebSearchService
                     $this->ok($r);
                     return $this->shape((array) ($r->json('organic') ?? []), 'title', 'link', 'snippet');
             }
-        });
+        };
+        if ($override !== null) { // تجربة من الأدمن: من غير كاش
+            return $run();
+        }
+        // الكاش بيتفتّح بالمزوّد + العنوان + بصمة المفتاح، فتغيير الإعدادات من الأدمن يسري فورًا.
+        $fp = sha1(($c['provider'] ?? '') . '|' . ($c['url'] ?? '') . '|' . ($c['cx'] ?? '') . '|' . ($c['key'] ?? ''));
+        return Cache::remember('websearch:' . sha1($fp . "|$lang|$num|" . mb_strtolower($q)), 600, $run);
     }
 
     /** a rejected key, a used-up quota or a provider outage must not look like "no results" (and must not be cached) */

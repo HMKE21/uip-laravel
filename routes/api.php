@@ -1109,6 +1109,7 @@ Route::prefix('v1')->group(function () {
         Route::get('settings', [$c, 'settings']);
         Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:60,1');
         Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:10,1');
+        Route::post('search/test', [$c, 'testSearch'])->middleware('throttle:20,1');
 
         Route::get('users', [$c, 'users']);
         Route::get('users/search', [$c, 'searchUsers'])->middleware('throttle:60,1');
