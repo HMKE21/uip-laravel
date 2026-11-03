@@ -19,7 +19,7 @@ class Totp
         return self::base32Encode(random_bytes(20));
     }
 
-    public static function provisioningUri(string $secret, string $accountName, string $issuer = 'UIP'): string
+    public static function provisioningUri(string $secret, string $accountName, string $issuer = 'UIPE'): string
     {
         $label = rawurlencode($issuer) . ':' . rawurlencode($accountName);
         $query = http_build_query([

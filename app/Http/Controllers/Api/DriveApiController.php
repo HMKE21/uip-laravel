@@ -492,7 +492,7 @@ class DriveApiController extends Controller
         } catch (DriveException $e) {
             return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 422);
         }
-        return response()->download($tmp, 'UIP-PC-backup.zip', [
+        return response()->download($tmp, 'UIPE-PC-backup.zip', [
             'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',
         ])->deleteFileAfterSend(true);
     }

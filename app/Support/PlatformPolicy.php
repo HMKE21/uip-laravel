@@ -276,7 +276,7 @@ final class PlatformPolicy
     public static function defaultValue(string $key): string|int
     {
         return match ($key) {
-            'platform_name'        => (string) config('app.name', 'UIP'),
+            'platform_name'        => (string) config('app.name', 'UIPE'),
             'session_live_seconds' => max(30, (int) config('security.single_session.live_seconds', 120)),
             'google_client_ids'    => (string) config('services.google.client_ids', ''),
             'app_token'            => (string) config('site.app_token', ''),

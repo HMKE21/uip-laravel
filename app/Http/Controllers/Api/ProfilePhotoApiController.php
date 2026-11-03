@@ -70,7 +70,7 @@ class ProfilePhotoApiController extends Controller
         if ($viewer === $owner) {
             return response(file_get_contents($file), 200, $this->headers(mime_content_type($file) ?: 'image/jpeg', 'inline; filename="photo"'));
         }
-        [$bytes, $mime] = $this->photos->renderWatermarked($file, 'UIP #' . $viewer);
+        [$bytes, $mime] = $this->photos->renderWatermarked($file, 'UIPE #' . $viewer);
         return response($bytes, 200, $this->headers($mime, 'inline; filename="photo.jpg"'));
     }
 

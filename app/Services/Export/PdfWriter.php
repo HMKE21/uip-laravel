@@ -9,7 +9,7 @@
  * لأي سبب) بنرجع تلقائيًا للكاتب اليدوي القديم (Courier / Latin-1 بس،
  * العربي بيظهر "?") عشان التصدير ميتعطّلش.
  *
- * @package UIP
+ * @package UIPE
  */
 
 namespace App\Services\Export;
@@ -170,7 +170,7 @@ class PdfWriter
             $mpdf->packTableData = true;
         }
         $mpdf->SetTitle($footerLabel);
-        $mpdf->SetCreator('Ultimate Intelligent Platform');
+        $mpdf->SetCreator('Unified Integrated Platform Ecosystem');
         $mpdf->SetFooter('<table width="100%" style="font-size:7.5pt;color:#6b7280;border-top:0.4pt solid #d1d5db"><tr>'
             . '<td width="70%">' . self::esc($footerLabel) . ' &nbsp;·&nbsp; ' . date('Y-m-d H:i') . '</td>'
             . '<td width="30%" align="right">{PAGENO} / {nbpg}</td></tr></table>');
@@ -297,7 +297,7 @@ class PdfWriter
 
     private static function titleBlock(string $title, ?string $subtitle = null): string
     {
-        return '<div class="brand">UIP · ULTIMATE INTELLIGENT PLATFORM</div>'
+        return '<div class="brand">UIPE · UNIFIED INTEGRATED PLATFORM ECOSYSTEM</div>'
             . '<h1' . (self::isRtl($title) || self::$rtlTable ? ' dir="rtl"' : '') . '>' . self::esc($title) . '</h1>'
             . ($subtitle !== null ? '<div class="sub"' . (self::$rtlTable ? ' dir="rtl"' : '') . '>' . self::esc($subtitle) . '</div>' : '')
             . '<div class="rule"></div>';

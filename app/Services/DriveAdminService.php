@@ -560,7 +560,7 @@ class DriveAdminService
             }
             [$tmp] = $this->drive->buildZip($uid, $ids);
 
-            return [$tmp, 'UIP-PC-user-' . $uid . '.zip'];
+            return [$tmp, 'UIPE-PC-user-' . $uid . '.zip'];
         }
 
         return $this->drive->buildZip($uid, $ids);

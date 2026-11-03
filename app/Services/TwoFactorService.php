@@ -59,7 +59,7 @@ class TwoFactorService
         return [
             'secret'      => $secret,
             'manual_key'  => Totp::formatForDisplay($secret),
-            'otpauth_uri' => Totp::provisioningUri($secret, $accountEmail, 'UIP'),
+            'otpauth_uri' => Totp::provisioningUri($secret, $accountEmail, 'UIPE'),
             'setup_token' => $setupToken,
         ];
     }

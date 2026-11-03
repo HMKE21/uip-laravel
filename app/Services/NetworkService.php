@@ -252,10 +252,12 @@ class NetworkService
         $shaped['restricted'] = $base['restricted'];
         $shaped['lists_hidden'] = $base['lists_hidden'];
         $shaped['bio'] = $uid === $userId ? ($this->chat->bio($uid) ?: null) : $this->messaging->bioFor($userId, $uid);
+        $shaped['bio_style'] = $shaped['bio'] !== null ? $this->chat->bioStyle($userId) : null;
         $shaped['cover_path'] = $this->coverPath($userId);
         $shaped['photo_can_download'] = $this->privacy->canDownloadPhoto($uid, $userId);
         if ($base['restricted']) { // بروفايل مقفول: الاسم والصورة المصغّرة بس
             $shaped['bio'] = null;
+            $shaped['bio_style'] = null;
             $shaped['cover_path'] = null;
         }
         if ($base['lists_hidden']) {

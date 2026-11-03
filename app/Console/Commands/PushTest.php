@@ -22,7 +22,7 @@ class PushTest extends Command
         if ($devices === 0) {
             $this->warn('No device yet: open the app, sign in as this user and accept the notification permission.');
         }
-        $notifications->notify($uid, 'system_test', 'UIP test notification', 'If you can read this on your phone, push works.', '/');
+        $notifications->notify($uid, 'system_test', 'UIPE test notification', 'If you can read this on your phone, push works.', '/');
         $this->info('Notification created. Check the phone (close the app first to test the background path).');
         return self::SUCCESS;
     }
