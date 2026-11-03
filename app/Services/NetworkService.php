@@ -222,7 +222,7 @@ class NetworkService
     public function person(int $uid, int $userId): array
     {
         $base = $this->follows->profile($uid, $userId); // بيتأكد إنه موجود وغير محظور
-        $row = DB::table('users')->where('id', $userId)->first(['id', 'full_name', 'avatar_path']);
+        $row = DB::table('users')->where('id', $userId)->first(['id', 'full_name', 'avatar_path', 'created_at']);
         $shaped = $this->shape($uid, [$row])[0] ?? [];
         $shaped['posts_count'] = $base['posts_count'];
         $shaped['followers_count'] = $base['followers_count'];
@@ -231,8 +231,61 @@ class NetworkService
         $shaped['university_id'] = $base['university_id'];
         $shaped['faculty_id'] = $base['faculty_id'];
         $shaped['is_muted'] = $base['is_muted'];
-        $shaped['bio'] = $uid === $userId ? null : $this->messaging->bioFor($userId, $uid);
+        $shaped['bio'] = $uid === $userId ? ($this->chat->bio($uid) ?: null) : $this->messaging->bioFor($userId, $uid);
+        $shaped['cover_path'] = $this->coverPath($userId);
+        $shaped['joined_at'] = $row->created_at;
+        // الجامعة / الكلية بالاسم (كانت ناقصة في الدروار القديم)
+        $uni = $base['university_id'] ? DB::table('universities')->where('id', $base['university_id'])->first(['official_name_en', 'official_name_ar']) : null;
+        $fac = $base['faculty_id'] ? DB::table('faculties')->where('id', $base['faculty_id'])->first(['name_en', 'name_ar']) : null;
+        $shaped['org_en'] = $uni->official_name_en ?? null;
+        $shaped['org_ar'] = $uni->official_name_ar ?? null;
+        $shaped['faculty_en'] = $fac->name_en ?? null;
+        $shaped['faculty_ar'] = $fac->name_ar ?? null;
         return $shaped;
+    }
+
+    /** أصدقاء (اتصالات) أي شخص — زي تبويب "الأصدقاء" في فيسبوك. بيرجّع علاقتي أنا بكل واحد منهم. */
+    public function friendsOf(int $uid, int $userId, string $q, int $page, int $per): array
+    {
+        $this->follows->profile($uid, $userId); // موجود وغير محظور
+        $base = DB::table('user_connections as c')
+            ->join('users as u', 'u.id', '=', DB::raw('(CASE WHEN c.requester_id = ' . (int) $userId . ' THEN c.addressee_id ELSE c.requester_id END)'))
+            ->where('c.status', 'accepted')
+            ->where(fn ($w) => $w->where('c.requester_id', $userId)->orWhere('c.addressee_id', $userId));
+        return $this->page($uid, $base, 'COALESCE(c.responded_at, c.created_at)', $q, $page, $per);
+    }
+
+    // ---------------------------------------------------------------- cover photo
+
+    public function coverPath(int $userId): ?string
+    {
+        try {
+            $p = DB::table('user_profile_covers')->where('user_id', $userId)->value('cover_path');
+        } catch (\Throwable $e) {
+            return null; // الـ migration لسه متشغلتش
+        }
+        return $p ?: null;
+    }
+
+    /** يرفع صورة غلاف جديدة (jpg/png/webp حتى 8MB) ويمسح القديمة. */
+    public function setCover(int $uid, $file): string
+    {
+        $stored = app(FileUploadService::class)->store($file, 'avatars', 'covers/' . $uid, 8192, ['jpg', 'jpeg', 'png', 'webp']);
+        $old = $this->coverPath($uid);
+        DB::table('user_profile_covers')->updateOrInsert(['user_id' => $uid], ['cover_path' => $stored['stored_path'], 'updated_at' => now()]);
+        if ($old && $old !== $stored['stored_path']) {
+            app(FileUploadService::class)->delete($old);
+        }
+        return $stored['stored_path'];
+    }
+
+    public function removeCover(int $uid): void
+    {
+        $old = $this->coverPath($uid);
+        DB::table('user_profile_covers')->where('user_id', $uid)->delete();
+        if ($old) {
+            app(FileUploadService::class)->delete($old);
+        }
     }
 
     // ---------------------------------------------------------------- connection actions

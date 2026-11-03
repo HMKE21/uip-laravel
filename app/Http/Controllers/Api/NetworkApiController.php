@@ -133,6 +133,34 @@ class NetworkApiController extends Controller
         return $this->run(fn () => $this->apiSuccess($this->network->person($this->uid($request), (int) $userId), 'Person retrieved successfully.'));
     }
 
+    /** GET /network/people/{userId}/connections — أصدقاء الشخص ده */
+    public function friends(Request $request, $userId)
+    {
+        [$page, $per] = $this->page($request);
+        return $this->run(fn () => $this->list($this->network->friendsOf($this->uid($request), (int) $userId, (string) $request->input('q', ''), $page, $per), 'Connections retrieved successfully.'));
+    }
+
+    /** POST /network/me/cover (multipart: cover) */
+    public function setCover(Request $request)
+    {
+        return $this->run(function () use ($request) {
+            $file = $request->file('cover');
+            if (!$file) {
+                return $this->apiError('cover file is required.', null, 422);
+            }
+            return $this->apiSuccess(['cover_path' => $this->network->setCover($this->uid($request), $file)], 'Cover photo updated successfully.');
+        });
+    }
+
+    /** DELETE /network/me/cover */
+    public function removeCover(Request $request)
+    {
+        return $this->run(function () use ($request) {
+            $this->network->removeCover($this->uid($request));
+            return $this->apiSuccess(['cover_path' => null], 'Cover photo removed.');
+        });
+    }
+
     /** POST /network/connect/{userId} {message?} */
     public function connect(Request $request, $userId)
     {

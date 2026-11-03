@@ -1741,6 +1741,9 @@ Route::prefix('v1')->group(function () {
         Route::get('/search', [NetworkApiController::class, 'search'])->middleware('throttle:120,1');
         Route::get('/suggestions', [NetworkApiController::class, 'suggestions']);
         Route::get('/people/{userId}', [NetworkApiController::class, 'person'])->where('userId', '[0-9]+');
+        Route::get('/people/{userId}/connections', [NetworkApiController::class, 'friends'])->where('userId', '[0-9]+');
+        Route::post('/me/cover', [NetworkApiController::class, 'setCover'])->middleware('throttle:20,1');
+        Route::delete('/me/cover', [NetworkApiController::class, 'removeCover']);
         Route::get('/connections', [NetworkApiController::class, 'connections']);
         Route::delete('/connections/{userId}', [NetworkApiController::class, 'removeConnection'])->where('userId', '[0-9]+');
         Route::post('/connect/{userId}', [NetworkApiController::class, 'connect'])->where('userId', '[0-9]+')->middleware('throttle:60,1');

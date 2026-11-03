@@ -72,6 +72,8 @@ class PostService
         }
         $this->assertVisibility($viewer, $f['visibility']);
         $audience = $f['visibility'] === 'selected' ? $this->validAudience($uid, $in['audience_ids'] ?? []) : [];
+        // منشور "غيّر صورته الشخصية / الغلاف": لازم يكون فيه مرفق (الصورة) وإلا بيتعامل كمنشور عادي.
+        $subtype = in_array($in['subtype'] ?? null, ['profile_photo', 'cover_photo'], true) && $mediaIds ? (string) $in['subtype'] : null;
 
         [$status, $scheduledAt, $publishedAt] = $this->resolveStatus($uid, $in);
 
@@ -87,12 +89,13 @@ class PostService
         $mentions = $this->validMentions($uid, $in['mentioned_user_ids'] ?? []);
         $expires = !empty($in['expires_in_hours']) ? now()->addHours(max(1, min(8760, (int) $in['expires_in_hours']))) : null;
 
-        $postId = DB::transaction(function () use ($uid, $viewer, $f, $in, $status, $scheduledAt, $publishedAt, $tags, $mentions, $audience, $mediaIds, $expires) {
+        $postId = DB::transaction(function () use ($uid, $viewer, $f, $in, $subtype, $status, $scheduledAt, $publishedAt, $tags, $mentions, $audience, $mediaIds, $expires) {
             $id = (int) DB::table('posts')->insertGetId([
                 'user_id'        => $uid,
                 'university_id'  => $viewer['university_id'],
                 'faculty_id'     => $viewer['faculty_id'],
                 'kind'           => 'text',
+                'subtype'        => $subtype,
                 'title'          => $f['title'],
                 'body'           => $f['body'],
                 'link_url'       => $f['link_url'],
@@ -416,6 +419,7 @@ class PostService
             $out[] = [
                 'id'             => $id,
                 'kind'           => $r['kind'],
+                'subtype'        => $r['subtype'] ?? null,
                 'title'          => $r['title'],
                 'body'           => $r['body'],
                 'link_url'       => $r['link_url'],
