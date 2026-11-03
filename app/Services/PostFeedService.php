@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * فيد المنشورات. أنماط (mode):
- *   for_you     مرتّب بالخوارزمية (تحت)           following   اللي بتتابعهم + منشوراتك، بالأحدث
- *   latest      كل المرئي ليك بالأحدث              trending    الأعلى تفاعلًا في آخر 72 ساعة (velocity)
+ *   for_you     مرتّب بالخوارزمية (تحت)           following   منشورات اللي بتتابعهم بس (من غير منشوراتك)، بالأحدث
+ *   latest      كل المرئي ليك بالأحدث              trending    الأعلى تفاعلًا (velocity) في آخر 7 أيام، ولو قليلة بيوسّع لـ 30 يوم
  *   university  منشورات جامعتك                      saved       المحفوظات
  *   user        بروفايل شخص (المثبّت الأول)         tag         وسم معيّن
  *   search      بحث نصّي (نص/عنوان/وسم/اسم الكاتب)  mine        منشوراتي بكل حالاتها (مسودات/مجدولة/معلّقة/مؤرشفة)
@@ -111,9 +111,10 @@ class PostFeedService
 
         switch ($mode) {
             case 'following':
-                return $q->where(function ($w) use ($uid) {
-                    $w->where('p.user_id', $uid)->orWhereRaw('EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id)', [$uid]);
-                })->orderByDesc('p.published_at')->orderByDesc('p.id');
+                // اللي بتتابعهم بس — منشوراتك إنت ليها تبويب "منشوراتي" (قبل كده كانت داخلة هنا فمن غير متابَعين التبويب كان بيعرض منشوراتك).
+                return $q->where('p.user_id', '!=', $uid)
+                    ->whereRaw('EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id)', [$uid])
+                    ->orderByDesc('p.published_at')->orderByDesc('p.id');
 
             case 'university':
                 if (!$viewer['university_id']) {
@@ -122,7 +123,9 @@ class PostFeedService
                 return $q->where('p.university_id', $viewer['university_id'])->orderByDesc('p.published_at')->orderByDesc('p.id');
 
             case 'trending':
-                return $q->where('p.published_at', '>=', now()->subHours(72))->orderByRaw(self::HOT . ' DESC')->orderByDesc('p.id');
+                // نافذة 7 أيام (الـ HOT نفسه بيخصم القديم)، ولو أقل من 10 منشورات نوسّعها لـ 30 يوم عشان التبويب ميبقاش فاضي في الجامعات الصغيرة.
+                $days = (clone $q)->where('p.published_at', '>=', now()->subDays(7))->limit(10)->get(['p.id'])->count() >= 10 ? 7 : 30;
+                return $q->where('p.published_at', '>=', now()->subDays($days))->orderByRaw(self::HOT . ' DESC')->orderByDesc('p.id');
 
             case 'tag':
                 $tag = mb_strtolower(ltrim(trim((string) ($opts['tag'] ?? '')), '#'));
@@ -192,6 +195,18 @@ class PostFeedService
         foreach ($base()->orderByRaw(self::HOT . ' DESC')->limit(max(30, (int) ($limit / 3)))->get(self::CANDIDATE_COLS) as $r) {
             $cands[(int) $r->id] = $r;
         }
+        // منشورات اللي بتتابعهم مضمونة في المرشحين (مش بتتزاحم مع باقي الجامعة في آخر N منشور)
+        foreach ($base()->whereRaw('EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = p.user_id)', [$uid])
+            ->orderByDesc('p.published_at')->limit(max(60, (int) ($limit / 2)))->get(self::CANDIDATE_COLS) as $r) {
+            $cands[(int) $r->id] = $r;
+        }
+        // مرشحين قليلين (جامعة صغيرة / محتوى قديم) => وسّع النافذة بدل ما الفيد يطلع فاضي أو يتكرر بسرعة
+        if (count($cands) < 40) {
+            $wide = fn () => $this->vis->excludeHidden($this->vis->visibleQuery($viewer), $uid);
+            foreach ($wide()->orderByDesc('p.published_at')->limit($limit)->get(self::CANDIDATE_COLS) as $r) {
+                $cands[(int) $r->id] = $r;
+            }
+        }
         if (!$cands) {
             return [];
         }
@@ -246,7 +261,8 @@ class PostFeedService
 
             $eng = (int) $r->reactions_count + 3 * (int) $r->comments_count + 4 * (int) $r->reposts_count + 3 * (int) $r->saves_count + 2 * (int) $r->shares_count;
             $rate = $eng / max(20, (int) $r->views_count);
-            $engagement = 0.6 * min(1.0, log(1 + $eng) / log(61)) + 0.4 * min(1.0, $rate / 0.15);
+            $velocity = $eng / pow($ageH + 2, 0.8); // تفاعل لكل ساعة (بيخصم العمر) => منشور جديد بيطلع بسرعة يعلى على قديم كبير
+            $engagement = 0.4 * min(1.0, log(1 + $eng) / log(61)) + 0.3 * min(1.0, $rate / 0.15) + 0.3 * min(1.0, log(1 + $velocity) / log(9));
 
             $interest = 0.0;
             if ($maxW > 0 && !empty($tagsBy[$id])) {
