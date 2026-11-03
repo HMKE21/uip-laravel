@@ -12,7 +12,8 @@ class PostFollowService
         private PostNotifier $notifier,
         private ChatSafetyService $safety,
         private MessagingService $messaging,
-        private RoleService $roles
+        private RoleService $roles,
+        private ProfilePrivacyService $privacy
     ) {
     }
 
@@ -62,7 +63,8 @@ class PostFollowService
 
     private function requiresApproval(int $userId): bool
     {
-        return (bool) DB::table('user_network_settings')->where('user_id', $userId)->value('follow_approval');
+        // بروفايل مقفول = كل متابعة جديدة بتحتاج موافقة (وإلا أي حد يتابع ويشوف كل حاجة).
+        return (bool) DB::table('user_network_settings')->where('user_id', $userId)->value('follow_approval') || $this->privacy->isLocked($userId);
     }
 
     private function connected(int $a, int $b): bool
@@ -91,11 +93,17 @@ class PostFollowService
     /** @return array{followers:array,has_more:bool} */
     public function followers(int $uid, int $userId, int $page, int $per): array
     {
+        if (!$this->privacy->canSeeLists($uid, $userId)) {
+            return ['items' => [], 'has_more' => false, 'restricted' => true];
+        }
         return $this->people($uid, DB::table('post_follows as f')->join('users as u', 'u.id', '=', 'f.follower_id')->where('f.followee_id', $userId), $page, $per);
     }
 
     public function following(int $uid, int $userId, int $page, int $per): array
     {
+        if (!$this->privacy->canSeeLists($uid, $userId)) {
+            return ['items' => [], 'has_more' => false, 'restricted' => true];
+        }
         return $this->people($uid, DB::table('post_follows as f')->join('users as u', 'u.id', '=', 'f.followee_id')->where('f.follower_id', $userId), $page, $per);
     }
 
@@ -107,7 +115,9 @@ class PostFollowService
         $viewer = $this->vis->viewer($uid);
         $visiblePosts = $this->vis->visibleQuery($viewer)->where('p.user_id', $userId)->count();
 
-        return array_merge([
+        $restricted = !$this->privacy->canSeeProfile($uid, $userId);
+        $lists = $this->privacy->canSeeLists($uid, $userId);
+        $out = array_merge([
             'id'            => (int) $u->id,
             'full_name'     => $u->full_name,
             'avatar_path'   => $this->messaging->isAvatarHidden($userId, $uid) ? null : $u->avatar_path,
@@ -118,7 +128,18 @@ class PostFollowService
             'is_me'         => $uid === $userId,
             'follows_me'    => DB::table('post_follows')->where('follower_id', $userId)->where('followee_id', $uid)->exists(),
             'is_muted'      => DB::table('post_author_mutes')->where('user_id', $uid)->where('muted_user_id', $userId)->exists(),
+            'locked'        => $this->privacy->isLocked($userId),
+            'restricted'    => $restricted,        // البروفايل مقفول وأنا مش صديق/متابع
+            'lists_hidden'  => !$lists,
         ], $this->counts($uid, $userId));
+        if (!$lists) { // العدّادات نفسها بتتخبّى مع القوايم
+            $out['followers_count'] = null;
+            $out['following_count'] = null;
+        }
+        if ($restricted) {
+            $out['posts_count'] = null;
+        }
+        return $out;
     }
 
     /** ناس ممكن تتابعهم: اللي بينشروا حاجات تقدر تشوفها، ومتابعهمش، مرتّبين بنفس جامعتك أولًا ثم النشاط والتفاعل. */

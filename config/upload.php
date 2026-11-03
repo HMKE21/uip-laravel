@@ -36,6 +36,7 @@ return [
     'allowed' => [
         'documents' => ['pdf', 'doc', 'docx'],
         'avatars'   => ['jpg', 'jpeg', 'png', 'webp'],
+        'avatar_originals' => ['jpg', 'jpeg', 'png', 'webp'],
         // خلفيات الشات الشخصية (صور المستخدم نفسه) — صور بس، والفحص بالمحتوى (getimagesize) بيتم في FileUploadService.
         'chat_wallpapers' => ['jpg', 'jpeg', 'png', 'webp'],
         'projects'  => ['pdf', 'doc', 'docx', 'zip', 'ppt', 'pptx'],
@@ -181,6 +182,7 @@ return [
     ],
     'paths' => [
         'avatars'   => 'uploads/avatars',
+        'avatar_originals' => 'uploads/avatar-originals', // الصورة الشخصية بالحجم الكامل — خاصة (storage/app/private)
         'chat_wallpapers' => 'uploads/chat-wallpapers',
         'course_assignments'     => 'uploads/course-assignments',
         'assignment_submissions' => 'uploads/assignment-submissions',
@@ -217,7 +219,7 @@ return [
     | الـ stored_path في الداتابيز بيفضل نسبي بنفس الشكل (uploads/messages/conv_N/xxx) — القديم لسه بيتقرأ من public/ لحد
     | ما `php artisan messages:privatize-attachments` ينقله.
     */
-    'private_categories' => ['messages', 'posts'],
+    'private_categories' => ['messages', 'posts', 'avatar_originals'],
 
     /*
     |--------------------------------------------------------------------------

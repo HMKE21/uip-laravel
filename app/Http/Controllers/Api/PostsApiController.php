@@ -337,7 +337,7 @@ class PostsApiController extends Controller
     {
         return $this->run(function () use ($request, $userId) {
             $res = $this->follows->followers($this->uid($request), (int) $userId, max(1, (int) $request->input('page', 1)), (int) $request->input('per_page', 30));
-            return $this->apiSuccess($res['items'], 'Followers retrieved successfully.', 200, ['has_more' => $res['has_more']]);
+            return $this->apiSuccess($res['items'], 'Followers retrieved successfully.', 200, ['has_more' => $res['has_more'], 'restricted' => !empty($res['restricted'])]);
         });
     }
 
@@ -345,7 +345,7 @@ class PostsApiController extends Controller
     {
         return $this->run(function () use ($request, $userId) {
             $res = $this->follows->following($this->uid($request), (int) $userId, max(1, (int) $request->input('page', 1)), (int) $request->input('per_page', 30));
-            return $this->apiSuccess($res['items'], 'Following retrieved successfully.', 200, ['has_more' => $res['has_more']]);
+            return $this->apiSuccess($res['items'], 'Following retrieved successfully.', 200, ['has_more' => $res['has_more'], 'restricted' => !empty($res['restricted'])]);
         });
     }
 

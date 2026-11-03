@@ -1111,14 +1111,15 @@ class MessagingService
         if (!$user) {
             throw new \RuntimeException('User not found.');
         }
-        $stored = $this->uploads->store($file, 'avatars', (string) $user->id, self::AVATAR_MAX_KB, self::AVATAR_EXT);
+        // الأصل بيتخزّن خاص (مفيش رابط مباشر) والمعروض في كل حتة نسخة مصغّرة — شوف ProfilePhotoService.
+        $thumb = app(ProfilePhotoService::class)->storeFor((int) $user->id, $file);
         $old = $user->avatar_path;
-        $user->fill(['avatar_path' => $stored['stored_path']]);
+        $user->fill(['avatar_path' => $thumb]);
         $user->save();
-        if ($old && $old !== $stored['stored_path']) {
+        if ($old && $old !== $thumb) {
             $this->uploads->delete($old);
         }
-        return $stored['stored_path'];
+        return $thumb;
     }
 
     public function removeMyAvatar($userId): void
@@ -1133,6 +1134,7 @@ class MessagingService
         if ($old) {
             $this->uploads->delete($old);
         }
+        app(ProfilePhotoService::class)->deleteFor((int) $user->id);
     }
 
     public function addMember(int $conversationId, $actingUserId, $newUserId): void

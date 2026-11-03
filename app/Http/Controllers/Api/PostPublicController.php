@@ -34,6 +34,7 @@ class PostPublicController extends Controller
             ->where('u.status', 'active')
             ->where('p.status', 'published')
             ->where('p.visibility', 'public')
+            ->whereRaw('NOT EXISTS (SELECT 1 FROM user_network_settings ns WHERE ns.user_id = p.user_id AND ns.profile_locked = 1)') // بروفايل مقفول = مفيش صفحات عامة
             ->where('p.published_at', '<=', now())
             ->where(fn ($w) => $w->whereNull('p.expires_at')->orWhere('p.expires_at', '>', now()));
     }

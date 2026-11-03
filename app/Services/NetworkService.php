@@ -25,7 +25,8 @@ class NetworkService
         private ChatSafetyService $safety,
         private ChatSettingsService $chat,
         private MessagingService $messaging,
-        private RoleService $roles
+        private RoleService $roles,
+        private ProfilePrivacyService $privacy
     ) {
     }
 
@@ -50,6 +51,9 @@ class NetworkService
         return [
             'follow_approval'            => $r ? (bool) $r->follow_approval : false,
             'accept_connection_requests' => $r ? (bool) $r->accept_connection_requests : true,
+            'profile_locked'             => $this->privacy->isLocked($uid),
+            'lists_visibility'           => $this->privacy->forUser($uid)['lists'],
+            'photo_download'             => $this->privacy->forUser($uid)['download'],
         ];
     }
 
@@ -61,13 +65,26 @@ class NetworkService
                 $cur[$k] = filter_var($in[$k], FILTER_VALIDATE_BOOLEAN);
             }
         }
+        if (array_key_exists('profile_locked', $in)) {
+            $cur['profile_locked'] = filter_var($in['profile_locked'], FILTER_VALIDATE_BOOLEAN);
+        }
+        if (isset($in['lists_visibility']) && in_array($in['lists_visibility'], ProfilePrivacyService::LISTS, true)) {
+            $cur['lists_visibility'] = $in['lists_visibility'];
+        }
+        if (isset($in['photo_download']) && in_array($in['photo_download'], ProfilePrivacyService::DOWNLOAD, true)) {
+            $cur['photo_download'] = $in['photo_download'];
+        }
         DB::table('user_network_settings')->updateOrInsert(['user_id' => $uid], [
             'follow_approval'            => $cur['follow_approval'] ? 1 : 0,
             'accept_connection_requests' => $cur['accept_connection_requests'] ? 1 : 0,
+            'profile_locked'             => $cur['profile_locked'] ? 1 : 0,
+            'lists_visibility'           => $cur['lists_visibility'],
+            'photo_download'             => $cur['photo_download'],
             'updated_at'                 => now(),
         ]);
+        $this->privacy->forget($uid);
         // لو قفل الموافقة اليدوية: كل الطلبات المعلقة تتقبل (مش منطقي تفضل معلقة).
-        if (!$cur['follow_approval']) {
+        if (!$cur['follow_approval'] && !$cur['profile_locked']) {
             $pending = DB::table('post_follow_requests')->where('followee_id', $uid)->pluck('follower_id')->all();
             foreach ($pending as $fid) {
                 $this->follows->acceptRequest($uid, (int) $fid, false);
@@ -231,8 +248,20 @@ class NetworkService
         $shaped['university_id'] = $base['university_id'];
         $shaped['faculty_id'] = $base['faculty_id'];
         $shaped['is_muted'] = $base['is_muted'];
+        $shaped['locked'] = $base['locked'];
+        $shaped['restricted'] = $base['restricted'];
+        $shaped['lists_hidden'] = $base['lists_hidden'];
         $shaped['bio'] = $uid === $userId ? ($this->chat->bio($uid) ?: null) : $this->messaging->bioFor($userId, $uid);
         $shaped['cover_path'] = $this->coverPath($userId);
+        $shaped['photo_can_download'] = $this->privacy->canDownloadPhoto($uid, $userId);
+        if ($base['restricted']) { // بروفايل مقفول: الاسم والصورة المصغّرة بس
+            $shaped['bio'] = null;
+            $shaped['cover_path'] = null;
+        }
+        if ($base['lists_hidden']) {
+            $shaped['connections_count'] = null;
+            $shaped['mutual_connections'] = $shaped['mutual_connections'] ?? 0;
+        }
         $shaped['joined_at'] = $row->created_at;
         // الجامعة / الكلية بالاسم (كانت ناقصة في الدروار القديم)
         $uni = $base['university_id'] ? DB::table('universities')->where('id', $base['university_id'])->first(['official_name_en', 'official_name_ar']) : null;
@@ -244,10 +273,13 @@ class NetworkService
         return $shaped;
     }
 
-    /** أصدقاء (اتصالات) أي شخص — زي تبويب "الأصدقاء" في فيسبوك. بيرجّع علاقتي أنا بكل واحد منهم. */
+    /** أصدقاء (اتصالات) أي شخص. بيرجّع علاقتي أنا بكل واحد منهم. */
     public function friendsOf(int $uid, int $userId, string $q, int $page, int $per): array
     {
         $this->follows->profile($uid, $userId); // موجود وغير محظور
+        if (!$this->privacy->canSeeLists($uid, $userId)) {
+            return ['items' => [], 'has_more' => false, 'restricted' => true];
+        }
         $base = DB::table('user_connections as c')
             ->join('users as u', 'u.id', '=', DB::raw('(CASE WHEN c.requester_id = ' . (int) $userId . ' THEN c.addressee_id ELSE c.requester_id END)'))
             ->where('c.status', 'accepted')

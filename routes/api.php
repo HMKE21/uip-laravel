@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\SavedDashboardsApiController;
 use App\Http\Controllers\Api\AnnouncementsApiController;
 use App\Http\Controllers\Api\FeedApiController;
 use App\Http\Controllers\Api\PostMediaApiController;
+use App\Http\Controllers\Api\ProfilePhotoApiController;
 use App\Http\Controllers\Api\PostPublicController;
 use App\Http\Controllers\Api\PostsAdminApiController;
 use App\Http\Controllers\Api\NetworkApiController;
@@ -1732,6 +1733,12 @@ Route::prefix('v1')->group(function () {
         ->where(['id' => '[0-9]+', 'variant' => 'file|thumbnail|preview'])
         ->middleware(['signed:relative', 'throttle:240,1'])
         ->name('posts.media.signed');
+
+    // الصورة الشخصية بالحجم الكامل (محمية: صلاحية العرض/التنزيل + علامة مائية) — ProfilePhotoApiController
+    Route::prefix('profile-photos')->middleware(['uip.auth', 'uip.can:posts.use', 'throttle:120,1'])->group(function () {
+        Route::get('/{userId}', [ProfilePhotoApiController::class, 'show'])->where('userId', '[0-9]+');
+        Route::get('/{userId}/download', [ProfilePhotoApiController::class, 'download'])->where('userId', '[0-9]+');
+    });
 
     // "شبكتي" — الاتصالات وطلبات الصداقة/المتابعة والبحث عن الناس (NetworkApiController). مربوطة بالمنشورات والمراسلات.
     Route::prefix('network')->middleware(['uip.auth', 'uip.can:posts.use'])->group(function () {

@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\DB;
  *   faculty    نفس كلية صاحب المنشور وقت النشر
  *   selected   المختارين بس (post_audience)
  *   private    صاحبه بس
+ * + لو صاحب المنشور قافل بروفايله: بس أصدقاؤه ومتابعوه (حتى لو المنشور عام).
  * ولازم المنشور يكون published ووقته وصل ومخلصش expires_at، وصاحبه حساب نشط ومش محذوف.
  */
 class PostVisibility
@@ -69,7 +70,8 @@ class PostVisibility
             ->where(fn ($w) => $w->whereNull('p.expires_at')->orWhere('p.expires_at', '>', now()))
             ->where(function ($w) use ($uid, $uni, $fac) {
                 $w->where('p.user_id', $uid)->orWhere(function ($x) use ($uid, $uni, $fac) {
-                    $x->whereRaw(self::NOT_BLOCKED, [$uid, $uid])->where(function ($a) use ($uid, $uni, $fac) {
+                    // بروفايل مقفول: غير الأصدقاء/المتابعين مايشوفوش أي منشور (حتى العام) — ProfilePrivacyService.
+                    $x->whereRaw(self::NOT_BLOCKED, [$uid, $uid])->whereRaw(ProfilePrivacyService::SQL_NOT_LOCKED_OUT, [$uid, $uid, $uid])->where(function ($a) use ($uid, $uni, $fac) {
                         $a->where('p.visibility', 'public')
                             ->orWhere(fn ($c) => $c->where('p.visibility', 'followers')->whereRaw(self::FOLLOWS, [$uid]))
                             ->orWhere(fn ($c) => $c->where('p.visibility', 'contacts')->whereRaw(self::CONTACT, [$uid]))
