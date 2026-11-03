@@ -10,17 +10,27 @@ use Illuminate\Support\Facades\Http;
  *
  * Google's Custom Search JSON API is closed to new customers and ends on 2027-01-01, so the default provider is Serper
  * (real Google results through a paid-per-query API). Brave Search (independent index) and Google CSE (legacy keys) are supported too.
- *   WEB_SEARCH_PROVIDER = serper | brave | google_cse        WEB_SEARCH_KEY = the API key        WEB_SEARCH_CX = engine id (google_cse only)
+ *   WEB_SEARCH_PROVIDER = serper | brave | google_cse | searxng
+ *   WEB_SEARCH_KEY = the API key (not needed for searxng)   WEB_SEARCH_CX = engine id (google_cse only)   WEB_SEARCH_URL = base address of your own SearXNG (searxng only)
+ *
+ * SearXNG is free and self-hosted: it asks Google, Bing, DuckDuckGo… for you and needs no key and no per-query fee. Run it next to this API
+ * (docker run -d -p 8888:8080 searxng/searxng, then add `json` under search.formats in its settings.yml) and set WEB_SEARCH_URL=http://127.0.0.1:8888.
+ * A provider that fails (quota used up, key rejected, network) throws instead of returning an empty list, so the failure is NEVER cached for 10 minutes
+ * and the app can tell the person "search is down" instead of "no results".
  */
 class WebSearchService
 {
     public static function configured(): bool
     {
         $c = (array) config('services.websearch');
+        $provider = (string) ($c['provider'] ?? 'serper');
+        if ($provider === 'searxng') {
+            return preg_match('#^https?://#i', trim((string) ($c['url'] ?? ''))) === 1;
+        }
         if (trim((string) ($c['key'] ?? '')) === '') {
             return false;
         }
-        return ($c['provider'] ?? 'serper') !== 'google_cse' || trim((string) ($c['cx'] ?? '')) !== '';
+        return $provider !== 'google_cse' || trim((string) ($c['cx'] ?? '')) !== '';
     }
 
     /** @return array<int,array{title:string,url:string,snippet:string,domain:string}> */
@@ -36,17 +46,31 @@ class WebSearchService
                 case 'brave':
                     $r = Http::timeout(8)->withHeaders(['X-Subscription-Token' => $key, 'Accept' => 'application/json'])
                         ->get('https://api.search.brave.com/res/v1/web/search', ['q' => $q, 'count' => $num, 'search_lang' => $lang, 'safesearch' => 'moderate']);
-                    $rows = $r->successful() ? (array) data_get($r->json(), 'web.results', []) : [];
-                    return $this->shape($rows, 'title', 'url', 'description');
+                    $this->ok($r);
+                    return $this->shape((array) data_get($r->json(), 'web.results', []), 'title', 'url', 'description');
                 case 'google_cse':
                     $r = Http::timeout(8)->get('https://www.googleapis.com/customsearch/v1', ['key' => $key, 'cx' => (string) $c['cx'], 'q' => $q, 'num' => $num, 'hl' => $lang, 'safe' => 'active']);
-                    return $this->shape($r->successful() ? (array) ($r->json('items') ?? []) : [], 'title', 'link', 'snippet');
+                    $this->ok($r);
+                    return $this->shape((array) ($r->json('items') ?? []), 'title', 'link', 'snippet');
+                case 'searxng':
+                    $r = Http::timeout(10)->acceptJson()->get(rtrim((string) $c['url'], '/') . '/search', ['q' => $q, 'format' => 'json', 'language' => $lang, 'safesearch' => 1]);
+                    $this->ok($r);
+                    return array_slice($this->shape((array) ($r->json('results') ?? []), 'title', 'url', 'content'), 0, $num);
                 default: // serper
                     $r = Http::timeout(8)->withHeaders(['X-API-KEY' => $key])->asJson()
                         ->post('https://google.serper.dev/search', ['q' => $q, 'num' => $num, 'hl' => $lang]);
-                    return $this->shape($r->successful() ? (array) ($r->json('organic') ?? []) : [], 'title', 'link', 'snippet');
+                    $this->ok($r);
+                    return $this->shape((array) ($r->json('organic') ?? []), 'title', 'link', 'snippet');
             }
         });
+    }
+
+    /** a rejected key, a used-up quota or a provider outage must not look like "no results" (and must not be cached) */
+    private function ok($response): void
+    {
+        if (!$response->successful()) {
+            throw new \RuntimeException('search_provider_failed:' . $response->status());
+        }
     }
 
     private function shape(array $rows, string $t, string $u, string $s): array

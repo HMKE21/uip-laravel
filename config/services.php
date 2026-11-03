@@ -80,11 +80,12 @@ return [
     ],
 
     // Desktop Browser app: web search page. Google's own Custom Search API ends on 2027-01-01, so the default is Serper (Google results).
-    // WEB_SEARCH_PROVIDER = serper | brave | google_cse. Without a key the app still opens any address and shows a "search is not set up" note.
+    // WEB_SEARCH_PROVIDER = serper | brave | google_cse | searxng (free, self-hosted). Without a key the app still opens any address and shows a "search is not set up" note.
     'websearch' => [
         'provider' => env('WEB_SEARCH_PROVIDER', 'serper'),
         'key'      => env('WEB_SEARCH_KEY', ''),
         'cx'       => env('WEB_SEARCH_CX', ''),
+        'url'      => env('WEB_SEARCH_URL', ''), // searxng: your own instance, e.g. http://127.0.0.1:8888 (free, no key)
     ],
 
     // GIF picker in chat (optional). Free key: https://developers.giphy.com — without it the GIF tab shows a "not set up" note.
