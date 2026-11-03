@@ -38,36 +38,34 @@ class DesktopVirtualModeTest extends TestCase
     }
 
     #[Test]
-    public function defaults_to_off_and_is_available_for_students(): void
+    public function it_is_pinned_on_for_students_whenever_my_pc_is_open(): void
     {
         $uid = $this->makeUser();
         [$code, $body] = $this->call('GET', $uid, 'student');
         $this->assertSame(200, $code);
-        $this->assertFalse($body['data']['enabled']);
-    }
-
-    #[Test]
-    public function student_can_turn_it_on_and_off_and_it_persists(): void
-    {
-        $uid = $this->makeUser();
-        [$code, $body] = $this->call('PUT', $uid, 'student', ['enabled' => true]);
         if ($body['data']['available'] === false) {
             $this->markTestSkipped('My PC is closed in this environment: ' . ($body['data']['reason'] ?? ''));
         }
         $this->assertTrue($body['data']['enabled']);
-        $this->assertTrue($this->call('GET', $uid, 'student')[1]['data']['enabled']);
-        $this->assertTrue((bool) DB::table('desktop_settings')->where('user_id', $uid)->value('virtual_mode'));
-
-        $this->assertFalse($this->call('PUT', $uid, 'student', ['enabled' => false])[1]['data']['enabled']);
+        $this->assertTrue($body['data']['pinned']);
     }
 
     #[Test]
-    public function other_roles_cannot_enable_it(): void
+    public function it_cannot_be_switched_off_by_the_client(): void
     {
         $uid = $this->makeUser();
-        [$code, $body] = $this->call('PUT', $uid, 'university', ['enabled' => true]);
-        $this->assertSame(403, $code);
-        $this->assertFalse($this->call('GET', $uid, 'university')[1]['data']['available']);
+        [$code, $body] = $this->call('PUT', $uid, 'student', ['enabled' => false]);
+        $this->assertSame(200, $code);
+        $this->assertSame($body['data']['available'], $body['data']['enabled']);
+    }
+
+    #[Test]
+    public function other_roles_do_not_get_it(): void
+    {
+        $uid = $this->makeUser();
+        [$code, $body] = $this->call('GET', $uid, 'university');
+        $this->assertFalse($body['data']['available']);
+        $this->assertFalse($body['data']['enabled']);
     }
 
     #[Test]
@@ -75,7 +73,8 @@ class DesktopVirtualModeTest extends TestCase
     {
         config(['virtual_mode.enabled' => false]);
         $uid = $this->makeUser();
-        $this->assertFalse($this->call('GET', $uid, 'student')[1]['data']['available']);
-        $this->assertSame(403, $this->call('PUT', $uid, 'student', ['enabled' => true])[0]);
+        $body = $this->call('GET', $uid, 'student')[1];
+        $this->assertFalse($body['data']['available']);
+        $this->assertFalse($body['data']['enabled']);
     }
 }
