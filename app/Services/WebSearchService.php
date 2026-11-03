@@ -36,31 +36,32 @@ class WebSearchService
     }
 
     /** @return array<int,array{title:string,url:string,snippet:string,domain:string}> */
-    public function search(string $q, string $lang = 'en', int $num = 10, ?array $override = null): array
+    public function search(string $q, string $lang = 'en', int $num = 10, ?array $override = null, int $page = 1): array
     {
         $q = trim(mb_substr($q, 0, 200));
         $lang = preg_match('/^[a-z]{2}$/', $lang) ? $lang : 'en';
         $num = max(1, min(10, $num));
+        $page = max(1, min(10, $page));
         $c = $override ?? DriveAdminSettings::webSearch();
-        $run = function () use ($q, $lang, $num, $c) {
+        $run = function () use ($q, $lang, $num, $c, $page) {
             $key = (string) $c['key'];
             switch ($c['provider'] ?? 'serper') {
                 case 'brave':
                     $r = Http::timeout(8)->withHeaders(['X-Subscription-Token' => $key, 'Accept' => 'application/json'])
-                        ->get('https://api.search.brave.com/res/v1/web/search', ['q' => $q, 'count' => $num, 'search_lang' => $lang, 'safesearch' => 'moderate']);
+                        ->get('https://api.search.brave.com/res/v1/web/search', ['q' => $q, 'count' => $num, 'search_lang' => $lang, 'safesearch' => 'moderate', 'offset' => $page - 1]);
                     $this->ok($r);
                     return $this->shape((array) data_get($r->json(), 'web.results', []), 'title', 'url', 'description');
                 case 'google_cse':
-                    $r = Http::timeout(8)->get('https://www.googleapis.com/customsearch/v1', ['key' => $key, 'cx' => (string) $c['cx'], 'q' => $q, 'num' => $num, 'hl' => $lang, 'safe' => 'active']);
+                    $r = Http::timeout(8)->get('https://www.googleapis.com/customsearch/v1', ['key' => $key, 'cx' => (string) $c['cx'], 'q' => $q, 'num' => $num, 'hl' => $lang, 'safe' => 'active', 'start' => ($page - 1) * $num + 1]);
                     $this->ok($r);
                     return $this->shape((array) ($r->json('items') ?? []), 'title', 'link', 'snippet');
                 case 'searxng':
-                    $r = Http::timeout(10)->acceptJson()->get(rtrim((string) $c['url'], '/') . '/search', ['q' => $q, 'format' => 'json', 'language' => $lang, 'safesearch' => 1]);
+                    $r = Http::timeout(10)->acceptJson()->get(rtrim((string) $c['url'], '/') . '/search', ['q' => $q, 'format' => 'json', 'language' => $lang, 'safesearch' => 1, 'pageno' => $page]);
                     $this->ok($r);
                     return array_slice($this->shape((array) ($r->json('results') ?? []), 'title', 'url', 'content'), 0, $num);
                 default: // serper
                     $r = Http::timeout(8)->withHeaders(['X-API-KEY' => $key])->asJson()
-                        ->post('https://google.serper.dev/search', ['q' => $q, 'num' => $num, 'hl' => $lang]);
+                        ->post('https://google.serper.dev/search', ['q' => $q, 'num' => $num, 'hl' => $lang, 'page' => $page]);
                     $this->ok($r);
                     return $this->shape((array) ($r->json('organic') ?? []), 'title', 'link', 'snippet');
             }
@@ -70,7 +71,7 @@ class WebSearchService
         }
         // الكاش بيتفتّح بالمزوّد + العنوان + بصمة المفتاح، فتغيير الإعدادات من الأدمن يسري فورًا.
         $fp = sha1(($c['provider'] ?? '') . '|' . ($c['url'] ?? '') . '|' . ($c['cx'] ?? '') . '|' . ($c['key'] ?? ''));
-        return Cache::remember('websearch:' . sha1($fp . "|$lang|$num|" . mb_strtolower($q)), 600, $run);
+        return Cache::remember('websearch:' . sha1($fp . "|$lang|$num|$page|" . mb_strtolower($q)), 600, $run);
     }
 
     /** a rejected key, a used-up quota or a provider outage must not look like "no results" (and must not be cached) */

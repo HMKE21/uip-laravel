@@ -620,7 +620,7 @@ class DriveApiController extends Controller
                 return $this->apiSuccess(['configured' => false, 'results' => []], 'Web search is not set up.');
             }
             try {
-                return $this->apiSuccess(['configured' => true, 'results' => $search->search($q, (string) $request->query('lang', 'en'))], 'Search results.');
+                return $this->apiSuccess(['configured' => true, 'results' => $search->search($q, (string) $request->query('lang', 'en'), 10, null, (int) $request->query('page', 1))], 'Search results.');
             } catch (\Throwable $e) { // provider down / quota used up: say so (the app offers the cloud browser instead); nothing is cached
                 \Illuminate\Support\Facades\Log::warning('web_search_failed', ['error' => $e->getMessage()]);
                 return $this->apiSuccess(['configured' => true, 'failed' => true, 'results' => []], 'Web search is unavailable right now.');
