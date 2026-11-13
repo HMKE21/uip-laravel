@@ -136,7 +136,7 @@ class DesktopSettingsApiController extends Controller
             return true;
         }
 
-        return $given !== '' && Hash::check($given, $user->password_hash);
+        return $given !== '' && password_verify($given, (string) $user->password_hash);
     }
 
     private function badNewPassword(Request $request): ?JsonResponse
@@ -444,7 +444,7 @@ class DesktopSettingsApiController extends Controller
         }
         $row = $this->row($uid);
         $given = (string) $request->input('password', '');
-        if (!empty($row->lock_hash) && !$this->lockOk($row, $given) && !($given !== '' && !empty($user->password_hash) && Hash::check($given, $user->password_hash))) {
+        if (!empty($row->lock_hash) && !$this->lockOk($row, $given) && !($given !== '' && !empty($user->password_hash) && password_verify($given, (string) $user->password_hash))) {
             return $this->wrong($uid, $ar, $ar ? 'الباسورد غير صحيح.' : 'Incorrect password.');
         }
         DB::table('desktop_settings')->where('user_id', $uid)->update(['lock_hash' => null, 'lock_changed_at' => now(), 'updated_at' => now()]);

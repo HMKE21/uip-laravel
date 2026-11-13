@@ -76,7 +76,7 @@ class LibraryLockApiController extends Controller
             return true;
         }
 
-        return $given !== '' && Hash::check($given, $user->password_hash);
+        return $given !== '' && password_verify($given, $user->password_hash);
     }
 
     /** باسورد القفل الحالي صح؟ حسب الوضع. لو وضع "جهازي" وقفل جهازي اتشال بيرجع false (والحل باسورد الحساب). */
@@ -86,17 +86,17 @@ class LibraryLockApiController extends Controller
             return false;
         }
         if ($row->mode === 'own') {
-            return !empty($row->lock_hash) && Hash::check($given, $row->lock_hash);
+            return !empty($row->lock_hash) && password_verify($given, $row->lock_hash);
         }
         if ($row->mode === 'mypc') {
             $h = $this->desktopHash($uid);
 
-            return $h !== null && Hash::check($given, $h);
+            return $h !== null && password_verify($given, $h);
         }
 
         $user = $this->user($uid);
 
-        return $this->hasAccountPassword($user) && Hash::check($given, $user->password_hash);
+        return $this->hasAccountPassword($user) && password_verify($given, $user->password_hash);
     }
 
     private function blocked(int $uid, bool $ar): ?JsonResponse
@@ -206,7 +206,7 @@ class LibraryLockApiController extends Controller
         }
         $useAccount = filter_var($request->input('use_account', false), FILTER_VALIDATE_BOOLEAN);
         $ok = ($useAccount || $row->mode === 'account' || ($row->mode === 'mypc' && $this->desktopHash($uid) === null))
-            ? ($this->hasAccountPassword($user) && Hash::check($given, $user->password_hash))
+            ? ($this->hasAccountPassword($user) && password_verify($given, $user->password_hash))
             : $this->secretOk($row, $uid, $given);
         if (!$ok) {
             return $this->wrong($uid, $ar, $useAccount || $row->mode === 'account'
@@ -230,7 +230,7 @@ class LibraryLockApiController extends Controller
         if ($row) {
             $given = (string) $request->input('password', '');
             $ok = $this->secretOk($row, $uid, $given)
-                || ($this->hasAccountPassword($user) && $given !== '' && Hash::check($given, $user->password_hash));
+                || ($this->hasAccountPassword($user) && $given !== '' && password_verify($given, $user->password_hash));
             if (!$ok) {
                 return $this->wrong($uid, $ar, $ar ? 'الباسورد غير صحيح.' : 'Incorrect password.');
             }
