@@ -92,6 +92,7 @@ use App\Http\Controllers\Api\ConversationTrashController;
 use App\Http\Controllers\Api\AccountPrivacyApiController;
 use App\Http\Controllers\Api\ChatWallpapersApiController;
 use App\Http\Controllers\Api\DesktopSettingsApiController;
+use App\Http\Controllers\Api\LibraryLockApiController;
 use App\Http\Controllers\Api\DesktopVirtualModeApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
@@ -2134,6 +2135,14 @@ Route::prefix('v1')->group(function () {
         Route::get('/', [ChatWallpapersApiController::class, 'index'])->middleware('throttle:120,1');
         Route::post('/', [ChatWallpapersApiController::class, 'store'])->middleware('throttle:30,1');
         Route::delete('{uid}', [ChatWallpapersApiController::class, 'destroy'])->where('uid', '[a-z0-9]{6,24}')->middleware('throttle:60,1');
+    });
+
+    // قفل "مكتبتي" الاختياري (باسورد خاص / باسورد الحساب / باسورد قفل جهازي) — راجع LibraryLockApiController.
+    Route::prefix('library-lock')->middleware('uip.auth')->group(function () {
+        Route::get('/', [LibraryLockApiController::class, 'show'])->middleware('throttle:120,1');
+        Route::post('/set', [LibraryLockApiController::class, 'set'])->middleware('throttle:20,1');
+        Route::post('/verify', [LibraryLockApiController::class, 'verify'])->middleware('throttle:30,1');
+        Route::post('/disable', [LibraryLockApiController::class, 'disable'])->middleware('throttle:20,1');
     });
 
     // إعدادات سطح المكتب ("جهازي") + باسورد شاشة القفل — بتتابع الطالب على أي جهاز. راجع DesktopSettingsApiController.
