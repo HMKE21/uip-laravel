@@ -267,11 +267,14 @@ class MeetingSignalingService
             app(\App\Services\MeetingRemoteControlService::class)->stopIfInvolved($meeting, $actor['key']);
         }
 
+        // رسالة الشات (insert + broadcast لـ Reverb) كانت بتتنفّذ جوه الطلب وتبطّأ الرد؛ دلوقتي بعد ما الرد يتبعت.
         if ($this->chat) {
+            $chat = $this->chat;
+            $name = $actor['display_name'];
             if (!$wasSharing && $model->screen_sharing) {
-                $this->chat->postSystemMessage($meeting, $actor['display_name'] . ' started sharing their screen');
+                app()->terminating(fn () => $chat->postSystemMessage($meeting, $name . ' started sharing their screen'));
             } elseif ($wasSharing && !$model->screen_sharing) {
-                $this->chat->postSystemMessage($meeting, $actor['display_name'] . ' stopped sharing their screen');
+                app()->terminating(fn () => $chat->postSystemMessage($meeting, $name . ' stopped sharing their screen'));
             }
         }
 
