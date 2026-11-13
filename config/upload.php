@@ -10,6 +10,8 @@
 
 return [
     'max_size_kb' => (int) env('UPLOAD_MAX_KB', 10240),
+    // السقف العام للملف الواحد (KB) في الشات والملفات العامة. فاضي أو 0 = من غير حد. (سياسة الأدمن المحفوظة في الداتابيز بتغلب القيمة دي.)
+    'policy_max_kb' => max(0, (int) env('UPLOAD_POLICY_MAX_KB', 0)),
     // Spec section 13 "Virus/Malware Scanning". Shells out to a ClamAV CLI
     // binary (clamscan or, for large deployments, clamdscan talking to a
     // running clamd) against every uploaded file — this config lives in

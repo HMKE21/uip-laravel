@@ -56,7 +56,7 @@ class ChunkedUploadService
         if ($name === '' || $size <= 0) {
             throw new \InvalidArgumentException('File name and size are required.');
         }
-        if ($size > $max) {
+        if ($max > 0 && $size > $max) { // 0 = من غير حد
             throw new \RuntimeException('File is larger than the allowed ' . round($max / 1048576) . ' MB.');
         }
 
@@ -68,8 +68,9 @@ class ChunkedUploadService
 
         // الملفات الكبيرة (> 25MB) للوسائط والأرشيف والمستندات الثنائية بس — svg/json/كود بيتقرأوا كاملين في الذاكرة عند الفحص.
         $bulky = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'ogg', 'm4a', 'zip', 'rar', '7z', 'pdf', 'docx', 'xlsx', 'pptx'];
-        if ($size > 25 * 1048576 && !in_array($ext, $bulky, true)) {
-            throw new \RuntimeException('Files of this type cannot be larger than 25 MB.');
+        $nonBulkyMb = (int) $this->cfg('non_bulky_max_mb'); // 0 = من غير حد
+        if ($nonBulkyMb > 0 && $size > $nonBulkyMb * 1048576 && !in_array($ext, $bulky, true)) {
+            throw new \RuntimeException('Files of this type cannot be larger than ' . $nonBulkyMb . ' MB.');
         }
 
         $this->prune();

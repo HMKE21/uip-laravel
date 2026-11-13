@@ -66,7 +66,8 @@ class PostMediaService
         $limitKb = (int) PostSettings::get('max_file_mb') * 1024;
         $absoluteMaxKb = null;
         if ($file instanceof ChunkedUploadedFile) {
-            $absoluteMaxKb = min($limitKb, (int) floor((int) config('messaging.chunked.max_bytes') / 1024));
+            $chunkKb = (int) floor((int) config('messaging.chunked.max_bytes') / 1024); // 0 = من غير حد
+            $absoluteMaxKb = $chunkKb > 0 ? ($limitKb > 0 ? min($limitKb, $chunkKb) : $chunkKb) : $limitKb;
         }
         $stored = $this->uploads->store($file, 'posts', 'u_' . $uid, $limitKb, null, $absoluteMaxKb);
 

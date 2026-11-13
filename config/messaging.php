@@ -7,20 +7,23 @@
  * override إداري.
  */
 return [
-    'max_message_length' => 8000,
-    'max_attachments_per_message' => 10,
+    // كل الحدود هنا من الـ .env، و0 (أو فاضي) = من غير حد. السيرفر مبيفرضش أي حد مش إنت اللي ظبطته.
+    'max_message_length' => (int) env('MESSAGING_MAX_MESSAGE_LENGTH', 0),          // عدد الحروف في الرسالة
+    'max_attachments_per_message' => (int) env('MESSAGING_MAX_ATTACHMENTS', 0),    // عدد الملفات في الرسالة الواحدة
 
     // رفع الملفات الكبيرة على أجزاء (زي تيليجرام): الفيديو بيتقسّم لقطع 3MB (أقل من حد 4.5MB بتاع Vercel)، كل قطعة بتتعاد لوحدها
     // لو النت قطع، والرفع بيكمّل من آخر قطعة. MESSAGING_MAX_UPLOAD_MB = أقصى حجم للملف الواحد (الافتراضي 2GB).
     'chunked' => [
-        'max_bytes'   => (int) env('MESSAGING_MAX_UPLOAD_MB', 2048) * 1024 * 1024,
+        'max_bytes'   => (int) env('MESSAGING_MAX_UPLOAD_MB', 0) * 1024 * 1024,   // 0 = من غير حد لحجم الملف
+        // ملفات الـ svg/json/كود بتتقرا كاملة في الذاكرة عند الفحص؛ لو عايز سقف ليها ضيف رقم (MB). 0 = من غير حد.
+        'non_bulky_max_mb' => (int) env('MESSAGING_NONBULKY_MAX_MB', 0),
         'chunk_bytes' => 3 * 1024 * 1024,
         'ttl_hours'   => 24,
     ],
 
     'rate_limit' => [
-        'max_messages'    => 30,
-        'window_seconds'  => 60,
+        'max_messages'    => (int) env('MESSAGING_RATE_MAX', 0),            // 0 = من غير حد لسرعة الإرسال
+        'window_seconds'  => (int) env('MESSAGING_RATE_WINDOW', 60),
     ],
 
     'edit_window_minutes' => 0, // 0 = بدون حد زمني للتعديل

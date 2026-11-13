@@ -50,13 +50,18 @@ class FileUploadService
         }
 
         // السياسة سقف عام: الـ override الخاص بكل فئة ممكن يضيّق بس مش يوسّع فوق سقف الأدمن.
+        // أي قيمة <= 0 معناها "من غير حد". السقف بيتطبق بس لو إنت ظبطته (من الـ .env أو من سياسة الأدمن).
         $policyMaxKb = $this->uploadPolicy->defaultMaxKb();
-        $maxKb = $maxKbOverride !== null ? min($maxKbOverride, $policyMaxKb) : $policyMaxKb;
+        if ($maxKbOverride !== null && $maxKbOverride > 0) {
+            $maxKb = $policyMaxKb > 0 ? min($maxKbOverride, $policyMaxKb) : $maxKbOverride;
+        } else {
+            $maxKb = $policyMaxKb;
+        }
         // ملفات الرفع بالأجزاء ليها سقفها الخاص (config messaging.chunked.max_bytes) بدل سقف السياسة العام.
         if ($absoluteMaxKb !== null) {
             $maxKb = $absoluteMaxKb;
         }
-        $maxBytes = $maxKb * 1024;
+        $maxBytes = $maxKb > 0 ? $maxKb * 1024 : PHP_INT_MAX;
         // مُتسجّل هنا قبل move() — UploadedFile::move() بينقل ملف الـ tmp
         // فعليًا (rename) وبيرجّع كائن File جديد للمسار الجديد، من غير ما
         // يعدّل $file نفسها. فأي getSize()/getRealPath() على $file بعد

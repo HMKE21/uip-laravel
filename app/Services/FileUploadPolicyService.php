@@ -17,7 +17,7 @@ class FileUploadPolicyService
     private const POLICY_KEY = 'upload.policy';
 
     private const DEFAULTS = [
-        'max_size_kb'         => 51200,
+        'max_size_kb'         => 0, // 0 = من غير حد؛ بتتغير من UPLOAD_POLICY_MAX_KB (config/upload.php) أو من شاشة Security Policies
         'restrict_extensions' => false,
         'allowed_extensions'  => 'pdf,doc,docx,xls,xlsx,ppt,pptx,jpg,jpeg,png,webp,gif,svg,zip,rar,csv,json,xml',
     ];
@@ -39,7 +39,9 @@ class FileUploadPolicyService
                 $stored = $decoded;
             }
         }
-        return array_merge(self::DEFAULTS, $stored);
+        $defaults = self::DEFAULTS;
+        $defaults['max_size_kb'] = max(0, (int) config('upload.policy_max_kb', 0));
+        return array_merge($defaults, $stored);
     }
 
     /** @throws \InvalidArgumentException on bad input */
@@ -48,8 +50,8 @@ class FileUploadPolicyService
         $before = $this->getPolicy();
 
         $maxKb = (int) ($input['max_size_kb'] ?? 0);
-        if ($maxKb < 1 || $maxKb > 512000) {
-            throw new \InvalidArgumentException('Maximum upload size must be between 1 KB and 512000 KB (500 MB).');
+        if ($maxKb < 0) {
+            throw new \InvalidArgumentException('Maximum upload size cannot be negative (use 0 for no limit).');
         }
 
         $extensionsRaw = trim((string) ($input['allowed_extensions'] ?? ''));

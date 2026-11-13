@@ -354,8 +354,8 @@ class MessagingService
         $this->assertNotBlocked($conversationId, (int) $userId);
         $this->assertPeerAcceptsMessages($conversationId, (int) $userId);
 
-        $maxLen = (int) config('messaging.max_message_length', 8000);
-        if (mb_strlen($body) > $maxLen) {
+        $maxLen = (int) config('messaging.max_message_length', 0); // 0 = من غير حد
+        if ($maxLen > 0 && mb_strlen($body) > $maxLen) {
             throw new \RuntimeException("Message is too long (max {$maxLen} characters).");
         }
 
@@ -418,9 +418,9 @@ class MessagingService
                 $this->messages->recordMention((int) $message->id, $mentionedId);
             }
 
-            $maxAttachments = (int) config('messaging.max_attachments_per_message', 10);
+            $maxAttachments = (int) config('messaging.max_attachments_per_message', 0); // 0 = من غير حد
             if ($hasAttachments) {
-                if (count($options['attachments']) > $maxAttachments) {
+                if ($maxAttachments > 0 && count($options['attachments']) > $maxAttachments) {
                     throw new \RuntimeException("You can attach at most {$maxAttachments} files per message.");
                 }
                 foreach (array_values($options['attachments']) as $i => $file) {
@@ -848,7 +848,10 @@ class MessagingService
     /** Rate Limiting / Spam Protection — بيرمي لو اليوزر بعت رسايل كتير أوي في النافذة الزمنية المضبوطة. */
     private function assertNotRateLimited($userId): void
     {
-        $cfg = config('messaging.rate_limit', ['max_messages' => 30, 'window_seconds' => 60]);
+        $cfg = config('messaging.rate_limit', ['max_messages' => 0, 'window_seconds' => 60]);
+        if ((int) ($cfg['max_messages'] ?? 0) <= 0) {
+            return; // 0 = الحماية من سرعة الإرسال مقفولة
+        }
         $since = date('Y-m-d H:i:s', time() - (int) $cfg['window_seconds']);
         if ($this->messages->countSentSince($userId, $since) >= (int) $cfg['max_messages']) {
             throw new \RuntimeException('You are sending messages too fast. Please wait a moment and try again.');
