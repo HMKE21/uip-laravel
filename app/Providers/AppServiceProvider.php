@@ -65,6 +65,10 @@ class AppServiceProvider extends ServiceProvider
         $isAdmin = static fn (Request $r): bool => $r->attributes->get('uip_role') === 'admin';
         RateLimiter::for('admin-control-test', fn (Request $r) => $isAdmin($r) ? Limit::none() : Limit::perMinute(20)->by('act|' . $adminActor($r)));
         RateLimiter::for('admin-control-write', fn (Request $r) => $isAdmin($r) ? Limit::none() : Limit::perMinute(120)->by('acw|' . $adminActor($r)));
+        // أزرار الطوارئ/الإجراءات الخطيرة (إنهاء كل الاجتماعات، سحب كل الروابط، مسح…): كانت throttle:5,1 بدون اسم = عدّاد
+        // واحد على الـ IP مشترك مع أي throttle بدون اسم تاني (والـ IP ممكن يكون IP الـ proxy بتاع Vercel)، فالأدمن كان بياخد
+        // 429 "محاولات كتير" من أول ضغطة. دلوقتي العدّاد على الأدمن نفسه، وسقف معقول (مش Limit::none عشان الإجراء خطير).
+        RateLimiter::for('admin-control-emergency', fn (Request $r) => Limit::perMinute($isAdmin($r) ? 30 : 5)->by('ace|' . $adminActor($r)));
 
         // Settings saved on Admin → Platform Policy override the matching .env values at runtime (unset ones keep the .env value).
         \App\Support\PlatformPolicy::applyRuntimeConfig();

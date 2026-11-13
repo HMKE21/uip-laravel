@@ -181,6 +181,12 @@ class MeetingsSignalingApiController extends Controller
             return $actor;
         }
 
+        // الاجتماع خلص (الأدمن/المضيف) والـ broadcast ممكن ما يوصلش: ما نجدّدش حضور المشارك (ده كان بيرجّعه "متصل" كل 25 ثانية)،
+        // ونرجّع الحالة عشان الكلاينت يخرج من الغرفة.
+        if (in_array($meeting->status, ['ended', 'cancelled'], true)) {
+            return $this->apiSuccess(['meeting_status' => $meeting->status], 'Meeting is not live.');
+        }
+
         try {
             $this->signaling->touchSession($meeting, $actor, $request->input('session_id'));
         } catch (\App\Exceptions\MeetingSessionConflictException $e) {

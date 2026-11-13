@@ -1080,7 +1080,7 @@ Route::prefix('v1')->group(function () {
 
             Route::get('audit', [$c, 'audit']);
             Route::get('audit/{id}', [$c, 'auditShow'])->where('id', '[0-9]+');
-            Route::post('emergency/end-all-live', [$c, 'endAllLive'])->middleware('throttle:5,1');
+            Route::post('emergency/end-all-live', [$c, 'endAllLive'])->middleware('throttle:admin-control-emergency');
 
             Route::get('meetings', [$c, 'meetings']);
             Route::prefix('meetings/{uuid}')->where(['uuid' => '[0-9a-fA-F-]{36}'])->group(function () use ($c) {
@@ -1093,8 +1093,8 @@ Route::prefix('v1')->group(function () {
                 Route::post('lock', [$c, 'lock']);
                 Route::post('screen-share-lock', [$c, 'screenShareLock']);
                 Route::post('regenerate-link', [$c, 'regenerateLink']);
-                Route::post('announce', [$c, 'announce'])->middleware('throttle:20,1');
-                Route::post('participants/action', [$c, 'participantAction'])->middleware('throttle:120,1');
+                Route::post('announce', [$c, 'announce'])->middleware('throttle:admin-control-write');
+                Route::post('participants/action', [$c, 'participantAction'])->middleware('throttle:admin-control-write');
                 Route::delete('files/{fileId}', [$c, 'deleteFile'])->where('fileId', '[0-9]+');
                 Route::delete('recordings/{recordingId}', [$c, 'deleteRecording'])->where('recordingId', '[0-9]+');
             });
@@ -1127,7 +1127,7 @@ Route::prefix('v1')->group(function () {
             Route::post('files/restore', [$c, 'restore'])->middleware('throttle:60,1');
             Route::post('files/purge', [$c, 'purge'])->middleware('throttle:60,1');
             Route::post('trash/empty', [$c, 'emptyTrash'])->middleware('throttle:20,1');
-            Route::post('wipe', [$c, 'wipe'])->middleware('throttle:5,1');
+            Route::post('wipe', [$c, 'wipe'])->middleware('throttle:admin-control-emergency');
         });
 
         Route::get('files', [$c, 'searchFiles']);
@@ -1143,10 +1143,10 @@ Route::prefix('v1')->group(function () {
             Route::post('clear-activity', [$c, 'shareClearActivity']);
             Route::delete('/', [$c, 'shareDelete']);
         });
-        Route::post('emergency/revoke-all-shares', [$c, 'revokeAllShares'])->middleware('throttle:5,1');
+        Route::post('emergency/revoke-all-shares', [$c, 'revokeAllShares'])->middleware('throttle:admin-control-emergency');
 
         Route::get('audit', [$c, 'audit']);
-        Route::post('maintenance/purge-trash', [$c, 'purgeTrash'])->middleware('throttle:5,1');
+        Route::post('maintenance/purge-trash', [$c, 'purgeTrash'])->middleware('throttle:admin-control-emergency');
         Route::get('maintenance/missing-files', [$c, 'missingFiles'])->middleware('throttle:10,1');
     });
 

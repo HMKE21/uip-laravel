@@ -209,6 +209,13 @@ class MeetingService
         $this->attendance?->persistMissingSessions($meeting);
         $this->attendance?->closeAllOpenSessions($meeting);
 
+        // قبل كده بنقفل جلسات الحضور بس، فصف المشارك كان يفضل joined/connected و"متواجدين الآن" في لوحة الأدمن يفضل 1 بعد إنهاء الاجتماع.
+        $leftAt = $meeting->ended_at ?? now();
+        \App\Models\MeetingParticipant::where('meeting_id', $meeting->id)->where('status', 'joined')
+            ->update(['status' => 'left', 'connection_state' => 'disconnected', 'left_at' => $leftAt]);
+        \App\Models\MeetingJoinRequest::where('meeting_id', $meeting->id)->where('status', 'admitted')
+            ->update(['status' => 'left', 'connection_state' => 'disconnected', 'left_at' => $leftAt]);
+
         $this->notifyParticipants(
             $meeting,
             'meeting_ended',
