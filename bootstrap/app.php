@@ -21,6 +21,26 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 
+/*
+ * Self-healing guard: bootstrap/cache/{packages,services}.php are machine-generated. If a deploy (git pull / reset / upload)
+ * brings back copies built on a dev machine that list dev-only packages (e.g. Laravel Pail) missing from this server's vendor/,
+ * every request dies with 'Class "Laravel\Pail\PailServiceProvider" not found'. Delete such stale files; Laravel rebuilds them.
+ */
+(static function (): void {
+    $root = dirname(__DIR__);
+    foreach (['laravel/pail' => 'Laravel\\\\Pail\\\\'] as $package => $needle) {
+        if (is_dir($root . '/vendor/' . $package)) {
+            continue; // installed here: the cache is fine
+        }
+        foreach (['packages', 'services'] as $name) {
+            $file = $root . '/bootstrap/cache/' . $name . '.php';
+            if (is_file($file) && strpos((string) @file_get_contents($file), $needle) !== false) {
+                @unlink($file);
+            }
+        }
+    }
+})();
+
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
         channels: __DIR__.'/../routes/channels.php',
