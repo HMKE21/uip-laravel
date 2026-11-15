@@ -35,6 +35,13 @@ return [
         'api_key'  => env('AI_IMAGE_API_KEY', ''),
         'api'      => env('AI_IMAGE_API', 'auto'),
         'timeout'  => (int) env('AI_IMAGE_TIMEOUT', 120),
+        // Cloudflare flux-1-schnell: عدد الخطوات 1..8 (الأعلى = جودة أحسن واستهلاك أكبر من الكوتا المجانية).
+        'steps'    => (int) env('AI_IMAGE_STEPS', 6),
+        // سياق المنصة بيتبعت لمهندس البرومت (استخدمه لما الطلب عن المنصة نفسها: لوجو/بوستر/بانر).
+        'brand_context' => env('AI_IMAGE_BRAND_CONTEXT',
+            'UIPE is a university campus platform ("One Platform. Endless Connections."): chat, video meetings, courses and exams, projects, community, AI tutor. '
+            . 'Brand look: deep navy blue (#0B2A6F) with a warm orange/amber accent swoosh, indigo/violet (#4F2CF5) call-to-action color, '
+            . 'modern, friendly, academic, trustworthy, clean sans-serif typography. The brand name is written "UIPE" (Latin letters).'),
     ],
 
     // ترجمة الفيديو التلقائية (VideoPlayer ← POST /api/v1/subtitles/auto): تفريغ الصوت بـ Whisper ثم ترجمة النص.

@@ -56,7 +56,7 @@ class ImageClient
 
         if ($this->api === 'cloudflare') {
             $path = '/' . ltrim($this->model, '/');
-            $payload = ['prompt' => mb_substr($prompt, 0, 2000), 'steps' => 4];
+            $payload = ['prompt' => mb_substr($prompt, 0, 2000), 'steps' => max(1, min(8, (int) config('ai.image.steps', 6)))];
         } elseif ($this->api === 'images') {
             $path = $this->imagesPath;
             $payload = ['model' => $this->model, 'prompt' => $prompt, 'n' => 1];

@@ -405,27 +405,72 @@ class AiAssistantService
     }
 
     /**
-     * موديلات الصور (FLUX/SDXL...) أقوى بكتير بالإنجليزي. بنخلّي موديل الشات يحوّل طلب اليوزر (عربي مثلًا)
-     * لوصف إنجليزي مفصّل للصورة. لو فشل (كوتا/خطأ) بنكمّل بالنص الأصلي — التحسين مش شرط.
+     * موديلات الصور (FLUX/SDXL...) أقوى بكتير بالإنجليزي ومع وصف مفصّل. بنخلّي موديل الشات يشتغل كـ "Art Director":
+     * يحدّد نوع الطلب (لوجو/بوستر/أيقونة/صورة…) ويطبّق قواعد التصميم المناسبة ويرجّع برومت إنجليزي واحد.
+     * لو فشل (كوتا/خطأ) بنكمّل ببرومت مبني بالقواعد (heuristicImagePrompt) — التحسين مش شرط.
      */
     private function englishImagePrompt(string $request): string
     {
         $request = trim(preg_replace('#^/(?:image|img|imagine|صورة|صوره)\s+#iu', '', $request));
+        $brand = trim((string) config('ai.image.brand_context', ''));
+        $system = <<<'SYS'
+You are a senior art director writing prompts for a FLUX text-to-image model. Convert the user's request (any language, often Arabic) into ONE English image prompt of 45-90 words.
+
+STEP 1 - Detect the type: logo / brand mark, icon, poster or banner, avatar or profile picture, illustration, product or photo, background or wallpaper, diagram-like infographic.
+
+STEP 2 - Apply the rules for that type:
+- LOGO: "professional flat vector logo design", simple bold geometric shapes, ONE clear central symbol, balanced and centered, solid or very subtle two-tone palette, crisp clean edges, scalable, plain white or flat solid background, brand-identity style. Not a 3D render, not a photo, not a mockup, no clutter.
+- ICON / AVATAR: single centered subject, flat or soft-3D style, rounded friendly shapes, clean solid or soft gradient background.
+- POSTER / BANNER: strong focal point, clear visual hierarchy, generous empty space for text, cohesive 2-3 color palette, modern editorial layout.
+- ILLUSTRATION: state the art style explicitly (flat vector, isometric, watercolor, 3D clay, line art...), scene, composition, color palette, mood.
+- PHOTO / PRODUCT: realistic photography, camera and lens (e.g. 50mm, shallow depth of field), lighting (soft studio / golden hour), composition, high detail.
+- BACKGROUND / WALLPAPER: abstract or scenic, soft depth, no focal clutter, balanced colors.
+
+STEP 3 - Hard rules:
+1. FLUX has NO negative prompt. Never write "no", "without", "don't", "avoid". Describe what you want positively instead (e.g. "plain white background" instead of "no background clutter").
+2. TEXT inside the image: only include text if the user asked for it. Keep it to 1-3 short words, put it in double quotes with the exact spelling and say how it is rendered (e.g. 'the word "UIPE" in bold modern sans-serif letters, centered'). If the requested text is Arabic or long, do NOT put it in the image; design a purely symbolic image and let the caller add text later.
+3. The user's explicit details (colors, style, objects, names) always win over your defaults. Never contradict them.
+4. If the user gives no style, choose one that fits an educational / professional platform: modern, clean, trustworthy, friendly.
+5. Do not depict real people, celebrities, politicians, or copyrighted characters and logos; replace them with a generic equivalent.
+6. Never add watermarks, signatures, or fake UI.
+7. Output the prompt only, as a single paragraph. No quotes around it, no markdown, no explanations, no preface.
+SYS;
+        if ($brand !== '') {
+            $system .= "\n\nPLATFORM CONTEXT (use ONLY when the request is about this platform or its brand, never force it otherwise):\n" . $brand;
+        }
         try {
-            $out = $this->client->complete(
-                'You write prompts for a text-to-image model. Convert the user\'s request (any language) into ONE detailed English image prompt (max 60 words): subject, style, composition, colors, lighting. '
-                . 'If the user wants text/a name in the image, keep that exact text in quotes. Reply with the prompt only — no quotes around it, no explanations.',
-                $request,
-                0.7
-            );
-            $out = trim($out, " \t\n\r\0\x0B\"'");
-            if ($out !== '' && mb_strlen($out) <= 1500) {
+            $out = $this->client->complete($system, $request, 0.5);
+            $out = trim(preg_replace('/^```[a-z]*\s*|\s*```$/i', '', trim($out)), " \t\n\r\0\x0B\"'");
+            if ($out !== '' && mb_strlen($out) >= 20 && mb_strlen($out) <= 1500) {
                 return $out;
             }
         } catch (\Throwable $e) {
             Log::notice('Image prompt enhancement skipped', ['error' => $e->getMessage()]);
         }
-        return $request;
+        return $this->heuristicImagePrompt($request);
+    }
+
+    /**
+     * خطة بديلة بدون موديل: بتحدّد النوع بالكلمات وتضيف مفردات جودة مناسبة للنوع. الطلب الأصلي بيفضل في الأول.
+     */
+    private function heuristicImagePrompt(string $request): string
+    {
+        $r = mb_strtolower($request);
+        $has = fn (string $re) => (bool) preg_match($re . 'u', $r);
+        if ($has('/(لوجو|لوغو|شعار|logo|brand ?mark|emblem)/')) {
+            $suffix = 'professional flat vector logo design, simple bold geometric shapes, one clear central symbol, balanced and centered, clean crisp edges, limited two-tone color palette, plain white background, modern brand identity';
+        } elseif ($has('/(ايقونة|أيقونة|icon|avatar|افاتار|أفاتار)/')) {
+            $suffix = 'single centered subject, flat modern icon style, rounded friendly shapes, clean soft background, high contrast, crisp edges';
+        } elseif ($has('/(بوستر|ملصق|بانر|banner|poster|flyer)/')) {
+            $suffix = 'modern poster design, strong focal point, clear visual hierarchy, generous empty space for text, cohesive three-color palette, clean editorial layout';
+        } elseif ($has('/(خلفية|wallpaper|background)/')) {
+            $suffix = 'smooth abstract background, soft depth, balanced harmonious colors, subtle gradients, high resolution';
+        } elseif ($has('/(صورة واقعية|photo|photograph|realistic|فوتو)/')) {
+            $suffix = 'realistic photography, 50mm lens, shallow depth of field, soft natural lighting, high detail, sharp focus';
+        } else {
+            $suffix = 'highly detailed, balanced composition, harmonious color palette, soft cinematic lighting, sharp focus, professional quality';
+        }
+        return mb_substr($request . '. ' . $suffix, 0, 1500);
     }
 
     private function imageClient(): ImageClient
