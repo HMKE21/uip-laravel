@@ -18,6 +18,7 @@ class AIClient
     private string $baseUrl;
     private string $apiKey;
     private string $model;
+    private ?string $finishReason = null;
     private int $timeout;
 
     public function __construct()
@@ -132,6 +133,12 @@ class AIClient
         return $clone;
     }
 
+    /** آخر finish_reason من آخر ستريم ('stop' | 'length' | 'tool_calls' …) — 'length' = الرد اتقطع عند حد الـ max_tokens. */
+    public function finishReason(): ?string
+    {
+        return $this->finishReason;
+    }
+
     public function model(): string
     {
         return $this->model;
@@ -240,6 +247,7 @@ class AIClient
             throw new \RuntimeException('cURL extension is not available.');
         }
 
+        $this->finishReason = null;
         $payload = [
             'model'       => $this->model,
             'messages'    => $messages,
@@ -284,6 +292,10 @@ class AIClient
                         continue;
                     }
                     $decoded = json_decode($data, true);
+                    $fr = $decoded['choices'][0]['finish_reason'] ?? null;
+                    if (is_string($fr) && $fr !== '') {
+                        $this->finishReason = $fr;
+                    }
                     $delta = $decoded['choices'][0]['delta']['content'] ?? '';
                     if (is_string($delta) && $delta !== '') {
                         $fullText .= $delta;
@@ -312,6 +324,10 @@ class AIClient
         // كـ completion عادي ونبعته كـ "token" واحدة عشان المستهلك يفضل ياخد رد.
         if (!$sawSseLine && trim($buffer) !== '') {
             $decoded = json_decode($buffer, true);
+            $frPlain = is_array($decoded) ? ($decoded['choices'][0]['finish_reason'] ?? null) : null;
+            if (is_string($frPlain) && $frPlain !== '') {
+                $this->finishReason = $frPlain;
+            }
             $text = $decoded['choices'][0]['message']['content'] ?? null;
             if (is_string($text) && trim($text) !== '') {
                 $fullText = trim($text);
@@ -343,6 +359,7 @@ class AIClient
             throw new \RuntimeException('cURL extension is not available.');
         }
 
+        $this->finishReason = null;
         $payload = ['model' => $this->model, 'messages' => $messages, 'temperature' => $temperature, 'stream' => true];
         if ($maxTokens !== null) {
             $payload['max_tokens'] = $maxTokens;
@@ -416,6 +433,10 @@ class AIClient
                         continue;
                     }
                     $decoded = json_decode($data, true);
+                    $fr = is_array($decoded) ? ($decoded['choices'][0]['finish_reason'] ?? null) : null;
+                    if (is_string($fr) && $fr !== '') {
+                        $this->finishReason = $fr;
+                    }
                     if (is_array($decoded) && isset($decoded['choices'][0]['delta']) && is_array($decoded['choices'][0]['delta'])) {
                         $consumeDelta($decoded['choices'][0]['delta']);
                     }
@@ -443,6 +464,10 @@ class AIClient
         // المزوّد تجاهل stream:true ورجّع JSON واحد.
         if (!$sawSseLine && trim($buffer) !== '') {
             $decoded = json_decode($buffer, true);
+            $frPlain = is_array($decoded) ? ($decoded['choices'][0]['finish_reason'] ?? null) : null;
+            if (is_string($frPlain) && $frPlain !== '') {
+                $this->finishReason = $frPlain;
+            }
             $message = is_array($decoded) ? ($decoded['choices'][0]['message'] ?? null) : null;
             if (is_array($message)) {
                 $tcs = [];

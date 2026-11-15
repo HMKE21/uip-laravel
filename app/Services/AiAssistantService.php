@@ -44,6 +44,9 @@ class AiAssistantService
     private const MAX_FILES_PER_REPLY = 5;
 
     private AIClient $client;
+    private ?string $lastFinish = null;
+    private bool $lastTruncated = false;
+    private bool $fileCutNotice = false;
 
     public function __construct(
         AIClient $client,
@@ -323,11 +326,20 @@ class AiAssistantService
      * بيرمي (أبدًا مايختلقش رد) عند فشل المزوّد — الكنترولر بيخزن رسالة
      * status='error' ويظهرها لواجهة الشات.
      */
+    /** هل آخر رد اتقطع عند حد الطول؟ (الكنترولر بيبعتها في event الـ done عشان الواجهة تعرض زر «كمّل»). */
+    public function wasTruncated(): bool
+    {
+        return $this->lastTruncated;
+    }
+
     public function streamAssistantReply(int $userId, int $conversationId, int $assistantMessageId, array $promptMessages, string $portal, callable $onToken, ?string $role = null, ?callable $onEvent = null, string $locale = 'ar'): string
     {
         $settings = $this->adminSettings();
         $started = microtime(true);
         $usedTools = [];
+        $this->lastFinish = null;
+        $this->lastTruncated = false;
+        $this->fileCutNotice = false;
 
         // بلوكات <uipe-file> مابتتعرضش كنص: بتتحجب من الستريم وبتتحوّل لملف للتحميل بعد ما الرد يخلص.
         $fileFilter = new FileBlockStreamFilter(
@@ -403,10 +415,12 @@ class AiAssistantService
 
             $fileFilter->finish();
             $fullText = $this->finalizeGeneratedFiles($userId, $conversationId, $assistantMessageId, $fullText, $locale);
+            $this->lastTruncated = ($this->lastFinish === 'length') || $this->fileCutNotice;
 
             $message = $this->repo->findMessage($assistantMessageId);
             $message->fill(['content' => $fullText, 'status' => 'complete', 'answer_source' => 'ai']);
             $message->save();
+            $this->markTruncated($assistantMessageId, $this->lastTruncated);
 
             $this->logCall($userId, $conversationId, $portal, null, null, (int) round((microtime(true) - $started) * 1000), false, null);
             $this->auditToolUse($userId, $conversationId, $role, $usedTools);
@@ -630,7 +644,9 @@ SYS;
     {
         $defs = $this->toolsEnabledFor($role) ? $this->tools->definitionsFor($role) : [];
         if (!$defs) {
-            return $this->client->streamChat($promptMessages, $settings['temperature'], $settings['max_tokens'], $onToken);
+            $plainText = $this->client->streamChat($promptMessages, $settings['temperature'], $settings['max_tokens'], $onToken);
+            $this->lastFinish = $this->client->finishReason();
+            return $plainText;
         }
 
         $messages = $promptMessages;
@@ -652,13 +668,16 @@ SYS;
                     throw $e;
                 }
                 Log::notice('AI provider rejected tools; falling back to plain chat', ['error' => $e->getMessage()]);
-                return $this->client->streamChat($promptMessages, $settings['temperature'], $settings['max_tokens'], $onToken);
+                $plainText = $this->client->streamChat($promptMessages, $settings['temperature'], $settings['max_tokens'], $onToken);
+                $this->lastFinish = $this->client->finishReason();
+                return $plainText;
             }
 
             if (!$res['tool_calls'] || $lastRound) {
                 if (trim($res['text']) === '') {
                     throw new \RuntimeException('AI provider returned an empty completion.');
                 }
+                $this->lastFinish = $this->client->finishReason();
                 return $res['text'];
             }
 
@@ -862,6 +881,7 @@ SYS;
         $message->fill(['status' => 'streaming', 'content' => '', 'error_message' => null]);
         $message->save();
         $this->deleteGeneratedFiles($assistantMessageId);
+        $this->markTruncated($assistantMessageId, false);
 
         $history = $this->repo->messagesForConversation($conversationId);
         $promptMessages = $this->buildPromptMessages($history, $assistantMessageId, $context, null, null);
@@ -876,6 +896,16 @@ SYS;
     {
         [$base, $ext] = GeneratedFileBuilder::sanitizeName($name);
         return ($locale === 'en' ? 'Preparing ' : 'جاري تجهيز ') . $base . '.' . $ext;
+    }
+
+    /** علامة "الرد اتقطع" على الرسالة (عمود is_truncated). best-effort: لو الـ migration لسه ماشتغلتش مابيكسرش الرد. */
+    private function markTruncated(int $messageId, bool $truncated): void
+    {
+        try {
+            \Illuminate\Support\Facades\DB::table('ai_messages')->where('id', $messageId)->update(['is_truncated' => $truncated ? 1 : 0]);
+        } catch (\Throwable $e) {
+            Log::notice('ai_messages.is_truncated not updated', ['error' => $e->getMessage()]);
+        }
     }
 
     /** مرفقات رسالة الـ assistant بعد ما الرد خلص (الكنترولر بيبعتها في event الـ done). */
@@ -938,6 +968,7 @@ SYS;
                 : '⚠️ At most ' . self::MAX_FILES_PER_REPLY . ' files per reply — ask for the rest in a new message.');
         }
         if ($truncated) {
+            $this->fileCutNotice = true;
             $clean .= "\n\n" . ($ar
                 ? '⚠️ الملف اتقطع قبل ما يكتمل (الرد أطول من الحد المسموح). اطلب مني أكمله أو أقسمه على أكتر من ملف.'
                 : '⚠️ The file was cut off before it was complete (the reply hit the length limit). Ask me to continue or split it into several files.');
@@ -1381,6 +1412,8 @@ SYS;
         }
 
         $parts[] = $this->fileCreationRules();
+        $parts[] = "QUOTED REPLIES\n- If the user's message starts with a Markdown quote (lines beginning with \">\"), the quote is the exact part of an earlier reply (yours or theirs) "
+            . "that they selected; the text after the quote is their question about it. Answer about THAT passage specifically and keep it short.";
 
         $parts[] = 'Respond in the same language the user writes in (Arabic or English) unless asked to switch. '
             . 'Use Markdown formatting (headings, lists, tables, fenced code blocks with a language tag) where it '
@@ -1492,6 +1525,7 @@ SYS;
             'status'             => $row['status'],
             'error_message'      => $row['error_message'] ?? null,
             'is_bookmarked'      => (bool) ($row['is_bookmarked'] ?? false),
+            'is_truncated'       => (bool) ($row['is_truncated'] ?? false),
             'reactions'          => !empty($row['reactions_json']) ? json_decode($row['reactions_json'], true) : [],
             'edited_at'          => $this->toDateString($row['edited_at'] ?? null),
             'created_at'         => $this->toDateString($row['created_at'] ?? null),

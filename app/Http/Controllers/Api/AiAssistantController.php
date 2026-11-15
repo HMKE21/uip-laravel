@@ -502,7 +502,7 @@ class AiAssistantController extends Controller
                 fn (string $type, array $payload) => $send(['type' => $type] + $payload),
                 (string) ($context['locale'] ?? 'ar')
             );
-            $send(['type' => 'done', 'message_id' => $assistantMessageId, 'content' => $fullText, 'attachments' => $this->assistant->attachmentsForAssistantMessage($assistantMessageId)]);
+            $send(['type' => 'done', 'message_id' => $assistantMessageId, 'content' => $fullText, 'attachments' => $this->assistant->attachmentsForAssistantMessage($assistantMessageId), 'truncated' => $this->assistant->wasTruncated()]);
         } catch (\Throwable $e) {
             $send(['type' => 'error', 'message_id' => $assistantMessageId, 'message' => $e->getMessage()]);
         }
