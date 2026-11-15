@@ -284,7 +284,11 @@ class AiPlatformTools
             return ['error' => 'tool_failed', 'message' => 'Could not load this data right now.'];
         }
 
-        $data['as_of'] = now()->format('Y-m-d H:i');
+        // "as of" in the platform's local time (config ai.timezone), never the server's UTC.
+        $tz = (string) config('ai.timezone', 'Africa/Cairo');
+        $local = now()->setTimezone($tz);
+        $data['as_of'] = $local->format('Y-m-d H:i');
+        $data['as_of_timezone'] = $tz . ' (UTC' . $local->format('P') . ')';
 
         $encoded = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         if ($encoded !== false && strlen($encoded) > self::MAX_RESULT_CHARS) {

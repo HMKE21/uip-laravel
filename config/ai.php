@@ -58,6 +58,9 @@ return [
     ],
 
     // حدود نص المرفقات اللي بيتبعت للموديل (حروف).
+    // Time zone the assistant speaks in (reports, "as of", today / now). The app and the database stay on UTC.
+    'timezone' => env('AI_TIMEZONE', 'Africa/Cairo'),
+
     'attachments' => [
         'max_chars'     => (int) env('AI_ATTACHMENT_MAX_CHARS', 24000),   // لكل ملف في التيرن الحالي
         'history_chars' => (int) env('AI_ATTACHMENT_HISTORY_CHARS', 30000), // إجمالي نص ملفات التيرنات السابقة

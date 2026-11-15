@@ -1372,6 +1372,21 @@ SYS;
     }
 
     /** هوية + قاعدة معرفة + تركيز البورتال + سياق RBAC، كلها مجمّعة في system prompt واحد. */
+    /** The current date / time in the platform's time zone, so the assistant never guesses it or quotes the server's UTC. */
+    private function clockLine(): string
+    {
+        $tz = (string) config('ai.timezone', 'Africa/Cairo');
+        try {
+            $now = now()->setTimezone($tz);
+        } catch (\Throwable $e) {
+            $tz = 'UTC';
+            $now = now();
+        }
+        return 'CURRENT DATE AND TIME: ' . $now->format('l, Y-m-d H:i') . " ({$tz}, UTC" . $now->format('P') . '). '
+            . 'Use this as "now" and "today" and write times in this time zone. Timestamps inside tool results or files are stored in UTC '
+            . 'unless a field says otherwise: convert them to ' . $tz . ' before showing them to the user.';
+    }
+
     private function buildSystemPrompt(array $context): string
     {
         $settings = $this->adminSettings();
@@ -1386,6 +1401,7 @@ SYS;
 
         $parts = [
             $identity,
+            $this->clockLine(),
             $this->knowledge->founderProfile(),
             $this->knowledge->platformOverview(),
             $this->knowledge->capabilitiesSummary($toolsOn),
