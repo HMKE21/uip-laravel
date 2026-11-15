@@ -2317,6 +2317,7 @@ Route::prefix('v1')->group(function () {
         // ستيكراتي (New sticker) + إرسال ستيكر/GIF. الثابتة هنا قبل أي /conversations/{id} عشان مفيش تعارض.
         Route::get('/stickers', [MessagingController::class, 'myStickers']);
         Route::post('/stickers', [MessagingController::class, 'createSticker'])->middleware('throttle:60,1');
+        Route::post('/stickers/from-gif', [MessagingController::class, 'createStickerFromGif'])->middleware('throttle:30,1');
         Route::delete('/stickers/{id}', [MessagingController::class, 'deleteSticker'])->where('id', '[0-9]+');
         Route::get('/stickers/lookup', [MessagingController::class, 'stickerState']);
         // باكات الستيكرز: تجميع ستيكراتي في باكات بأسماء (Add to sticker pack)

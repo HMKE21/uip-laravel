@@ -500,6 +500,16 @@ class MessagingController extends Controller
         });
     }
 
+    /** POST /api/v1/messaging/stickers/from-gif — { url (Giphy), title? } يحوّل GIF لاستيكر في ستيكراتي */
+    public function createStickerFromGif(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $this->mediaGuard($this->mediaPolicy->canCreateSticker($this->role($request)), 'Creating stickers');
+            $r = $this->messaging->createStickerFromGif($this->uid($request), (string) $request->input('url', ''), $request->input('title'));
+            return $this->apiSuccess($r, $r['already'] ? 'Already in your stickers.' : 'Sticker saved.', $r['already'] ? 200 : 201);
+        });
+    }
+
     /** DELETE /api/v1/messaging/stickers/{id} */
     public function deleteSticker(Request $request, $id)
     {

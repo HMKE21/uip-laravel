@@ -1642,6 +1642,69 @@ class MessagingService
         return ['id' => (int) $id, 'kind' => $kind, 'label' => $label, 'url' => '/api/v1/messaging/stickers/' . $id . '/file'];
     }
 
+    /**
+     * يحوّل GIF من Giphy لاستيكر في مكتبة المستخدم (ستيكراتي).
+     * بنقبل روابط Giphy بس، وبنعيد التحقق من تصنيفه/عنوانه من Giphy نفسها (نفس إرسال الـ GIF)، وبننزّله من السيرفر من غير redirects،
+     * وبنخزّنه عبر createSticker — يعني نفس فحص المحتوى (صورة/GIF) وحدود الحجم وعدد الستيكرات. لو متضاف قبل كده بيرجّع الموجود (already=true).
+     *
+     * @return array{id:int,kind:string,label:?string,url:string,already:bool}
+     */
+    public function createStickerFromGif($userId, string $url, ?string $title = null): array
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if (!str_starts_with($url, 'https://') || !($host === 'giphy.com' || str_ends_with($host, '.giphy.com'))) {
+            throw new \RuntimeException('Unsupported GIF source.');
+        }
+        $safety = app(\App\Services\ContentSafetyService::class);
+        if ($title && app(ChatMediaPolicyService::class)->containsBlockedWord((string) $title)) {
+            $safety->record('gif', 'custom', 'blocked word in gif title');
+            throw new \App\Services\ContentBlockedException($safety->message('custom'), 'custom', 'gif');
+        }
+        if ($title) {
+            $safety->assertText((string) $title, true, 'gif_title');
+        }
+        $this->assertGifVerified($url);
+
+        $gid = preg_replace('/[^A-Za-z0-9]/', '', (string) ($this->giphyIdFromUrl($url) ?: substr(sha1($url), 0, 12)));
+        $maxKb = (int) app(ChatMediaPolicyService::class)->get()['sticker_max_kb'];
+        $fail = fn () => new \RuntimeException('Could not download the GIF. Please try again.');
+        try {
+            $r = \Illuminate\Support\Facades\Http::timeout(20)->withOptions(['allow_redirects' => false])->get($url);
+        } catch (\Throwable $e) {
+            throw $fail();
+        }
+        $body = $r->ok() ? $r->body() : '';
+        if (strlen($body) < 100) {
+            throw $fail();
+        }
+        if (strlen($body) > $maxKb * 1024) {
+            throw new \RuntimeException('This GIF is too large to be a sticker (max ' . ($maxKb >= 1024 ? round($maxKb / 1024, 1) . ' MB' : $maxKb . ' KB') . ').');
+        }
+        $head = substr($body, 0, 12);
+        $ext = str_starts_with($head, 'GIF8') ? 'gif' : ((str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP') ? 'webp' : null);
+        if ($ext === null) {
+            throw new \RuntimeException('Unsupported GIF format.');
+        }
+        $name = 'giphy-' . $gid . '.' . $ext;
+
+        $existing = DB::table('user_stickers')->where('user_id', (int) $userId)->where('original_name', $name)->first(['id', 'kind', 'label']);
+        if ($existing) {
+            return ['id' => (int) $existing->id, 'kind' => $existing->kind, 'label' => $existing->label, 'url' => '/api/v1/messaging/stickers/' . (int) $existing->id . '/file', 'already' => true];
+        }
+
+        $tmp = tempnam(sys_get_temp_dir(), 'stk');
+        if ($tmp === false || file_put_contents($tmp, $body) === false) {
+            throw $fail();
+        }
+        try {
+            $saved = $this->createSticker($userId, new UploadedFile($tmp, $name, $ext === 'gif' ? 'image/gif' : 'image/webp', null, true), $title);
+        } finally {
+            @unlink($tmp);
+        }
+
+        return $saved + ['already' => false];
+    }
+
     public function deleteSticker($userId, int $id): void
     {
         $row = DB::table('user_stickers')->where('id', $id)->where('user_id', (int) $userId)->first();
