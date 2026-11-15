@@ -19,14 +19,21 @@ class ImageClient
     private int $timeout;
     private string $imagesPath = '/images/generations';
 
-    public function __construct(AIClient $chat, ?string $modelOverride = null)
+    /** @param array{model?:string,base_url?:string,api_key?:string} $overrides إعدادات الأدمن (ai_image_*) — الفاضي بيرجع للـ .env ثم لمزوّد الشات. */
+    public function __construct(AIClient $chat, array $overrides = [])
     {
         $cfg = (array) config('ai.image', []);
-        $this->baseUrl = rtrim((string) ($cfg['base_url'] ?: $chat->baseUrl()), '/');
-        $this->apiKey  = (string) ($cfg['api_key'] ?: $chat->apiKey());
-        $this->model   = trim((string) ($modelOverride !== null && trim($modelOverride) !== '' ? $modelOverride : ($cfg['model'] ?? '')));
+        $pick = fn (string $k) => trim((string) (($overrides[$k] ?? '') !== '' ? $overrides[$k] : ($cfg[$k] ?? '')));
+        $base = $pick('base_url');
+        $key = $pick('api_key');
+        // لو الأدمن حدّد مزوّد صور تاني (base_url) بنستخدم مفتاحه هو؛ مفيش تسريب لمفتاح الشات لمزوّد غريب.
+        $this->baseUrl = rtrim($base !== '' ? $base : $chat->baseUrl(), '/');
+        $this->apiKey  = $base !== '' ? $key : ($key !== '' ? $key : $chat->apiKey());
+        $this->model   = $pick('model');
         $api = (string) ($cfg['api'] ?? 'auto');
-        if ($api === 'auto' || !in_array($api, ['chat', 'images'], true)) {
+        if (str_contains($this->baseUrl, 'api.cloudflare.com')) {
+            $api = 'cloudflare'; // Workers AI: POST {base}/{model} => result.image (base64) — مجاني ~230 صورة/يوم
+        } elseif ($api === 'auto' || !in_array($api, ['chat', 'images'], true)) {
             $api = 'images';
         }
         $this->api = $api;
@@ -47,10 +54,16 @@ class ImageClient
             throw new \RuntimeException('Image generation is not configured (set an Image model in Admin → Settings → AI).');
         }
 
-        $path = $this->api === 'images' ? $this->imagesPath : '/chat/completions';
-        $payload = $this->api === 'images'
-            ? ['model' => $this->model, 'prompt' => $prompt, 'n' => 1]
-            : ['model' => $this->model, 'messages' => [['role' => 'user', 'content' => $prompt]], 'modalities' => ['image', 'text']];
+        if ($this->api === 'cloudflare') {
+            $path = '/' . ltrim($this->model, '/');
+            $payload = ['prompt' => mb_substr($prompt, 0, 2000), 'steps' => 4];
+        } elseif ($this->api === 'images') {
+            $path = $this->imagesPath;
+            $payload = ['model' => $this->model, 'prompt' => $prompt, 'n' => 1];
+        } else {
+            $path = '/chat/completions';
+            $payload = ['model' => $this->model, 'messages' => [['role' => 'user', 'content' => $prompt]], 'modalities' => ['image', 'text']];
+        }
 
         $ch = curl_init($this->baseUrl . $path);
         curl_setopt_array($ch, [
@@ -80,7 +93,10 @@ class ImageClient
         }
 
         $caption = '';
-        if ($this->api === 'images') {
+        if ($this->api === 'cloudflare') {
+            $b64 = (string) ($decoded['result']['image'] ?? '');
+            $src = $b64 !== '' ? 'data:image/jpeg;base64,' . $b64 : '';
+        } elseif ($this->api === 'images') {
             $item = $decoded['data'][0] ?? [];
             $src = isset($item['b64_json']) ? 'data:image/png;base64,' . $item['b64_json'] : (string) ($item['url'] ?? '');
         } else {

@@ -130,6 +130,8 @@ class AdminSettingsApiController extends Controller
             'model'                         => $get('model', $aiConfig['model'] ?? ''),
             'fallback_model'                => $get('fallback_model', $aiConfig['fallback_model'] ?? ''),
             'image_model'                  => $get('image_model', $aiConfig['image']['model'] ?? ''),
+            'image_base_url'               => $get('image_base_url', $aiConfig['image']['base_url'] ?? ''),
+            'has_image_api_key'            => $get('image_api_key', '') !== '' || (($aiConfig['image']['api_key'] ?? '') !== ''),
             'email_personalization_enabled' => $storedPersonalization !== '' ? $storedPersonalization === '1' : (bool) ($aiConfig['email_personalization_enabled'] ?? false),
             // تفريغ الصوت للترجمة التلقائية (سيرفر Whisper متوافق مع OpenAI) — المفتاح عمره ما بيرجع للفرونت.
             'transcribe_base_url'           => $get('transcribe_base_url', $aiConfig['transcribe']['base_url'] ?? ''),
@@ -474,6 +476,17 @@ class AdminSettingsApiController extends Controller
         // موديل احتياطي للمساعد عند 402/429/5xx — بنكتبه بس لو الفرونت بعته (نسخة قديمة من الشاشة ماتمسحوش).
         if ($request->has('ai_image_model')) {
             $this->settings->set('ai_image_model', trim((string) $request->input('ai_image_model', '')));
+        }
+        if ($request->has('ai_image_base_url')) {
+            $imgBase = rtrim(trim((string) $request->input('ai_image_base_url', '')), '/');
+            if ($imgBase !== '' && !preg_match('#^https://[^\s]+$#i', $imgBase)) {
+                return $this->apiError('Image Base URL must start with https://', ['ai_image_base_url' => ['Invalid URL.']], 422);
+            }
+            $this->settings->set('ai_image_base_url', $imgBase);
+            $imgKey = (string) $request->input('ai_image_api_key', '');
+            if ($imgKey !== '') {
+                $this->settings->set('ai_image_api_key', $imgKey);
+            }
         }
         if ($request->has('ai_fallback_model')) {
             $this->settings->set('ai_fallback_model', trim((string) $request->input('ai_fallback_model', '')));

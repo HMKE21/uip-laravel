@@ -404,9 +404,37 @@ class AiAssistantService
         return null;
     }
 
+    /**
+     * موديلات الصور (FLUX/SDXL...) أقوى بكتير بالإنجليزي. بنخلّي موديل الشات يحوّل طلب اليوزر (عربي مثلًا)
+     * لوصف إنجليزي مفصّل للصورة. لو فشل (كوتا/خطأ) بنكمّل بالنص الأصلي — التحسين مش شرط.
+     */
+    private function englishImagePrompt(string $request): string
+    {
+        $request = trim(preg_replace('#^/(?:image|img|imagine|صورة|صوره)\s+#iu', '', $request));
+        try {
+            $out = $this->client->complete(
+                'You write prompts for a text-to-image model. Convert the user\'s request (any language) into ONE detailed English image prompt (max 60 words): subject, style, composition, colors, lighting. '
+                . 'If the user wants text/a name in the image, keep that exact text in quotes. Reply with the prompt only — no quotes around it, no explanations.',
+                $request,
+                0.7
+            );
+            $out = trim($out, " \t\n\r\0\x0B\"'");
+            if ($out !== '' && mb_strlen($out) <= 1500) {
+                return $out;
+            }
+        } catch (\Throwable $e) {
+            Log::notice('Image prompt enhancement skipped', ['error' => $e->getMessage()]);
+        }
+        return $request;
+    }
+
     private function imageClient(): ImageClient
     {
-        return new ImageClient($this->client, (string) $this->settings->get('ai_image_model', 'global', null, ''));
+        return new ImageClient($this->client, [
+            'model'    => (string) $this->settings->get('ai_image_model', 'global', null, ''),
+            'base_url' => (string) $this->settings->get('ai_image_base_url', 'global', null, ''),
+            'api_key'  => (string) $this->settings->get('ai_image_api_key', 'global', null, ''),
+        ]);
     }
 
     public function imageGenerationConfigured(): bool
@@ -427,7 +455,7 @@ class AiAssistantService
             if (!$this->client->isConfigured()) {
                 throw new \RuntimeException('AI client is not configured (feature flag, base URL, API key, or model missing).');
             }
-            $img = $this->imageClient()->generate($prompt);
+            $img = $this->imageClient()->generate($this->englishImagePrompt($prompt));
             $ext = ['image/png' => 'png', 'image/jpeg' => 'jpg', 'image/webp' => 'webp', 'image/gif' => 'gif'][$img['mime']] ?? 'png';
 
             $relativeDir = (string) config('upload.paths.ai_assistant', 'uploads/ai_assistant') . '/conv_' . $conversationId;

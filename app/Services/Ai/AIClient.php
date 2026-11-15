@@ -83,7 +83,7 @@ class AIClient
         $provider = '';
         $decoded = json_decode(trim($rawBody), true);
         if (is_array($decoded)) {
-            $err = $decoded['error'] ?? $decoded['message'] ?? null;
+            $err = $decoded['error'] ?? $decoded['message'] ?? ($decoded['errors'][0] ?? null);
             if (is_array($err)) {
                 $err = $err['message'] ?? json_encode($err, JSON_UNESCAPED_UNICODE);
             }
