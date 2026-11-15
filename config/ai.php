@@ -44,6 +44,25 @@ return [
             . 'modern, friendly, academic, trustworthy, clean sans-serif typography. The brand name is written "UIPE" (Latin letters).'),
     ],
 
+    // رؤية الصور: الصور المرفقة بتتبعت للموديل كـ image_url (مصغّرة). لو موديل الشات مش بيشوف صور:
+    //  - حط موديل بيشوف في AI_VISION_MODEL (وممكن AI_VISION_BASE_URL / AI_VISION_API_KEY لو مزوّد تاني)، أو
+    //  - AI_VISION=false وهيقول للمستخدم إنه مش قادر يشوف الصورة بدل ما يخمّن.
+    // لو الموديل رفض الصور (400/415/422) بيكمّل تلقائيًا من غير الصور مع تنبيه للموديل إنه ما شافهاش.
+    'vision' => [
+        'enabled'    => filter_var(env('AI_VISION', true), FILTER_VALIDATE_BOOL),
+        'model'      => env('AI_VISION_MODEL', ''),
+        'base_url'   => rtrim((string) env('AI_VISION_BASE_URL', ''), '/'),
+        'api_key'    => env('AI_VISION_API_KEY', ''),
+        'max_images' => (int) env('AI_VISION_MAX_IMAGES', 4),
+        'max_dim'    => (int) env('AI_VISION_MAX_DIM', 1568),
+    ],
+
+    // حدود نص المرفقات اللي بيتبعت للموديل (حروف).
+    'attachments' => [
+        'max_chars'     => (int) env('AI_ATTACHMENT_MAX_CHARS', 24000),   // لكل ملف في التيرن الحالي
+        'history_chars' => (int) env('AI_ATTACHMENT_HISTORY_CHARS', 30000), // إجمالي نص ملفات التيرنات السابقة
+    ],
+
     // ترجمة الفيديو التلقائية (VideoPlayer ← POST /api/v1/subtitles/auto): تفريغ الصوت بـ Whisper ثم ترجمة النص.
     // بيستخدم نفس AI_BASE_URL / AI_API_KEY لو سيبت base_url/api_key فاضيين. لو مزوّد الشات عندك مش بيدعم
     // /audio/transcriptions (Ollama مثلاً) حط مزوّد تاني هنا (مثلاً Groq: https://api.groq.com/openai/v1 + whisper-large-v3).

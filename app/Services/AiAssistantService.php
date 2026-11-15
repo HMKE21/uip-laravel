@@ -8,6 +8,7 @@ use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Ai\AiPlatformTools;
 use App\Services\Ai\AiProviderException;
+use App\Services\Ai\AttachmentReader;
 use App\Services\Ai\ImageClient;
 use App\Services\Ai\AiToolsUnsupportedException;
 use App\Services\Concerns\ConfiguresAIClient;
@@ -273,7 +274,9 @@ class AiAssistantService
     {
         $conversation = $this->ownedConversation($userId, $conversationId);
 
-        $attachmentContext = $this->attachmentContextText($attachmentIds);
+        $attachmentIds = $this->ownedAttachmentIds($attachmentIds, $conversationId);
+        $vision = $this->visionPartsForIds($attachmentIds);
+        $attachmentContext = $this->attachmentContextText($attachmentIds, $vision['ids']);
         $fullUserContent = $attachmentContext !== '' ? trim($content . "\n\n" . $attachmentContext) : $content;
 
         $userMessage = $this->repo->createMessage([
@@ -302,7 +305,7 @@ class AiAssistantService
         $this->repo->touchConversation($conversationId);
 
         $history = $this->repo->messagesForConversation($conversationId);
-        $promptMessages = $this->buildPromptMessages($history, (int) $placeholder->id, $context, $fullUserContent, (int) $userMessage->id);
+        $promptMessages = $this->buildPromptMessages($history, (int) $placeholder->id, $context, $fullUserContent, (int) $userMessage->id, $vision['parts']);
 
         return [
             'user_message'          => $this->shapeMessage($userMessage->toArray()),
@@ -329,24 +332,50 @@ class AiAssistantService
                 $streamed = true;
                 $onToken($delta);
             };
-            try {
-                $fullText = $this->runModel($userId, $role, $promptMessages, $settings, $trackedOnToken, $onEvent, $locale, $usedTools);
-            } catch (AiProviderException $e) {
-                // رصيد/كوتا/ضغط/سيرفر واقع عند المزوّد (402/429/5xx...) → جرّب الموديل الاحتياطي لو متظبّط
-                // (AI_FALLBACK_MODEL أو إعداد ai_fallback_model)، بس لو لسه مفيش ولا توكن اتبعت للواجهة.
-                $fallback = (!$streamed && $e->isFallbackWorthy()) ? $this->fallbackClient() : null;
-                if ($fallback === null) {
-                    throw $e;
-                }
-                Log::warning('AI primary model failed; retrying with fallback model', ['status' => $e->httpStatus, 'primary' => $this->client->model(), 'fallback' => $fallback->model(), 'error' => $e->getMessage()]);
-                $primary = $this->client;
-                $this->client = $fallback;
+            $attempt = function (array $msgs) use ($userId, $role, $settings, $trackedOnToken, $onToken, $onEvent, $locale, &$usedTools, &$streamed) {
                 try {
+                    return $this->runModel($userId, $role, $msgs, $settings, $trackedOnToken, $onEvent, $locale, $usedTools);
+                } catch (AiProviderException $e) {
+                    // رصيد/كوتا/ضغط/سيرفر واقع عند المزوّد (402/429/5xx...) → جرّب الموديل الاحتياطي لو متظبّط
+                    // (AI_FALLBACK_MODEL أو إعداد ai_fallback_model)، بس لو لسه مفيش ولا توكن اتبعت للواجهة.
+                    $fallback = (!$streamed && $e->isFallbackWorthy()) ? $this->fallbackClient() : null;
+                    if ($fallback === null) {
+                        throw $e;
+                    }
+                    Log::warning('AI primary model failed; retrying with fallback model', ['status' => $e->httpStatus, 'primary' => $this->client->model(), 'fallback' => $fallback->model(), 'error' => $e->getMessage()]);
+                    $primary = $this->client;
+                    $this->client = $fallback;
+                    try {
+                        $usedTools = [];
+                        return $this->runModel($userId, $role, $msgs, $settings, $onToken, $onEvent, $locale, $usedTools);
+                    } finally {
+                        $this->client = $primary;
+                    }
+                }
+            };
+
+            if ($this->hasImageParts($promptMessages)) {
+                // فيه صور: موديل الرؤية (لو متظبّط) → لو المزوّد رفض الصور (400/415/422…) نكمّل من غير صور مع تنبيه للموديل.
+                $primary = $this->client;
+                $vision = $this->visionClient();
+                if ($vision !== null) {
+                    $this->client = $vision;
+                }
+                try {
+                    $fullText = $attempt($promptMessages);
+                } catch (AiProviderException $e) {
+                    if ($streamed || !in_array($e->httpStatus, [400, 404, 413, 415, 422], true)) {
+                        throw $e;
+                    }
+                    Log::warning('AI model rejected image input; retrying without images', ['status' => $e->httpStatus, 'model' => $this->client->model(), 'error' => $e->getMessage()]);
+                    $this->client = $primary;
                     $usedTools = [];
-                    $fullText = $this->runModel($userId, $role, $promptMessages, $settings, $onToken, $onEvent, $locale, $usedTools);
+                    $fullText = $attempt($this->stripImageParts($promptMessages));
                 } finally {
                     $this->client = $primary;
                 }
+            } else {
+                $fullText = $attempt($promptMessages);
             }
 
             $message = $this->repo->findMessage($assistantMessageId);
@@ -761,8 +790,18 @@ SYS;
 
         try {
             $usedTools = [];
-            $text = $this->runModel($userId, $context['role'] ?? null, $prepared['prompt_messages'], $settings, static function (string $delta): void {
-            }, null, (string) ($context['locale'] ?? 'ar'), $usedTools);
+            $noop = static function (string $delta): void {
+            };
+            try {
+                $text = $this->runModel($userId, $context['role'] ?? null, $prepared['prompt_messages'], $settings, $noop, null, (string) ($context['locale'] ?? 'ar'), $usedTools);
+            } catch (AiProviderException $e) {
+                if (!$this->hasImageParts($prepared['prompt_messages']) || !in_array($e->httpStatus, [400, 404, 413, 415, 422], true)) {
+                    throw $e;
+                }
+                Log::warning('AI model rejected image input; retrying without images', ['status' => $e->httpStatus, 'error' => $e->getMessage()]);
+                $usedTools = [];
+                $text = $this->runModel($userId, $context['role'] ?? null, $this->stripImageParts($prepared['prompt_messages']), $settings, $noop, null, (string) ($context['locale'] ?? 'ar'), $usedTools);
+            }
             $message = $this->repo->findMessage($prepared['assistant_message_id']);
             $message->fill(['content' => $text, 'status' => 'complete', 'answer_source' => 'ai']);
             $message->save();
@@ -836,32 +875,168 @@ SYS;
         if (!$attachmentIds) {
             return;
         }
+        $conversationId = (int) \Illuminate\Support\Facades\DB::table('ai_messages')->where('id', $messageId)->value('conversation_id');
         \Illuminate\Support\Facades\DB::table('ai_message_attachments')
             ->whereIn('id', array_map('intval', $attachmentIds))
+            ->where('conversation_id', $conversationId)
             ->whereNull('message_id')
             ->update(['message_id' => $messageId]);
     }
 
-    /** ملخص نصي بأفضل جهد للملفات المرفقة، متضاف لتيرن اليوزر. */
-    private function attachmentContextText(array $attachmentIds): string
+    /** بيشيل أي id مش تابع للمحادثة دي (حماية: يوزر ميقدرش يحط id مرفق بتاع محادثة/يوزر تاني). */
+    private function ownedAttachmentIds(array $attachmentIds, int $conversationId): array
+    {
+        $ok = [];
+        foreach ($attachmentIds as $id) {
+            $att = $this->repo->findAttachment((int) $id);
+            if ($att && (int) $att['conversation_id'] === $conversationId) {
+                $ok[] = (int) $id;
+            }
+        }
+        return $ok;
+    }
+
+    /** مسار الملف على القرص بس لو جوّه public_path (حماية من path traversal). */
+    private function attachmentPath(array $att): ?string
+    {
+        $path = public_path((string) $att['stored_path']);
+        $real = realpath($path);
+        $root = realpath(public_path());
+        return ($real !== false && $root !== false && str_starts_with($real, $root . DIRECTORY_SEPARATOR) && is_file($real)) ? $real : null;
+    }
+
+    /**
+     * صور المرفقات (وصفحات PDF الممسوح ضوئيًا) كـ image_url parts للموديل.
+     * @param array<int,array> $rows
+     * @return array{parts:array,ids:int[]}
+     */
+    private function visionPartsForRows(array $rows): array
+    {
+        $out = ['parts' => [], 'ids' => []];
+        if (!config('ai.vision.enabled', true)) {
+            return $out;
+        }
+        $max = max(1, (int) config('ai.vision.max_images', 4));
+        $dim = max(512, (int) config('ai.vision.max_dim', 1568));
+        foreach ($rows as $att) {
+            if (count($out['parts']) >= $max) {
+                break;
+            }
+            $path = $this->attachmentPath($att);
+            if ($path === null) {
+                continue;
+            }
+            $uris = [];
+            if (($att['kind'] ?? '') === 'image' && in_array(strtolower((string) ($att['extension'] ?? '')), ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
+                $uri = AttachmentReader::imageDataUri($path, $dim);
+                $uris = $uri !== null ? [$uri] : [];
+            } elseif (strtolower((string) ($att['extension'] ?? '')) === 'pdf' && empty($att['extracted_text'])) {
+                $uris = AttachmentReader::pdfPagesAsImages($path, 2, $dim);
+            }
+            foreach ($uris as $uri) {
+                if (count($out['parts']) >= $max) {
+                    break;
+                }
+                $out['parts'][] = ['type' => 'image_url', 'image_url' => ['url' => $uri]];
+            }
+            if ($uris) {
+                $out['ids'][] = (int) $att['id'];
+            }
+        }
+        return $out;
+    }
+
+    /** @return array{parts:array,ids:int[]} */
+    private function visionPartsForIds(array $attachmentIds): array
+    {
+        $rows = [];
+        foreach ($attachmentIds as $id) {
+            $att = $this->repo->findAttachment((int) $id);
+            if ($att) {
+                $rows[] = $att;
+            }
+        }
+        return $this->visionPartsForRows($rows);
+    }
+
+    /** ملخص نصي للملفات المرفقة، متضاف لتيرن اليوزر. $viewableIds = المرفقات اللي الموديل شايفها فعلًا كصور. */
+    private function attachmentContextText(array $attachmentIds, array $viewableIds = []): string
     {
         if (!$attachmentIds) {
             return '';
         }
+        $maxChars = max(2000, (int) config('ai.attachments.max_chars', 24000));
         $lines = [];
         foreach ($attachmentIds as $id) {
             $att = $this->repo->findAttachment((int) $id);
             if (!$att) {
                 continue;
             }
-            $lines[] = "Attached file: {$att['original_name']} ({$att['mime_type']}, " . round($att['size_bytes'] / 1024, 1) . ' KB)';
+            $name = (string) $att['original_name'];
+            $meta = "{$att['mime_type']}, " . round($att['size_bytes'] / 1024, 1) . ' KB';
+            $viewable = in_array((int) $att['id'], $viewableIds, true);
+            if (($att['kind'] ?? '') === 'image') {
+                $lines[] = $viewable
+                    ? "Attached image: {$name} ({$meta}) — you can SEE this image below. Describe only what is actually visible in it."
+                    : "Attached image: {$name} ({$meta}) — it could NOT be loaded for viewing (image understanding is unavailable right now). Tell the user plainly that you cannot see it and never guess its content.";
+                continue;
+            }
+            $lines[] = "Attached file: {$name} ({$meta})";
             if (!empty($att['extracted_text'])) {
-                $lines[] = '--- content ---';
-                $lines[] = mb_substr($att['extracted_text'], 0, 6000);
-                $lines[] = '--- end content ---';
+                $text = (string) $att['extracted_text'];
+                $lines[] = '--- content of ' . $name . ' ---';
+                $lines[] = mb_substr($text, 0, $maxChars);
+                if (mb_strlen($text) > $maxChars) {
+                    $lines[] = '[... the file is longer; only the first ' . $maxChars . ' characters are shown — say so if the answer may depend on the rest]';
+                }
+                $lines[] = '--- end of ' . $name . ' ---';
+            } elseif ($viewable) {
+                $lines[] = '(No text layer — this looks like a scanned PDF; its first pages are shown to you as images below.)';
+            } else {
+                $lines[] = '(No readable text could be extracted from this file — it may be scanned, empty, encrypted or an unsupported type. Tell the user plainly that you cannot read it and ask them to paste the text; never guess its content.)';
             }
         }
-        return $lines ? "[Attachments]\n" . implode("\n", $lines) : '';
+        return $lines ? "[Attachments in this message]\n" . implode("\n", $lines) : '';
+    }
+
+    /** هل في الرسائل image parts؟ */
+    private function hasImageParts(array $messages): bool
+    {
+        foreach ($messages as $m) {
+            if (is_array($m['content'] ?? null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** بيشيل الصور من الرسائل (لو الموديل رفضها) ويبلّغ الموديل إنه ماشافهاش عشان ماتخمّنش. */
+    private function stripImageParts(array $messages): array
+    {
+        foreach ($messages as &$m) {
+            if (!is_array($m['content'] ?? null)) {
+                continue;
+            }
+            $text = '';
+            foreach ($m['content'] as $part) {
+                if (($part['type'] ?? '') === 'text') {
+                    $text .= (string) $part['text'];
+                }
+            }
+            $m['content'] = $text . "\n\n[System note: the user attached image(s) but this AI model cannot view images. Tell the user plainly that you could not see the image and ask them to describe it or paste its text. Do NOT guess what it shows.]";
+        }
+        unset($m);
+        return $messages;
+    }
+
+    /** عميل بموديل بيشوف الصور (AI_VISION_MODEL) — null لو مش متظبّط (هنستخدم موديل الشات). */
+    private function visionClient(): ?AIClient
+    {
+        $model = trim((string) config('ai.vision.model', ''));
+        if ($model === '' || $model === $this->client->model()) {
+            return null;
+        }
+        return $this->client->withFallback($model, config('ai.vision.base_url') ?: null, config('ai.vision.api_key') ?: null);
     }
 
     /**
@@ -870,12 +1045,80 @@ SYS;
      * المحادثة الحقيقي بالترتيب، لحد نافذة محدودة عشان الثريدز الطويلة
      * تفضل جوّه حجم سياق الموديل.
      */
-    private function buildPromptMessages(array $history, int $excludeMessageId, array $context, ?string $overrideLastUserContent, ?int $overrideUserMessageId): array
+    private function buildPromptMessages(array $history, int $excludeMessageId, array $context, ?string $overrideLastUserContent, ?int $overrideUserMessageId, array $overrideParts = []): array
     {
         $messages = [['role' => 'system', 'content' => $this->buildSystemPrompt($context)]];
 
         $maxTurns = 24;
         $trimmed = array_slice($history, -1 * $maxTurns);
+
+        // المرفقات بتتجاب مرة واحدة لكل رسالة، ونحدّد آخر رسالة يوزر فيها صور (دي بس اللي الموديل بيشوف صورها).
+        $attCache = [];
+        $attsFor = function (int $id) use (&$attCache): array {
+            return $attCache[$id] ??= $this->repo->attachmentsForMessage($id);
+        };
+        $visionRowId = null;
+        $visionParts = [];
+        if ($overrideUserMessageId !== null && $overrideParts) {
+            $visionRowId = $overrideUserMessageId;
+            $visionParts = $overrideParts;
+        } elseif (config('ai.vision.enabled', true)) {
+            foreach (array_reverse($trimmed) as $row) {
+                if ($row['role'] !== 'user' || (int) $row['is_deleted'] === 1 || (int) $row['id'] === $excludeMessageId) {
+                    continue;
+                }
+                $rowAtts = $attsFor((int) $row['id']);
+                if (!$rowAtts) {
+                    continue;
+                }
+                $found = $this->visionPartsForRows($rowAtts);
+                if ($found['parts']) {
+                    $visionRowId = (int) $row['id'];
+                    $visionParts = $found['parts'];
+                }
+                break; // بنبص على آخر رسالة يوزر فيها مرفقات بس
+            }
+        }
+
+        // وصف مرفقات الرسائل السابقة: الأحدث أولًا عشان ميزانية النص تروح للأحدث.
+        $histBudget = max(0, (int) config('ai.attachments.history_chars', 30000));
+        $perFile = max(2000, (int) config('ai.attachments.max_chars', 24000));
+        $notes = [];
+        foreach (array_reverse($trimmed) as $row) {
+            $rid = (int) $row['id'];
+            if ($rid === $excludeMessageId || $rid === $overrideUserMessageId || (int) $row['is_deleted'] === 1) {
+                continue;
+            }
+            $atts = $attsFor($rid);
+            if (!$atts) {
+                continue;
+            }
+            $lines = [];
+            foreach ($atts as $att) {
+                $name = (string) $att['original_name'];
+                if ($row['role'] === 'assistant') {
+                    $lines[] = ($att['kind'] ?? '') === 'image'
+                        ? "[AI-generated image attached to this reply: {$name}]"
+                        : "[File attached to this reply: {$name}]";
+                } elseif (($att['kind'] ?? '') === 'image') {
+                    $lines[] = $rid === $visionRowId
+                        ? "[Attached image: {$name} — you can see it below]"
+                        : "[Attached image: {$name} — sent earlier, you can no longer see it; if asked about it, say so and ask the user to re-attach it]";
+                } elseif (!empty($att['extracted_text'])) {
+                    $text = (string) $att['extracted_text'];
+                    $take = min($perFile, $histBudget);
+                    if ($take >= 500) {
+                        $histBudget -= $take;
+                        $lines[] = "[Attached file: {$name}]\n--- content of {$name} ---\n" . mb_substr($text, 0, $take) . (mb_strlen($text) > $take ? "\n[... truncated]" : '') . "\n--- end of {$name} ---";
+                    } else {
+                        $lines[] = "[Attached file: {$name} — sent earlier; its text is no longer available, ask the user to re-attach if needed]";
+                    }
+                } else {
+                    $lines[] = "[Attached file: {$name} — no readable text]";
+                }
+            }
+            $notes[$rid] = implode("\n", $lines);
+        }
 
         foreach ($trimmed as $row) {
             if ((int) $row['id'] === $excludeMessageId) {
@@ -890,6 +1133,12 @@ SYS;
             $content = $row['content'];
             if ($overrideUserMessageId !== null && (int) $row['id'] === $overrideUserMessageId && $overrideLastUserContent !== null) {
                 $content = $overrideLastUserContent;
+            } elseif (!empty($notes[(int) $row['id']])) {
+                $content = trim($content . "\n\n" . $notes[(int) $row['id']]);
+            }
+            if ((int) $row['id'] === $visionRowId && $visionParts) {
+                $messages[] = ['role' => $row['role'], 'content' => array_merge([['type' => 'text', 'text' => $content]], $visionParts)];
+                continue;
             }
             $messages[] = ['role' => $row['role'], 'content' => $content];
         }
@@ -956,7 +1205,7 @@ SYS;
 
         $parts[] = 'Respond in the same language the user writes in (Arabic or English) unless asked to switch. '
             . 'Use Markdown formatting (headings, lists, tables, fenced code blocks with a language tag) where it '
-            . 'improves clarity. You are READ-ONLY: never claim to have taken a platform action (sending a message, '
+            . 'improves clarity. You are READ-ONLY for platform actions (you can still write content in the chat): never claim to have taken a platform action (sending a message, '
             . 'changing a setting, approving or rejecting a project, grading) — you can only look things up and advise; '
             . 'if a real action is needed, tell the user which page to use and offer to draft the text for them.';
 

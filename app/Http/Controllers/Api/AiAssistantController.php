@@ -187,6 +187,9 @@ class AiAssistantController extends Controller
             $extractedText = null;
             if (in_array($extension, $textExtensions, true) && is_file($absolutePath) && filesize($absolutePath) < 2_000_000) {
                 $extractedText = @file_get_contents($absolutePath) ?: null;
+            } elseif (in_array($extension, ['pdf', 'docx', 'pptx', 'xlsx'], true) && is_file($absolutePath) && filesize($absolutePath) < 30_000_000) {
+                // PDF (pdftotext / smalot لو متاح)، Word، PowerPoint، Excel → نص يتبعت للموديل. null = مفيش نص مقروء (ممسوح ضوئيًا مثلًا).
+                $extractedText = \App\Services\Ai\AttachmentReader::extractText($absolutePath, $extension);
             }
 
             $kind = $this->classifyKind($extension, (string) $stored['original_name'], (string) ($stored['mime_type'] ?? ''));
