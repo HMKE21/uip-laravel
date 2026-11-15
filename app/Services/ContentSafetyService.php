@@ -327,6 +327,9 @@ class ContentSafetyService
             'enabled' => $this->enabled(),
             'provider' => $this->provider(),
             'ffmpeg' => $this->ffmpeg() !== null,
+            'ffmpeg_path' => $this->ffmpeg(),
+            'ffmpeg_hevc' => $this->anyFfmpegHasHevc(), // false = بيلف ffmpeg مش بيفك H.265 (فيديوهات الآيفون) — ركّب نسخة static (scripts/install-ffmpeg.sh)
+            'video_api_fallback' => $this->videoApiFallbackEnabled(),
             'gd' => function_exists('imagecreatefromstring'),
             'fail_open' => (bool) config('content_safety.fail_open', false),
             'require_scanner' => (bool) config('content_safety.require_image_scanner', false),
@@ -367,6 +370,20 @@ class ContentSafetyService
                 @mkdir($tmpDir, 0700, true);
                 $frames = $this->extractFrames($path, $tmpDir, $kind === 'video' ? 4 : 3);
                 if (!$frames && $kind === 'video') {
+                    // ffmpeg مش قادر يفك الفيديو (غالبًا H.265/HEVC على build ناقص) → نبعت الفيديو نفسه لفاحص الفيديو عند Sightengine.
+                    if ($provider === 'sightengine' && $this->videoApiFallbackEnabled() && $size > 0 && $size <= $this->videoApiMaxBytes()) {
+                        $v = $this->scanSightengineVideo($path);
+                        if ($v === false) {
+                            return $this->failed('could not read video frames');
+                        }
+
+                        return $v;
+                    }
+                    if ($this->decoderMissing) {
+                        $this->lastFailure = ($this->lastFailure ? $this->lastFailure . ' | ' : '')
+                            . 'HINT: this ffmpeg build lacks the needed video decoder (HEVC/H.265). Install a full static ffmpeg: bash scripts/install-ffmpeg.sh then set FFMPEG_PATH=/usr/local/bin/ffmpeg';
+                    }
+
                     return $this->failed('could not read video frames');
                 }
             }
@@ -430,27 +447,88 @@ class ContentSafetyService
         return false;
     }
 
-    private function ffmpeg(): ?string
+    /** true لو آخر محاولة فك فيديو فشلت بسبب decoder ناقص في ffmpeg. */
+    private bool $decoderMissing = false;
+
+    /**
+     * كل نسخ ffmpeg المتاحة بالترتيب: FFMPEG_PATH (من config مش env() عشان config:cache) ← FFMPEG_FALLBACK_PATH
+     * ← أماكن الـ static builds الشائعة ← اللي في الـ PATH. أول واحدة بتفك الفيديو بتتستخدم.
+     *
+     * @return string[]
+     */
+    private function ffmpegCandidates(): array
     {
-        static $bin = false;
-        if ($bin === false) {
-            $bin = null;
-            $env = trim((string) env('FFMPEG_PATH', ''));
-            if ($env !== '' && is_file($env) && is_executable($env)) {
-                return $bin = $env;
+        static $list = null;
+        if ($list !== null) {
+            return $list;
+        }
+        $cands = [
+            trim((string) config('content_safety.ffmpeg_path', '')),
+            trim((string) config('content_safety.ffmpeg_fallback_path', '')),
+            '/usr/local/bin/ffmpeg',
+            '/opt/ffmpeg/ffmpeg',
+            '/usr/local/ffmpeg/ffmpeg',
+            '/usr/bin/ffmpeg',
+        ];
+        if (function_exists('exec')) {
+            $out = [];
+            @exec('command -v ffmpeg 2>/dev/null', $out);
+            if (!empty($out[0])) {
+                $cands[] = $out[0];
             }
-            if (function_exists('exec')) {
-                $out = [];
-                @exec('command -v ffmpeg 2>/dev/null', $out);
-                $bin = !empty($out[0]) ? $out[0] : null;
+        }
+        $list = [];
+        foreach ($cands as $c) {
+            if ($c !== '' && is_file($c) && is_executable($c) && !in_array($c, $list, true)) {
+                $list[] = $c;
             }
         }
 
-        return $bin;
+        return $list;
+    }
+
+    private function ffmpeg(): ?string
+    {
+        return $this->ffmpegCandidates()[0] ?? null;
+    }
+
+    /** هل أي نسخة ffmpeg عندنا فيها HEVC decoder؟ */
+    private function anyFfmpegHasHevc(): bool
+    {
+        static $has = null;
+        if ($has !== null) {
+            return $has;
+        }
+        $has = false;
+        foreach ($this->ffmpegCandidates() as $bin) {
+            $out = [];
+            @exec(escapeshellarg($bin) . ' -hide_banner -decoders 2>&1', $out);
+            foreach ($out as $line) {
+                if (preg_match('/\bhevc\b/i', $line) && preg_match('/^\s*V/', $line)) {
+                    return $has = true;
+                }
+            }
+        }
+
+        return $has;
+    }
+
+    private function videoApiFallbackEnabled(): bool
+    {
+        return (bool) config('content_safety.video_api_fallback', true);
+    }
+
+    private function videoApiMaxBytes(): int
+    {
+        return max(1, (int) config('content_safety.video_api_max_mb', 50)) * 1048576;
     }
 
     private function ffprobe(): ?string
     {
+        $cfg = trim((string) config('content_safety.ffprobe_path', ''));
+        if ($cfg !== '' && is_file($cfg) && is_executable($cfg)) {
+            return $cfg;
+        }
         $ff = $this->ffmpeg();
         if ($ff === null) {
             return null;
@@ -494,6 +572,10 @@ class ContentSafetyService
             $msg = trim(implode(' | ', array_slice($log, -2)));
             if ($msg !== '' || $code !== 0) {
                 $this->lastFailure = 'ffmpeg exit ' . $code . ($msg !== '' ? ': ' . mb_substr($msg, 0, 220) : '');
+                if (preg_match('/decoder|does not include|unknown codec|not compiled|Unsupported codec/i', $msg)) {
+                    $this->decoderMissing = true;
+                    break; // نفس الـ build هيفشل بنفس السبب في باقي المحاولات — جرّب نسخة تانية
+                }
             }
         }
 
@@ -503,12 +585,13 @@ class ContentSafetyService
     /** @return string[] مسارات إطارات jpg */
     private function extractFrames(string $path, string $dir, int $count): array
     {
-        $ff = $this->ffmpeg();
-        if ($ff === null) {
+        $cands = $this->ffmpegCandidates();
+        if (!$cands) {
             $this->lastFailure = 'ffmpeg not found (set FFMPEG_PATH in .env)';
 
             return [];
         }
+        $this->decoderMissing = false;
         $dur = 0.0;
         $probe = $this->ffprobe();
         if ($probe !== null) {
@@ -519,19 +602,90 @@ class ContentSafetyService
             }
         }
         $timeout = max(8, (int) config('content_safety.timeout', 12) * 2);
-        $frames = [];
-        for ($i = 0; $i < $count; $i++) {
-            $t = $dur > 1 ? ($dur * (($i + 0.5) / $count)) : $i * 0.5;
-            $dst = $dir . '/f' . $i . '.jpg';
-            if ($this->grabFrame($ff, $path, $t, $dst, $timeout)) {
-                $frames[] = $dst;
+        foreach ($cands as $ff) {
+            $frames = [];
+            for ($i = 0; $i < $count; $i++) {
+                $t = $dur > 1 ? ($dur * (($i + 0.5) / $count)) : $i * 0.5;
+                $dst = $dir . '/f' . $i . '.jpg';
+                if ($this->grabFrame($ff, $path, $t, $dst, $timeout)) {
+                    $frames[] = $dst;
+                } elseif (!$frames && $this->decoderMissing) {
+                    break; // النسخة دي مش بتفك الكودك — جرّب اللي بعدها بدل ما نضيّع وقت
+                }
+            }
+            if ($frames) {
+                $this->lastFailure = null; // لقينا إطارات — أي خطأ ffmpeg على إطارات تانية مش مهم
+                $this->decoderMissing = false;
+
+                return $frames;
             }
         }
-        if ($frames) {
-            $this->lastFailure = null; // لقينا إطارات — أي خطأ ffmpeg على إطارات تانية مش مهم
+
+        return [];
+    }
+
+    /**
+     * فيديو كامل (≤ دقيقة) لفاحص الفيديو عند Sightengine — بيتستخدم لما ffmpeg مش قادر يفك الكودك (HEVC مثلًا).
+     *
+     * @return array{category:string,reason:string}|null|false  null = نضيف، false = خطأ
+     */
+    private function scanSightengineVideo(string $path)
+    {
+        $user = (string) config('content_safety.sightengine.user');
+        $secret = (string) config('content_safety.sightengine.secret');
+        $timeout = max(60, (int) config('content_safety.timeout', 12) * 5);
+        $r = null;
+        foreach (['nudity-2.1,gore-2.0', 'nudity-2.1'] as $models) {
+            try {
+                $fh = fopen($path, 'rb');
+                if ($fh === false) {
+                    $this->lastFailure = 'could not open video file';
+
+                    return false;
+                }
+                $r = Http::timeout($timeout)
+                    ->attach('media', $fh, 'media.' . (strtolower(pathinfo($path, PATHINFO_EXTENSION)) ?: 'mp4'))
+                    ->post('https://api.sightengine.com/1.0/video/check-sync.json', [
+                        'models' => $models,
+                        'api_user' => $user,
+                        'api_secret' => $secret,
+                    ]);
+            } catch (\Throwable $e) {
+                $this->lastFailure = 'sightengine video request failed: ' . mb_substr($e->getMessage(), 0, 200);
+                Log::warning('Content safety (sightengine video) request failed: ' . $e->getMessage());
+
+                return false;
+            }
+            if ($r->ok() && $r->json('status') === 'success') {
+                break;
+            }
+        }
+        if ($r === null || !$r->ok() || $r->json('status') !== 'success') {
+            $msg = $r ? (string) ($r->json('error.message') ?? $r->json('error.type') ?? '') : '';
+            $this->lastFailure = 'sightengine video HTTP ' . ($r ? $r->status() : '?') . ($msg !== '' ? ': ' . mb_substr($msg, 0, 200) : '');
+            Log::warning('Content safety (sightengine video) bad response: ' . $this->lastFailure);
+
+            return false;
+        }
+        $this->lastFailure = null;
+        $frames = (array) ($r->json('data.frames') ?? []);
+        if (!$frames) {
+            $this->lastFailure = 'sightengine video returned no frames';
+
+            return false;
+        }
+        $worst = null;
+        foreach ($frames as $fr) {
+            $v = $this->sightengineVerdict((array) $fr);
+            if ($v !== null && $worst === null) {
+                $worst = $v;
+                if ($this->trace === null) {
+                    break; // مش في وضع الاختبار — أول مخالفة تكفي
+                }
+            }
         }
 
-        return $frames;
+        return $worst;
     }
 
     /** صورة ثابتة جاهزة للإرسال للمزوّد (بتتصغّر لو كبيرة). */

@@ -51,3 +51,16 @@
 - `CONTENT_SAFETY_GIF_VERIFIED_ONLY=true` : نتايج GIF من قنوات Giphy الموثّقة بس (أشد أمانًا).
 - **لازم** مفتاح فاحص الصور (`CONTENT_SAFETY_OPENAI_KEY` أو Sightengine) عشان فحص صور الـ GIF والصور المرفوعة يشتغل. من غيره الحماية بتبقى على النص/العنوان/التصنيف بس.
 - بعد النشر: `php artisan config:clear` — وكاش البحث القديم بيتجاهل نفسه (مفتاح `gif5`).
+
+## ffmpeg والفيديو (HEVC / فيديوهات الآيفون)
+
+لو الفحص رجّع `could not read video frames — ffmpeg ... does not include a "hevc" decoder` يبقى الـ ffmpeg على السيرفر
+(مثلًا `ffmpeg-free` بتاع Amazon Linux) مفيهوش decoder الـ H.265. الحل:
+
+1. `sudo bash scripts/install-ffmpeg.sh` (بيركّب نسخة static كاملة في `/usr/local/bin`).
+2. في `.env`: `FFMPEG_PATH=/usr/local/bin/ffmpeg` و `FFPROBE_PATH=/usr/local/bin/ffprobe` ثم `php artisan config:clear`.
+
+حماية إضافية في الكود (شغّالة تلقائي):
+- لو أول نسخة ffmpeg مش بتفك الكودك، بيجرّب `FFMPEG_FALLBACK_PATH` (افتراضي `/usr/local/bin/ffmpeg`) وأماكن الـ static builds الشائعة.
+- لو كله فشل والمزوّد Sightengine، الفيديو (≤ دقيقة و≤ `CONTENT_SAFETY_VIDEO_API_MAX_MB`=50) بيتبعت لفاحص الفيديو عندهم. قفله بـ `CONTENT_SAFETY_VIDEO_API_FALLBACK=false`.
+- صفحة الأدمن (`status`) بقت بترجّع `ffmpeg_path` و `ffmpeg_hevc`.

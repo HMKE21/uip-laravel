@@ -48,6 +48,15 @@ return [
     'max_scan_mb' => (int) env('CONTENT_SAFETY_MAX_SCAN_MB', 25),
     'timeout'     => (int) env('CONTENT_SAFETY_TIMEOUT', 12),
 
+    // ffmpeg: بنقرأ المسار من هنا (مش env() مباشرة) عشان يشتغل مع php artisan config:cache.
+    'ffmpeg_path'          => env('FFMPEG_PATH', ''),
+    'ffprobe_path'         => env('FFPROBE_PATH', ''),
+    // نسخة ffmpeg تانية بتتجرّب لو الأولى مش بتفك الكودك (مثلًا ffmpeg-free بتاع Amazon Linux مفيهوش HEVC).
+    'ffmpeg_fallback_path' => env('FFMPEG_FALLBACK_PATH', '/usr/local/bin/ffmpeg'),
+    // لو ffmpeg فشل يفك الفيديو: ابعت الفيديو كله لفاحص الفيديو عند Sightengine (≤ دقيقة و≤ الحجم ده).
+    'video_api_fallback'   => (bool) env('CONTENT_SAFETY_VIDEO_API_FALLBACK', true),
+    'video_api_max_mb'     => (int) env('CONTENT_SAFETY_VIDEO_API_MAX_MB', 50),
+
     // مسارات مستثناة بالكامل (مفيش فحص نص/ملفات): مصادقة، إشارات المكالمات، الامتحانات (إجابات/كاميرا مراقبة)، تشغيل الكود.
     'skip_paths' => [
         'api/v1/auth/*', 'api/v1/secure/*', 'api/v1/realtime/*', 'api/v1/session/*', 'api/v1/activity/*',
