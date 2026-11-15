@@ -112,6 +112,7 @@ return [
             'txt', 'md', 'log',
             'php', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rb',
             'html', 'css', 'sh', 'yml', 'yaml',
+            'xml', 'tsv', 'jsx', 'tsx', 'vue', 'kt', 'swift', 'rs', 'toml', 'ini', 'rtf', 'odt', 'ods', 'odp',
         ],
         // Student Portal spec section 2 "University Feed" — post attachments:
         // Images/Videos/PDFs/Attachments. Kept separate from 'messages' so an

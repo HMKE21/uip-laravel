@@ -9,6 +9,8 @@ use App\Services\Ai\AIClient;
 use App\Services\Ai\AiPlatformTools;
 use App\Services\Ai\AiProviderException;
 use App\Services\Ai\AttachmentReader;
+use App\Services\Ai\FileBlockStreamFilter;
+use App\Services\Ai\GeneratedFileBuilder;
 use App\Services\Ai\ImageClient;
 use App\Services\Ai\AiToolsUnsupportedException;
 use App\Services\Concerns\ConfiguresAIClient;
@@ -39,6 +41,7 @@ class AiAssistantService
     private const MAX_TOOL_ROUNDS = 4;
     private const MAX_CALLS_PER_ROUND = 5;
     private const MAX_CALLS_PER_TURN = 10;
+    private const MAX_FILES_PER_REPLY = 5;
 
     private AIClient $client;
 
@@ -80,7 +83,7 @@ class AiAssistantService
 
         return [
             'temperature'         => (float) $get('temperature', '0.6'),
-            'max_tokens'          => (int) $get('max_tokens', '2000'),
+            'max_tokens'          => (int) $get('max_tokens', '4000'),
             'system_prompt'       => (string) $get('system_prompt', ''),
             'allowed_extensions'  => array_values(array_filter(explode(',', (string) $get('allowed_extensions', '')))),
             'retention_days'      => (int) $get('retention_days', '0'), // 0 = يفضل للأبد
@@ -326,6 +329,26 @@ class AiAssistantService
         $started = microtime(true);
         $usedTools = [];
 
+        // بلوكات <uipe-file> مابتتعرضش كنص: بتتحجب من الستريم وبتتحوّل لملف للتحميل بعد ما الرد يخلص.
+        $fileFilter = new FileBlockStreamFilter(
+            $onToken,
+            function (string $name) use ($onEvent, $locale): void {
+                if ($onEvent) {
+                    $onEvent('tool', ['name' => 'create_file', 'kind' => 'file', 'label' => $this->fileToolLabel($name, $locale)]);
+                }
+            }
+        );
+        $onToken = fn (string $delta) => $fileFilter->push($delta);
+        if ($onEvent) {
+            $innerEvent = $onEvent;
+            $onEvent = function (string $type, array $payload) use ($innerEvent, $fileFilter): void {
+                if ($type === 'reset') {
+                    $fileFilter->reset();
+                }
+                $innerEvent($type, $payload);
+            };
+        }
+
         try {
             $streamed = false;
             $trackedOnToken = function (string $delta) use ($onToken, &$streamed) {
@@ -377,6 +400,9 @@ class AiAssistantService
             } else {
                 $fullText = $attempt($promptMessages);
             }
+
+            $fileFilter->finish();
+            $fullText = $this->finalizeGeneratedFiles($userId, $conversationId, $assistantMessageId, $fullText, $locale);
 
             $message = $this->repo->findMessage($assistantMessageId);
             $message->fill(['content' => $fullText, 'status' => 'complete', 'answer_source' => 'ai']);
@@ -802,6 +828,7 @@ SYS;
                 $usedTools = [];
                 $text = $this->runModel($userId, $context['role'] ?? null, $this->stripImageParts($prepared['prompt_messages']), $settings, $noop, null, (string) ($context['locale'] ?? 'ar'), $usedTools);
             }
+            $text = $this->finalizeGeneratedFiles($userId, $conversationId, (int) $prepared['assistant_message_id'], $text, (string) ($context['locale'] ?? 'ar'));
             $message = $this->repo->findMessage($prepared['assistant_message_id']);
             $message->fill(['content' => $text, 'status' => 'complete', 'answer_source' => 'ai']);
             $message->save();
@@ -834,11 +861,153 @@ SYS;
         }
         $message->fill(['status' => 'streaming', 'content' => '', 'error_message' => null]);
         $message->save();
+        $this->deleteGeneratedFiles($assistantMessageId);
 
         $history = $this->repo->messagesForConversation($conversationId);
         $promptMessages = $this->buildPromptMessages($history, $assistantMessageId, $context, null, null);
 
         return ['prompt_messages' => $promptMessages, 'assistant_message_id' => $assistantMessageId];
+    }
+
+    // -- Generated files (<uipe-file name="…">…</uipe-file>) ----------------------
+
+    /** اللي بيظهر للمستخدم أثناء كتابة الملف ("جاري تجهيز report.docx…"). */
+    private function fileToolLabel(string $name, string $locale): string
+    {
+        [$base, $ext] = GeneratedFileBuilder::sanitizeName($name);
+        return ($locale === 'en' ? 'Preparing ' : 'جاري تجهيز ') . $base . '.' . $ext;
+    }
+
+    /** مرفقات رسالة الـ assistant بعد ما الرد خلص (الكنترولر بيبعتها في event الـ done). */
+    public function attachmentsForAssistantMessage(int $messageId): array
+    {
+        return array_map(fn ($a) => $this->shapeAttachment($a), $this->repo->attachmentsForMessage($messageId));
+    }
+
+    /**
+     * بيفصل بلوكات الملفات عن نص الرد.
+     * @return array{0:string,1:array<int,array{name:string,content:string}>,2:bool} [النص النضيف، الملفات، في بلوك ناقص؟]
+     */
+    private function extractFileBlocks(string $text): array
+    {
+        $files = [];
+        $clean = preg_replace_callback(
+            '#<uipe-file\s+name\s*=\s*"([^"]*)"\s*>(.*?)</uipe-file>#is',
+            function (array $m) use (&$files): string {
+                $files[] = ['name' => html_entity_decode($m[1], ENT_QUOTES | ENT_XML1, 'UTF-8'), 'content' => $m[2]];
+                return '';
+            },
+            $text
+        ) ?? $text;
+
+        $truncated = false;
+        if (preg_match('#<uipe-file\b#i', $clean, $m, PREG_OFFSET_CAPTURE)) {
+            $clean = substr($clean, 0, $m[0][1]); // بلوك ما اتقفلش (الرد اتقطع) — بنشيله
+            $truncated = true;
+        }
+        $clean = trim((string) preg_replace("/\n{3,}/", "\n\n", $clean));
+        return [$clean, $files, $truncated];
+    }
+
+    /**
+     * لو الرد فيه بلوكات ملفات: يبنيها ملفات حقيقية ويربطها برسالة الـ assistant، ويرجّع نص الرد من غير البلوكات.
+     * بدون بلوكات بيرجّع النص زي ما هو.
+     */
+    private function finalizeGeneratedFiles(int $userId, int $conversationId, int $assistantMessageId, string $rawText, string $locale): string
+    {
+        if (stripos($rawText, '<uipe-file') === false) {
+            return $rawText;
+        }
+        $ar = $locale !== 'en';
+        [$clean, $files, $truncated] = $this->extractFileBlocks($rawText);
+
+        $made = 0;
+        $failed = [];
+        foreach (array_slice($files, 0, self::MAX_FILES_PER_REPLY) as $f) {
+            try {
+                $this->storeGeneratedFile($userId, $conversationId, $assistantMessageId, $f['name'], $f['content']);
+                $made++;
+            } catch (\Throwable $e) {
+                Log::warning('AI file generation failed', ['name' => $f['name'], 'error' => $e->getMessage()]);
+                $failed[] = $f['name'] !== '' ? $f['name'] : 'file';
+            }
+        }
+        if (count($files) > self::MAX_FILES_PER_REPLY) {
+            $clean .= "\n\n" . ($ar
+                ? '⚠️ بجهّز ' . self::MAX_FILES_PER_REPLY . ' ملفات كحد أقصى في الرد الواحد — اطلب الباقي في رسالة تانية.'
+                : '⚠️ At most ' . self::MAX_FILES_PER_REPLY . ' files per reply — ask for the rest in a new message.');
+        }
+        if ($truncated) {
+            $clean .= "\n\n" . ($ar
+                ? '⚠️ الملف اتقطع قبل ما يكتمل (الرد أطول من الحد المسموح). اطلب مني أكمله أو أقسمه على أكتر من ملف.'
+                : '⚠️ The file was cut off before it was complete (the reply hit the length limit). Ask me to continue or split it into several files.');
+        }
+        if ($failed) {
+            $clean .= "\n\n" . ($ar
+                ? '⚠️ ماقدرتش أجهّز الملف: ' . implode('، ', $failed)
+                : '⚠️ I could not build: ' . implode(', ', $failed));
+        }
+        if ($clean === '' && $made > 0) {
+            $clean = $ar ? 'جهّزت لك الملف 👇' : 'Here is your file 👇';
+        }
+        return $clean;
+    }
+
+    /** بيبني الملف على القرص ويسجّله كمرفق لرسالة الـ assistant. المصدر بيتخزّن في extracted_text عشان التعديل في التيرنات الجاية. */
+    private function storeGeneratedFile(int $userId, int $conversationId, int $assistantMessageId, string $name, string $content): void
+    {
+        $built = GeneratedFileBuilder::build($name, $content);
+        if ($built['bytes'] === '') {
+            throw new \RuntimeException('Generated file is empty.');
+        }
+
+        $relativeDir = (string) config('upload.paths.ai_assistant', 'uploads/ai_assistant') . '/conv_' . $conversationId;
+        $targetDir = \App\Services\FileUploadService::diskDir($relativeDir);
+        if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+            throw new \RuntimeException('Could not prepare the file destination.');
+        }
+        $storedName = bin2hex(random_bytes(16)) . '.' . $built['ext'];
+        if (@file_put_contents($targetDir . '/' . $storedName, $built['bytes']) === false) {
+            throw new \RuntimeException('Failed to save the generated file.');
+        }
+        \App\Support\UploadMirror::push($relativeDir . '/' . $storedName, $targetDir . '/' . $storedName);
+
+        // مصدر نصي بس للصيغ اللي هو فعلًا نص كتبه الموديل (مش للـ zip المتعدد الملفات إلا بحجم معقول).
+        $source = mb_substr(str_replace(["\r\n", "\r"], "\n", $content), 0, 100000);
+
+        \Illuminate\Support\Facades\DB::table('ai_message_attachments')->insert([
+            'message_id'      => $assistantMessageId,
+            'conversation_id' => $conversationId,
+            'uploader_id'     => $userId,
+            'kind'            => $built['kind'],
+            'stored_path'     => $relativeDir . '/' . $storedName,
+            'original_name'   => $built['name'],
+            'mime_type'       => $built['mime'],
+            'extension'       => $built['ext'],
+            'size_bytes'      => strlen($built['bytes']),
+            'extracted_text'  => $source !== '' ? $source : null,
+            'created_at'      => now(),
+        ]);
+    }
+
+    /** Regenerate: امسح الملفات المولّدة القديمة لنفس رسالة الـ assistant (الصور بتفضل زي ما هي). */
+    private function deleteGeneratedFiles(int $assistantMessageId): void
+    {
+        $rows = \Illuminate\Support\Facades\DB::table('ai_message_attachments')
+            ->where('message_id', $assistantMessageId)
+            ->where('kind', '!=', 'image')
+            ->get();
+        foreach ($rows as $row) {
+            $path = $this->attachmentPath((array) $row);
+            if ($path !== null) {
+                @unlink($path);
+            }
+        }
+        if ($rows->isNotEmpty()) {
+            \Illuminate\Support\Facades\DB::table('ai_message_attachments')
+                ->whereIn('id', $rows->pluck('id')->all())
+                ->delete();
+        }
     }
 
     // -- Internals ----------------------------------------------------------------
@@ -1097,9 +1266,17 @@ SYS;
             foreach ($atts as $att) {
                 $name = (string) $att['original_name'];
                 if ($row['role'] === 'assistant') {
-                    $lines[] = ($att['kind'] ?? '') === 'image'
-                        ? "[AI-generated image attached to this reply: {$name}]"
-                        : "[File attached to this reply: {$name}]";
+                    if (($att['kind'] ?? '') === 'image') {
+                        $lines[] = "[AI-generated image attached to this reply: {$name}]";
+                    } elseif (!empty($att['extracted_text']) && min($perFile, $histBudget) >= 500) {
+                        // ملف الموديل نفسه كتبه: نرجّع مصدره عشان "عدّل الملف ده" يشتغل على النص الحقيقي.
+                        $text = (string) $att['extracted_text'];
+                        $take = min($perFile, $histBudget);
+                        $histBudget -= $take;
+                        $lines[] = "[File you created and attached to this reply: {$name}]\n--- source you wrote for {$name} ---\n" . mb_substr($text, 0, $take) . (mb_strlen($text) > $take ? "\n[... truncated]" : '') . "\n--- end of {$name} ---";
+                    } else {
+                        $lines[] = "[File attached to this reply: {$name}]";
+                    }
                 } elseif (($att['kind'] ?? '') === 'image') {
                     $lines[] = $rid === $visionRowId
                         ? "[Attached image: {$name} — you can see it below]"
@@ -1203,6 +1380,8 @@ SYS;
             $parts[] = implode("\n", $lines);
         }
 
+        $parts[] = $this->fileCreationRules();
+
         $parts[] = 'Respond in the same language the user writes in (Arabic or English) unless asked to switch. '
             . 'Use Markdown formatting (headings, lists, tables, fenced code blocks with a language tag) where it '
             . 'improves clarity. You are READ-ONLY for platform actions (you can still write content in the chat): never claim to have taken a platform action (sending a message, '
@@ -1217,6 +1396,37 @@ SYS;
         }
 
         return implode("\n\n", $parts);
+    }
+
+    /** قواعد توليد الملفات: بلوك <uipe-file> بيتحوّل لملف حقيقي للتحميل (شوف GeneratedFileBuilder + finalizeGeneratedFiles). */
+    private function fileCreationRules(): string
+    {
+        return <<<'TXT'
+        FILE CREATION (you can create real downloadable files, like Claude does)
+        - When the user asks for a file, document, report, spreadsheet, PDF, Word/Excel file, zip, CSV, script, or asks to convert / export /
+          rewrite / fix an attached file into a file, CREATE it. Never say you cannot create files. Do not create files for ordinary questions.
+        - Create a file by writing this block (the platform turns it into a download button; the block itself is never shown to the user):
+          <uipe-file name="Report.docx">
+          ...complete file content...
+          </uipe-file>
+        - Name: short, descriptive, with the right extension (Arabic names are fine). Supported: docx, pdf, xlsx, zip, csv, md, txt, json, html,
+          xml, sql and code files (py, js, jsx, ts, tsx, vue, php, java, kt, swift, rs, c, cpp, cs, go, rb, css, sh, yml, yaml, toml, ini).
+        - Content format by type:
+          • docx and pdf: write normal Markdown (# headings, lists, **bold**, tables, `code`, > quotes, --- rules). Do not use raw HTML and do not embed images.
+          • xlsx: Markdown tables — one table per sheet; put the sheet name on the line right above its table; first row = headers. Write numbers as plain
+            numbers (no thousands separators, no currency symbols — put the unit in the header). Simple formulas like =SUM(B2:B9) are allowed. A CSV text also works.
+          • csv: raw CSV text only.  md, txt, json, html, xml, sql and code: the raw file content only — never wrap it in ``` fences inside the block.
+          • zip: several files in one archive; start each file with a line "=== path/to/file.ext ===" followed by its content (docx/pdf/xlsx entries use the formats above).
+        - Always write the COMPLETE content — never placeholders such as "...rest of the file". If it is too long for one reply, split it across several files
+          or say plainly that you will continue in the next message.
+        - Around the block write one or two short sentences (what the file contains, what you changed); do not paste the file content again in the chat
+          unless the user asked to see it. At most 5 files per reply. Write the document in the user's language unless they ask otherwise.
+        - Editing: when the user attaches a file (or refers to a file you created earlier) and asks for a change, produce the full updated file as a new
+          block (same name unless they ask otherwise) and summarise the changes. You can read the content of attached PDF, Word, Excel, PowerPoint, text, code and zip files.
+        - Not supported yet: PowerPoint (.pptx) and images inside documents. If asked, say so briefly and offer the closest option (a Word/PDF outline of the slides,
+          or a Markdown file) — still create that option instead of only apologising.
+        - Never mention the <uipe-file> syntax to the user.
+        TXT;
     }
 
     /** السياق اللي بيتخزن مع رسالة اليوزر: من غير البروفايل (بيتعاد بناؤه من الداتابيز كل تيرن). */

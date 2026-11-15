@@ -10,6 +10,35 @@ class AttachmentReader
 {
     public const MAX_TEXT = 200000;
 
+    /** امتدادات نصية بتتقرا كنص خام (ملف مرفوع أو جوّه zip). */
+    public const TEXT_EXT = [
+        'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'xml', 'sql', 'log', 'ini', 'toml', 'env', 'html', 'htm', 'css', 'scss',
+        'php', 'js', 'jsx', 'ts', 'tsx', 'vue', 'py', 'java', 'kt', 'swift', 'rs', 'c', 'h', 'cpp', 'cs', 'go', 'rb', 'sh', 'bat',
+        'yml', 'yaml', 'gitignore', 'dockerfile',
+    ];
+    /** امتدادات بتحتاج استخراج (PDF / Office / OpenDocument / RTF / ZIP). */
+    public const EXTRACT_EXT = ['pdf', 'docx', 'pptx', 'xlsx', 'odt', 'ods', 'odp', 'rtf', 'zip'];
+
+    public static function isTextExt(string $ext): bool
+    {
+        return in_array(strtolower($ext), self::TEXT_EXT, true);
+    }
+
+    public static function canExtract(string $ext): bool
+    {
+        return in_array(strtolower($ext), self::EXTRACT_EXT, true);
+    }
+
+    /** بايتات نص → UTF-8 (ملفات عربي قديمة بتبقى Windows-1256). */
+    public static function toUtf8(string $raw): string
+    {
+        $raw = preg_replace('/^\xEF\xBB\xBF/', '', $raw) ?? $raw;
+        if (mb_check_encoding($raw, 'UTF-8')) {
+            return $raw;
+        }
+        return (string) mb_convert_encoding($raw, 'UTF-8', 'Windows-1256, ISO-8859-1');
+    }
+
     public static function extractText(string $path, string $ext): ?string
     {
         $ext = strtolower($ext);
@@ -19,6 +48,10 @@ class AttachmentReader
                 'docx' => self::zipXmlText($path, ['word/document.xml'], '</w:p>'),
                 'pptx' => self::pptxText($path),
                 'xlsx' => self::xlsxText($path),
+                'odt', 'odp' => self::zipXmlText($path, ['content.xml'], '</text:p>'),
+                'ods'  => self::zipXmlText($path, ['content.xml'], '</table:table-row>'),
+                'rtf'  => self::rtfText($path),
+                'zip'  => self::zipListing($path),
                 default => null,
             };
         } catch (\Throwable $e) {
@@ -29,6 +62,86 @@ class AttachmentReader
         }
         $text = trim(preg_replace("/[ \t]+\n/", "\n", preg_replace("/\n{3,}/", "\n\n", str_replace("\r", '', $text))) ?? '');
         return mb_strlen($text) >= 3 ? mb_substr($text, 0, self::MAX_TEXT) : null;
+    }
+
+    private static function rtfText(string $path): ?string
+    {
+        $raw = @file_get_contents($path, false, null, 0, 3_000_000);
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        $raw = preg_replace_callback("/\\\\'([0-9a-f]{2})/i", fn ($m) => chr(hexdec($m[1])), $raw) ?? $raw;
+        $raw = preg_replace('/\\\\(par|line|tab)\b ?/', "\n", $raw) ?? $raw;
+        $raw = preg_replace('/\{\\\\\*[^{}]*\}/', '', $raw) ?? $raw;
+        $raw = preg_replace('/\\\\[a-z]+-?\d* ?|[{}]/i', '', $raw) ?? $raw;
+        return self::toUtf8($raw);
+    }
+
+    /**
+     * محتوى zip: قايمة الملفات + نص الملفات النصية/المكتب جوّاه (بيتقرا في الذاكرة بس — مفيش فك على القرص، فمفيش zip-slip).
+     * node_modules/vendor/.git وأمثالهم بيتعدّوا. حدود: 400 مدخل، 2MB لكل ملف، ميزانية نص كلية.
+     */
+    private static function zipListing(string $path): ?string
+    {
+        $zip = new \ZipArchive();
+        if ($zip->open($path) !== true) {
+            return null;
+        }
+        $total = $zip->numFiles;
+        $listing = [];
+        $bodies = [];
+        $skipped = 0;
+        $budget = 150000;
+        $nested = 0;
+        $perFile = 12000;
+
+        for ($i = 0; $i < min($total, 400); $i++) {
+            $st = $zip->statIndex($i);
+            if (!is_array($st)) {
+                continue;
+            }
+            $name = (string) $st['name'];
+            if (preg_match('#(^|/)(node_modules|vendor|\.git|__MACOSX|\.idea|dist|build|\.next)(/|$)#', $name) || str_ends_with($name, '.DS_Store')) {
+                $skipped++;
+                continue;
+            }
+            $isDir = str_ends_with($name, '/');
+            $size = (int) ($st['size'] ?? 0);
+            $listing[] = $isDir ? "[dir]  {$name}" : "[file] {$name} ({$size} bytes)";
+            if ($isDir || $budget <= 0 || $size <= 0 || $size > 2_000_000) {
+                continue;
+            }
+            $ext = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+            $base = strtolower(basename($name));
+            $text = null;
+            if (self::isTextExt($ext) || in_array($base, ['readme', 'license', 'makefile', 'dockerfile', '.env.example', '.gitignore'], true)) {
+                $raw = $zip->getFromIndex($i, 200000);
+                if (is_string($raw) && $raw !== '' && !str_contains(substr($raw, 0, 4000), "\0")) {
+                    $text = self::toUtf8($raw);
+                }
+            } elseif (in_array($ext, ['docx', 'pptx', 'xlsx', 'pdf', 'odt', 'ods', 'odp'], true) && $nested < 6 && $size <= 10_000_000) {
+                $raw = $zip->getFromIndex($i);
+                if (is_string($raw) && $raw !== '') {
+                    $nested++;
+                    $tmp = tempnam(sys_get_temp_dir(), 'uipzn');
+                    if ($tmp !== false) {
+                        @file_put_contents($tmp, $raw);
+                        $text = self::extractText($tmp, $ext);
+                        @unlink($tmp);
+                    }
+                }
+            }
+            if ($text !== null && trim($text) !== '') {
+                $cut = mb_strlen($text) > $perFile;
+                $chunk = mb_substr($text, 0, $perFile);
+                $budget -= mb_strlen($chunk);
+                $bodies[] = "--- {$name} ---\n" . $chunk . ($cut ? "\n[... file truncated]" : '');
+            }
+        }
+
+        $head = "ZIP archive with {$total} entries" . ($skipped ? " ({$skipped} dependency/build entries hidden)" : '') . ($total > 400 ? ' — only the first 400 are listed' : '') . ":\n" . implode("\n", $listing);
+        $zip->close();
+        return $head . ($bodies ? "\n\nText content of readable files:\n\n" . implode("\n\n", $bodies) : '');
     }
 
     private static function shellOk(): bool

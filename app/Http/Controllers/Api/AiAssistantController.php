@@ -183,12 +183,12 @@ class AiAssistantController extends Controller
             $extension = strtolower($stored['extension']);
             $absolutePath = public_path($stored['stored_path']);
 
-            $textExtensions = ['txt', 'md', 'csv', 'json', 'sql', 'log', 'php', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'html', 'css', 'sh', 'yml', 'yaml'];
             $extractedText = null;
-            if (in_array($extension, $textExtensions, true) && is_file($absolutePath) && filesize($absolutePath) < 2_000_000) {
-                $extractedText = @file_get_contents($absolutePath) ?: null;
-            } elseif (in_array($extension, ['pdf', 'docx', 'pptx', 'xlsx'], true) && is_file($absolutePath) && filesize($absolutePath) < 30_000_000) {
-                // PDF (pdftotext / smalot لو متاح)، Word، PowerPoint، Excel → نص يتبعت للموديل. null = مفيش نص مقروء (ممسوح ضوئيًا مثلًا).
+            if (\App\Services\Ai\AttachmentReader::isTextExt($extension) && is_file($absolutePath) && filesize($absolutePath) < 2_000_000) {
+                $raw = @file_get_contents($absolutePath);
+                $extractedText = is_string($raw) && $raw !== '' ? \App\Services\Ai\AttachmentReader::toUtf8($raw) : null;
+            } elseif (\App\Services\Ai\AttachmentReader::canExtract($extension) && is_file($absolutePath) && filesize($absolutePath) < 30_000_000) {
+                // PDF / Word / PowerPoint / Excel / OpenDocument / RTF / ZIP → نص يتبعت للموديل. null = مفيش نص مقروء (ممسوح ضوئيًا مثلًا).
                 $extractedText = \App\Services\Ai\AttachmentReader::extractText($absolutePath, $extension);
             }
 
@@ -259,8 +259,8 @@ class AiAssistantController extends Controller
             'video'    => ['mp4', 'webm', 'mov', 'avi', 'mkv'],
             'audio'    => ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'weba'],
             'archive'  => ['zip', 'rar', '7z'],
-            'code'     => ['php', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'html', 'css', 'sql', 'sh', 'yml', 'yaml'],
-            'document' => ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv', 'json', 'xml', 'txt', 'md', 'log'],
+            'code'     => ['php', 'js', 'jsx', 'ts', 'tsx', 'vue', 'py', 'java', 'kt', 'swift', 'rs', 'c', 'cpp', 'cs', 'go', 'rb', 'html', 'css', 'sql', 'sh', 'yml', 'yaml', 'toml', 'ini'],
+            'document' => ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'csv', 'tsv', 'json', 'xml', 'txt', 'md', 'log'],
         ];
         foreach ($map as $kind => $extensions) {
             if (in_array($extension, $extensions, true)) {
@@ -502,7 +502,7 @@ class AiAssistantController extends Controller
                 fn (string $type, array $payload) => $send(['type' => $type] + $payload),
                 (string) ($context['locale'] ?? 'ar')
             );
-            $send(['type' => 'done', 'message_id' => $assistantMessageId, 'content' => $fullText]);
+            $send(['type' => 'done', 'message_id' => $assistantMessageId, 'content' => $fullText, 'attachments' => $this->assistant->attachmentsForAssistantMessage($assistantMessageId)]);
         } catch (\Throwable $e) {
             $send(['type' => 'error', 'message_id' => $assistantMessageId, 'message' => $e->getMessage()]);
         }
