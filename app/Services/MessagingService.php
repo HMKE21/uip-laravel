@@ -362,7 +362,7 @@ class MessagingService
         // Group rules: closed group / restricted member / allowed message types (no-op for 1:1 chats).
         $kinds = [];
         foreach (array_values((array) ($options['attachments'] ?? [])) as $file) {
-            if ($file instanceof UploadedFile && ($options['message_type'] ?? 'text') !== 'sticker') {
+            if ($file instanceof UploadedFile && !in_array(($options['message_type'] ?? 'text'), ['sticker', 'sticker_pack'], true)) {
                 $kinds[] = $this->classifyKind(strtolower((string) $file->getClientOriginalExtension()), $file->getClientOriginalName(), $file->getClientMimeType());
             }
         }
@@ -2026,7 +2026,7 @@ class MessagingService
         }
         $row = $this->attachmentForServing($attachmentId, $userId);
         if (!$row || !in_array($row['kind'], ['image', 'video'], true)
-            || DB::table('messages')->where('id', (int) $row['message_id'])->value('message_type') !== 'sticker') {
+            || !in_array(DB::table('messages')->where('id', (int) $row['message_id'])->value('message_type'), ['sticker', 'sticker_pack'], true)) {
             throw new \RuntimeException('Sticker not found.');
         }
         $abs = FileUploadService::absolutePath((string) $row['stored_path']);
@@ -2145,6 +2145,129 @@ class MessagingService
         DB::table('sticker_pack_items')->where('pack_id', $packId)->where('sticker_id', $stickerId)->delete();
         DB::table('sticker_packs')->where('id', $packId)->update(['updated_at' => now()]);
         return $this->stickerPacks($userId);
+    }
+
+    /**
+     * يبعت باك ستيكرز كامل (أو جزء منه لو $stickerIds) في رسالة واحدة من نوع sticker_pack.
+     * كل ستيكر بيتنسخ كمرفق للرسالة (نفس نظام الوسائط المحمية)، فالمستلم يقدر يشوفهم ويحفظ الباك كله أو اللي يختاره.
+     */
+    public function sendStickerPack(int $conversationId, $userId, int $packId, array $stickerIds = []): array
+    {
+        $pack = $this->ownPack($userId, $packId);
+        $q = DB::table('sticker_pack_items as i')->join('user_stickers as s', 's.id', '=', 'i.sticker_id')
+            ->where('i.pack_id', $packId)->where('s.user_id', (int) $userId)->orderBy('i.id');
+        $ids = array_values(array_unique(array_filter(array_map('intval', $stickerIds))));
+        if ($ids) {
+            $q->whereIn('s.id', $ids);
+        }
+        $rows = $q->limit(self::PACK_MAX_ITEMS)->get(['s.id']);
+        if ($rows->isEmpty()) {
+            throw new \RuntimeException('This pack is empty.');
+        }
+
+        $uploads = [];
+        $tmps = [];
+        $kinds = [];
+        try {
+            foreach ($rows as $r) {
+                $src = $this->stickerForServing($userId, (int) $r->id);
+                if (!$src) {
+                    continue;
+                }
+                [$up, $tmp] = $this->tempUploadFrom($src['path'], $src['name'], $src['mime']);
+                $uploads[] = $up;
+                $tmps[] = $tmp;
+                $kinds[] = str_starts_with($src['mime'], 'video/') ? 'video' : 'image';
+            }
+            if (!$uploads) {
+                throw new \RuntimeException('This pack is empty.');
+            }
+            $shaped = $this->sendMessage($conversationId, $userId, '', [
+                'message_type' => 'sticker_pack',
+                'attachments'  => $uploads,
+                'metadata'     => ['pack_name' => (string) $pack->name, 'count' => count($uploads)],
+            ]);
+        } finally {
+            foreach ($tmps as $t) {
+                if ($t && is_file($t)) {
+                    @unlink($t);
+                }
+            }
+        }
+
+        $items = [];
+        $atts = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->orderBy('id')->get(['id']);
+        foreach ($atts as $i => $a) {
+            $items[] = ['id' => (int) $a->id, 'kind' => $kinds[$i] ?? 'image', 'url' => '/api/v1/messaging/attachments/' . (int) $a->id . '/file'];
+        }
+        DB::table('messages')->where('id', (int) $shaped['id'])->update(['metadata' => json_encode(['pack_name' => (string) $pack->name, 'count' => count($items), 'items' => $items])]);
+
+        return $this->shapeMessage($this->messages->withRelations((int) $shaped['id']), $userId);
+    }
+
+    /**
+     * يحفظ باك وصلني (رسالة sticker_pack) كله أو ستيكرات منه: بينسخهم لمكتبتي وبيعمل باك جديد باسم الباك الأصلي،
+     * أو بيضيفهم لباك عندي ($packId). الستيكر اللي عندي أصلًا (من نفس الرسالة) بيتعاد استخدامه من غير تكرار.
+     * @return array{pack_id:int,saved:int,packs:array}
+     */
+    public function saveStickerPackFromMessage($userId, int $messageId, array $attachmentIds = [], ?string $name = null, ?int $packId = null): array
+    {
+        $msg = $this->messages->find($messageId);
+        if (!$msg || !$this->conversations->isParticipant((int) $msg->conversation_id, $userId) || !empty($msg->is_deleted) || ($msg->message_type ?? '') !== 'sticker_pack') {
+            throw new \RuntimeException('Sticker pack not found.');
+        }
+        $all = DB::table('message_attachments')->where('message_id', $messageId)->orderBy('id')->pluck('id')->map(fn ($v) => (int) $v)->all();
+        $want = array_values(array_unique(array_filter(array_map('intval', $attachmentIds))));
+        $ids = $want ? array_values(array_intersect($all, $want)) : $all;
+        if (!$ids) {
+            throw new \RuntimeException('Choose at least one sticker.');
+        }
+        $meta = is_string($msg->metadata ?? null) ? json_decode($msg->metadata, true) : (array) ($msg->metadata ?? []);
+
+        $created = false;
+        if ($packId) {
+            $this->ownPack($userId, $packId);
+            $targetId = $packId;
+        } else {
+            if (DB::table('sticker_packs')->where('user_id', (int) $userId)->count() >= self::PACK_MAX_PER_USER) {
+                throw new \RuntimeException('You can have up to ' . self::PACK_MAX_PER_USER . ' sticker packs.');
+            }
+            $base = $this->packName($name !== null && trim($name) !== '' ? $name : (string) ($meta['pack_name'] ?? 'Stickers'));
+            $final = $base;
+            $n = 2;
+            while (DB::table('sticker_packs')->where('user_id', (int) $userId)->whereRaw('LOWER(name) = ?', [mb_strtolower($final)])->exists()) {
+                $final = mb_substr($base, 0, 34) . ' (' . $n++ . ')';
+            }
+            $targetId = (int) DB::table('sticker_packs')->insertGetId(['user_id' => (int) $userId, 'name' => $final, 'created_at' => now(), 'updated_at' => now()]);
+            $created = true;
+        }
+
+        $room = self::PACK_MAX_ITEMS - (int) DB::table('sticker_pack_items')->where('pack_id', $targetId)->count();
+        $saved = 0;
+        $lastError = null;
+        foreach ($ids as $attId) {
+            if ($room <= 0) {
+                $lastError = 'This pack is full (max ' . self::PACK_MAX_ITEMS . ' stickers).';
+                break;
+            }
+            try {
+                $libId = $this->resolveLibrarySticker($userId, null, $attId, true);
+            } catch (\RuntimeException $e) {
+                $lastError = $e->getMessage(); // مثلًا حد أقصى لمكتبة الستيكرز أو فيديو ممنوع — بنكمّل الباقي
+                continue;
+            }
+            if (DB::table('sticker_pack_items')->insertOrIgnore(['pack_id' => $targetId, 'sticker_id' => $libId, 'created_at' => now()])) {
+                $saved++;
+                $room--;
+            }
+        }
+        if ($saved === 0 && $created) {
+            DB::table('sticker_packs')->where('id', $targetId)->delete();
+            throw new \RuntimeException($lastError ?: 'Could not save the stickers.');
+        }
+        DB::table('sticker_packs')->where('id', $targetId)->update(['updated_at' => now()]);
+
+        return ['pack_id' => $targetId, 'saved' => $saved, 'packs' => $this->stickerPacks($userId)];
     }
 
     public function isFavouriteSticker($userId, string $url): bool

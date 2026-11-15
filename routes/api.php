@@ -2324,6 +2324,7 @@ Route::prefix('v1')->group(function () {
         // باكات الستيكرز: تجميع ستيكراتي في باكات بأسماء (Add to sticker pack)
         Route::get('/sticker-packs', [MessagingController::class, 'stickerPacks']);
         Route::post('/sticker-packs', [MessagingController::class, 'createStickerPack'])->middleware('throttle:30,1');
+        Route::post('/sticker-packs/from-message', [MessagingController::class, 'saveStickerPackFromMessage'])->middleware('throttle:30,1');
         Route::get('/sticker-packs/{id}', [MessagingController::class, 'stickerPack'])->where('id', '[0-9]+');
         Route::patch('/sticker-packs/{id}', [MessagingController::class, 'renameStickerPack'])->where('id', '[0-9]+');
         Route::delete('/sticker-packs/{id}', [MessagingController::class, 'deleteStickerPack'])->where('id', '[0-9]+');
@@ -2331,6 +2332,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('/sticker-packs/{id}/items/{stickerId}', [MessagingController::class, 'removeFromStickerPack'])->where(['id' => '[0-9]+', 'stickerId' => '[0-9]+']);
         Route::get('/stickers/{id}/file', [MessagingController::class, 'stickerFile'])->where('id', '[0-9]+');
         Route::get('/gifs', [MessagingController::class, 'searchGifs'])->middleware('throttle:60,1');
+        Route::post('/conversations/{id}/sticker-pack-message', [MessagingController::class, 'sendStickerPack'])->where('id', '[0-9]+')->middleware('throttle:20,1');
         Route::post('/conversations/{id}/sticker-message', [MessagingController::class, 'sendSticker'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::post('/conversations/{id}/gif-message', [MessagingController::class, 'sendGif'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::post('/messages/{id}/vote', [MessagingController::class, 'votePoll']);

@@ -613,6 +613,30 @@ class MessagingController extends Controller
         });
     }
 
+    /** POST /api/v1/messaging/sticker-packs/from-message — { message_id, attachment_ids?[], name?, pack_id? } يحفظ باك وصلني (كله أو جزء) */
+    public function saveStickerPackFromMessage(Request $request)
+    {
+        return $this->handle(function () use ($request) {
+            $this->mediaGuard($this->mediaPolicy->packsEnabled($this->role($request)), 'Sticker packs');
+            $r = $this->messaging->saveStickerPackFromMessage(
+                $this->uid($request), (int) $request->input('message_id', 0), (array) $request->input('attachment_ids', []),
+                $request->filled('name') ? (string) $request->input('name') : null, $this->intOrNull($request, 'pack_id')
+            );
+            return $this->apiSuccess($r, 'Sticker pack saved.', 201);
+        });
+    }
+
+    /** POST /api/v1/messaging/conversations/{id}/sticker-pack-message — { pack_id, sticker_ids?[] } يبعت باك كامل (أو جزء منه) في رسالة واحدة */
+    public function sendStickerPack(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $this->mediaGuard($this->mediaPolicy->canSendSticker($this->role($request)), 'Stickers');
+            $this->mediaGuard($this->mediaPolicy->packsEnabled($this->role($request)), 'Sticker packs');
+            $message = $this->messaging->sendStickerPack((int) $id, $this->uid($request), (int) $request->input('pack_id', 0), (array) $request->input('sticker_ids', []));
+            return $this->apiSuccess($message, 'Sticker pack sent.', 201);
+        });
+    }
+
     /** DELETE /api/v1/messaging/sticker-packs/{id}/items/{stickerId} */
     public function removeFromStickerPack(Request $request, $id, $stickerId)
     {
