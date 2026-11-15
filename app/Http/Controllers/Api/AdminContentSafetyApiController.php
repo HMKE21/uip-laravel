@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\DB;
  *
  *   GET  /api/v1/admin/content-safety?page=&kind=&category=   حالة الفاحص + إحصائيات + سجل المحاولات
  *   POST /api/v1/admin/content-safety/test-text  { text, strict? }   اختبار نص على القاموس (من غير ما يتسجّل)
+ *   DELETE /api/v1/admin/content-safety/events/{id}       حذف محاولة واحدة من السجل
+ *   DELETE /api/v1/admin/content-safety/events?kind=&category=   حذف كل المحاولات (أو المطابقة للفلتر الحالي)
  *
  * RBAC: uip.auth + uip.admin على الـ group + نفس حارس uip_role === 'admin'.
  */
@@ -83,5 +85,52 @@ class AdminContentSafetyApiController extends Controller
         $hit = $this->safety->checkText($text, (bool) $request->input('strict', false));
 
         return $this->apiSuccess(['blocked' => $hit !== null, 'match' => $hit], 'Tested.');
+    }
+
+    /** حذف محاولة واحدة من سجل المحاولات المحجوبة. */
+    public function destroy(Request $request, $id)
+    {
+        if ($deny = $this->requireAdmin($request)) {
+            return $deny;
+        }
+        $n = DB::table('content_safety_events')->where('id', (int) $id)->delete();
+        if ($n === 0) {
+            return $this->apiError('Event not found.', null, 404);
+        }
+        $this->audit($request, 'content_safety.event_deleted', ['event_id' => (int) $id]);
+
+        return $this->apiSuccess(['deleted' => $n], 'Event deleted.');
+    }
+
+    /** حذف كل السجل، أو بس المطابق للفلتر (kind / category) لو اتبعت. */
+    public function clear(Request $request)
+    {
+        if ($deny = $this->requireAdmin($request)) {
+            return $deny;
+        }
+        $q = DB::table('content_safety_events');
+        $kind = (string) $request->input('kind', '');
+        $category = (string) $request->input('category', '');
+        if ($kind !== '') {
+            $q->where('kind', $kind);
+        }
+        if ($category !== '') {
+            $q->where('category', $category);
+        }
+        $n = $q->delete();
+        $this->audit($request, 'content_safety.events_cleared', ['deleted' => $n, 'kind' => $kind ?: null, 'category' => $category ?: null]);
+
+        return $this->apiSuccess(['deleted' => $n], 'Events deleted.');
+    }
+
+    /** حذف سجل أمني لازم يتسجّل في الـ audit (best effort). */
+    private function audit(Request $request, string $action, array $meta): void
+    {
+        try {
+            $uid = (int) $request->attributes->get('uip_user_id');
+            app(\App\Services\AuditLogService::class)->record($uid ?: null, $action, 'ContentSafety', null, null, $meta, (string) $request->ip());
+        } catch (\Throwable $e) {
+            // التسجيل مايكسرش الحذف
+        }
     }
 }

@@ -1224,6 +1224,8 @@ Route::prefix('v1')->group(function () {
     Route::prefix('admin/content-safety')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'index']);
         Route::post('/test-text', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'testText'])->middleware('throttle:60,1');
+        Route::delete('/events/{id}', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'destroy'])->where('id', '[0-9]+')->middleware('throttle:120,1');
+        Route::delete('/events', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'clear'])->middleware('throttle:10,1');
     });
 
     Route::prefix('admin/notification-settings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
