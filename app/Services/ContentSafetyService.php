@@ -232,6 +232,9 @@ class ContentSafetyService
     /** @var array<int,array<string,mixed>>|null درجات الفاحص لكل إطار — بتتملي بس أثناء analyzeFile (صفحة الأدمن). */
     private ?array $trace = null;
 
+    /** آخر سبب فشل تقني (بيتعرض للأدمن في صفحة الاختبار عشان نعرف المشكلة الحقيقية). */
+    private ?string $lastFailure = null;
+
     /**
      * اختبار ملف من صفحة الأدمن: بيرجّع الحكم + درجات الفاحص لكل إطار، من غير كاش ومن غير تسجيل في سجل المحاولات.
      *
@@ -274,6 +277,7 @@ class ContentSafetyService
         }
 
         $this->trace = [];
+        $this->lastFailure = null;
         $failOpen = config('content_safety.fail_open', false);
         config(['content_safety.fail_open' => false]); // في الاختبار نعرض أخطاء الفاحص بدل ما نخبّيها
         try {
@@ -286,6 +290,7 @@ class ContentSafetyService
             }
         } catch (ContentBlockedException $e) {
             $out['error'] = $e->getMessage();
+            $out['error_detail'] = $this->lastFailure; // السبب التقني الحقيقي (ffmpeg / HTTP من المزوّد…)
         } finally {
             config(['content_safety.fail_open' => $failOpen]);
             $out['frames'] = $this->trace ?? [];
@@ -403,8 +408,9 @@ class ContentSafetyService
     /** @throws ContentBlockedException */
     private function failed(string $why): ?array
     {
-        Log::warning('Content safety scan failed: ' . $why);
-        SecurityLog::write('Content safety scan failed: ' . $why, ['reason' => $why]);
+        $this->lastFailure = $this->lastFailure ? ($why . ' — ' . $this->lastFailure) : $why;
+        Log::warning('Content safety scan failed: ' . $this->lastFailure);
+        SecurityLog::write('Content safety scan failed: ' . $why, ['reason' => $this->lastFailure]);
         if (config('content_safety.fail_open', false)) {
             return null;
         }
@@ -443,35 +449,86 @@ class ContentSafetyService
         return $bin;
     }
 
+    private function ffprobe(): ?string
+    {
+        $ff = $this->ffmpeg();
+        if ($ff === null) {
+            return null;
+        }
+        $sibling = dirname($ff) . '/ffprobe';
+        if (is_file($sibling) && is_executable($sibling)) {
+            return $sibling;
+        }
+        $out = [];
+        @exec('command -v ffprobe 2>/dev/null', $out);
+
+        return !empty($out[0]) ? $out[0] : null;
+    }
+
+    /**
+     * إطار واحد من الفيديو في الوقت $t. بيجرّب أكتر من طريقة (بعض الفيديوهات/إصدارات ffmpeg بتفشل مع seek سريع،
+     * وffmpeg 7+ بيرفض JPEG من فيديو yuv420p العادي من غير format=yuvj420p).
+     */
+    private function grabFrame(string $ff, string $path, float $t, string $dst, int $timeout): bool
+    {
+        $vf = "scale='min(768,iw)':-2,format=yuvj420p";
+        $ss = escapeshellarg(number_format($t, 2, '.', ''));
+        $in = escapeshellarg($path);
+        $out = escapeshellarg($dst);
+        $bin = escapeshellarg($ff);
+        $variants = [
+            // seek سريع قبل الإدخال
+            "timeout $timeout $bin -nostdin -v error -ss $ss -i $in -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+            // seek بعد الإدخال (أبطأ بس أدق مع ملفات moov-at-end / seek مكسور)
+            "timeout $timeout $bin -nostdin -v error -i $in -ss $ss -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+            // أول إطار من غير أي seek
+            "timeout $timeout $bin -nostdin -v error -i $in -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+        ];
+        foreach ($variants as $cmd) {
+            @unlink($dst);
+            $log = [];
+            @exec($cmd, $log, $code);
+            if (is_file($dst) && filesize($dst) > 200) {
+                return true;
+            }
+            $msg = trim(implode(' | ', array_slice($log, -2)));
+            if ($msg !== '' || $code !== 0) {
+                $this->lastFailure = 'ffmpeg exit ' . $code . ($msg !== '' ? ': ' . mb_substr($msg, 0, 220) : '');
+            }
+        }
+
+        return false;
+    }
+
     /** @return string[] مسارات إطارات jpg */
     private function extractFrames(string $path, string $dir, int $count): array
     {
         $ff = $this->ffmpeg();
         if ($ff === null) {
+            $this->lastFailure = 'ffmpeg not found (set FFMPEG_PATH in .env)';
+
             return [];
         }
         $dur = 0.0;
-        $out = [];
-        @exec('ffprobe -v error -show_entries format=duration -of csv=p=0 ' . escapeshellarg($path) . ' 2>/dev/null', $out);
-        if (!empty($out[0]) && is_numeric($out[0])) {
-            $dur = (float) $out[0];
+        $probe = $this->ffprobe();
+        if ($probe !== null) {
+            $out = [];
+            @exec(escapeshellarg($probe) . ' -v error -show_entries format=duration -of csv=p=0 ' . escapeshellarg($path) . ' 2>/dev/null', $out);
+            if (!empty($out[0]) && is_numeric($out[0])) {
+                $dur = (float) $out[0];
+            }
         }
+        $timeout = max(8, (int) config('content_safety.timeout', 12) * 2);
         $frames = [];
         for ($i = 0; $i < $count; $i++) {
             $t = $dur > 1 ? ($dur * (($i + 0.5) / $count)) : $i * 0.5;
             $dst = $dir . '/f' . $i . '.jpg';
-            $cmd = sprintf(
-                'timeout %d %s -v error -ss %s -i %s -frames:v 1 -vf "scale=\'min(768,iw)\':-2" -q:v 4 -y %s 2>&1',
-                max(5, (int) config('content_safety.timeout', 12) * 2),
-                escapeshellarg($ff),
-                escapeshellarg(number_format($t, 2, '.', '')),
-                escapeshellarg($path),
-                escapeshellarg($dst)
-            );
-            @exec($cmd);
-            if (is_file($dst) && filesize($dst) > 200) {
+            if ($this->grabFrame($ff, $path, $t, $dst, $timeout)) {
                 $frames[] = $dst;
             }
+        }
+        if ($frames) {
+            $this->lastFailure = null; // لقينا إطارات — أي خطأ ffmpeg على إطارات تانية مش مهم
         }
 
         return $frames;
@@ -503,7 +560,7 @@ class ContentSafetyService
         }
         if ($this->ffmpeg() !== null) {
             $tmp = tempnam(sys_get_temp_dir(), 'csi') . '.jpg';
-            @exec(sprintf('timeout 20 %s -v error -i %s -frames:v 1 -vf "scale=\'min(1024,iw)\':-2" -q:v 4 -y %s 2>&1', escapeshellarg($this->ffmpeg()), escapeshellarg($path), escapeshellarg($tmp)));
+            @exec(sprintf('timeout 20 %s -v error -i %s -frames:v 1 -vf "scale=\'min(1024,iw)\':-2,format=yuvj420p" -strict unofficial -q:v 4 -y %s 2>&1', escapeshellarg($this->ffmpeg()), escapeshellarg($path), escapeshellarg($tmp)));
             if (is_file($tmp) && filesize($tmp) > 200) {
                 register_shutdown_function(fn () => @unlink($tmp));
 
@@ -533,12 +590,15 @@ class ContentSafetyService
                     'input' => [['type' => 'image_url', 'image_url' => ['url' => 'data:' . $mime . ';base64,' . base64_encode($bin)]]],
                 ]);
         } catch (\Throwable $e) {
+            $this->lastFailure = 'openai request failed: ' . mb_substr($e->getMessage(), 0, 200);
             Log::warning('Content safety (openai) request failed: ' . $e->getMessage());
 
             return false;
         }
         if (!$r->ok() || !is_array($r->json('results.0'))) {
-            Log::warning('Content safety (openai) bad response: HTTP ' . $r->status());
+            $msg = (string) ($r->json('error.message') ?? '');
+            $this->lastFailure = 'openai HTTP ' . $r->status() . ($msg !== '' ? ': ' . mb_substr($msg, 0, 200) : '');
+            Log::warning('Content safety (openai) bad response: ' . $this->lastFailure);
 
             return false;
         }
@@ -573,25 +633,44 @@ class ContentSafetyService
     /** @return array{category:string,reason:string}|null|false */
     private function scanSightengine(string $file)
     {
-        try {
-            $r = Http::timeout((int) config('content_safety.timeout', 12))
-                ->attach('media', (string) file_get_contents($file), 'media.jpg')
-                ->post('https://api.sightengine.com/1.0/check.json', [
-                    'models' => 'nudity-2.1,gore-2.0',
-                    'api_user' => (string) config('content_safety.sightengine.user'),
-                    'api_secret' => (string) config('content_safety.sightengine.secret'),
-                ]);
-        } catch (\Throwable $e) {
-            Log::warning('Content safety (sightengine) request failed: ' . $e->getMessage());
+        $bin = @file_get_contents($file);
+        if ($bin === false || $bin === '') {
+            $this->lastFailure = 'could not read frame file';
 
             return false;
         }
-        if (!$r->ok() || $r->json('status') !== 'success') {
-            Log::warning('Content safety (sightengine) bad response: HTTP ' . $r->status());
+        $r = null;
+        for ($try = 0; $try < 2; $try++) { // محاولة تانية لو الشبكة/المزوّد هبّت لحظيًا
+            try {
+                $r = Http::timeout((int) config('content_safety.timeout', 12))
+                    ->attach('media', $bin, 'media.jpg')
+                    ->post('https://api.sightengine.com/1.0/check.json', [
+                        'models' => 'nudity-2.1,gore-2.0',
+                        'api_user' => (string) config('content_safety.sightengine.user'),
+                        'api_secret' => (string) config('content_safety.sightengine.secret'),
+                    ]);
+            } catch (\Throwable $e) {
+                $this->lastFailure = 'sightengine request failed: ' . mb_substr($e->getMessage(), 0, 200);
+                Log::warning('Content safety (sightengine) request failed: ' . $e->getMessage());
+                $r = null;
+                continue;
+            }
+            if ($r->ok() && $r->json('status') === 'success') {
+                $this->lastFailure = null;
 
-            return false;
+                return $this->sightengineVerdict((array) $r->json());
+            }
+            if ($r->status() < 500 && $r->status() !== 429) {
+                break; // خطأ دايم (مفتاح غلط / رصيد خلص / طلب غلط) — مفيش فايدة من إعادة المحاولة
+            }
         }
-        return $this->sightengineVerdict((array) $r->json());
+        if ($r !== null) {
+            $msg = (string) ($r->json('error.message') ?? $r->json('error.type') ?? '');
+            $this->lastFailure = 'sightengine HTTP ' . $r->status() . ($msg !== '' ? ': ' . mb_substr($msg, 0, 200) : '');
+            Log::warning('Content safety (sightengine) bad response: ' . $this->lastFailure);
+        }
+
+        return false;
     }
 
     /** @return array{category:string,reason:string}|null  رد Sightengine → حكم */
