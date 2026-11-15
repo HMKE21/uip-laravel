@@ -1711,7 +1711,10 @@ class MessagingService
         if (!$row) {
             throw new \RuntimeException('Sticker not found.');
         }
+        $packIds = DB::table('sticker_pack_items')->where('sticker_id', $id)->pluck('pack_id')->all();
+        DB::table('sticker_pack_items')->where('sticker_id', $id)->delete();
         DB::table('user_stickers')->where('id', $id)->delete();
+        $this->pruneEmptyStickerPacks($userId, $packIds); // أي باك فضيت بعد حذف الستيكر بتتمسح تلقائي
         $abs = FileUploadService::absolutePath((string) $row->stored_path);
         if (is_file($abs)) {
             @unlink($abs);
@@ -2051,8 +2054,37 @@ class MessagingService
     }
 
     /** @return array<int,array<string,mixed>> كل باكاتي: id, name, count, cover, sticker_ids */
+    /**
+     * بيمسح الباكات الفاضية (من غير أي ستيكر موجود) بتاعة المستخدم.
+     * $onlyPackIds = null → كل باكاته (مع مهلة $graceSeconds عشان باك لسه بتتعمل ما تتمسحش في نص العملية).
+     */
+    private function pruneEmptyStickerPacks($userId, ?array $onlyPackIds = null, int $graceSeconds = 0): void
+    {
+        if ($onlyPackIds !== null && !$onlyPackIds) {
+            return;
+        }
+        $q = DB::table('sticker_packs as p')->where('p.user_id', (int) $userId)
+            ->whereNotExists(function ($s) {
+                $s->select(DB::raw(1))->from('sticker_pack_items as i')
+                    ->join('user_stickers as st', 'st.id', '=', 'i.sticker_id')
+                    ->whereColumn('i.pack_id', 'p.id');
+            });
+        if ($onlyPackIds !== null) {
+            $q->whereIn('p.id', array_map('intval', $onlyPackIds));
+        }
+        if ($graceSeconds > 0) {
+            $q->where('p.updated_at', '<', now()->subSeconds($graceSeconds));
+        }
+        $ids = $q->pluck('p.id')->all();
+        if ($ids) {
+            DB::table('sticker_pack_items')->whereIn('pack_id', $ids)->delete();
+            DB::table('sticker_packs')->whereIn('id', $ids)->delete();
+        }
+    }
+
     public function stickerPacks($userId): array
     {
+        $this->pruneEmptyStickerPacks($userId, null, 60); // تنضيف الباكات الفاضية القديمة
         $packs = DB::table('sticker_packs')->where('user_id', (int) $userId)->orderByDesc('updated_at')->orderByDesc('id')->get();
         if ($packs->isEmpty()) {
             return [];
@@ -2144,6 +2176,7 @@ class MessagingService
         $this->ownPack($userId, $packId);
         DB::table('sticker_pack_items')->where('pack_id', $packId)->where('sticker_id', $stickerId)->delete();
         DB::table('sticker_packs')->where('id', $packId)->update(['updated_at' => now()]);
+        $this->pruneEmptyStickerPacks($userId, [$packId]); // آخر ستيكر اتشال → الباك بتتمسح تلقائي
         return $this->stickerPacks($userId);
     }
 
