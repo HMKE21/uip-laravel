@@ -248,6 +248,111 @@ class AiAssistantController extends Controller
         ]);
     }
 
+    /**
+     * POST /api/v1/ai-assistant/attachments/{id}/replace  (multipart: file, optional name)
+     * Saves an edited copy of an attachment (AI-generated or user-uploaded) from the platform viewer/editor inside the AI chat.
+     * The same row is updated in place (same id) and extracted_text is refreshed so the AI reads the edit in later messages.
+     */
+    public function replaceAttachment(Request $request, $id)
+    {
+        return $this->handle(function () use ($request, $id) {
+            $att = DB::table('ai_message_attachments AS a')
+                ->join('ai_conversations AS c', 'c.id', '=', 'a.conversation_id')
+                ->where('a.id', (int) $id)
+                ->where('c.user_id', $this->uid($request))
+                ->select('a.*')
+                ->first();
+            if (!$att) {
+                return $this->apiError('Attachment not found.', null, 404);
+            }
+
+            $file = $request->file('file');
+            if (!$file || !$file->isValid()) {
+                throw new \RuntimeException('No file was uploaded.');
+            }
+            if ($file->getSize() > 50 * 1024 * 1024) {
+                throw new \RuntimeException('File is too large.');
+            }
+
+            $oldExt = strtolower((string) $att->extension);
+            $name = trim((string) $request->input('name', ''));
+            $name = $name !== '' ? mb_substr(preg_replace('/[\\\\\/\x00-\x1F]+/u', '_', $name) ?? $name, 0, 180) : (string) $att->original_name;
+            $newExt = strtolower((string) pathinfo($name, PATHINFO_EXTENSION));
+            // Only data / document / image / media formats may change the extension; anything else keeps the stored one (never executable types).
+            $safeExt = ['pdf', 'docx', 'xlsx', 'pptx', 'csv', 'tsv', 'txt', 'md', 'json', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'zip', 'mp4', 'webm', 'mp3', 'wav'];
+            if ($newExt === '' || $newExt === $oldExt || !in_array($newExt, $safeExt, true)) {
+                $newExt = $oldExt;
+                if (strtolower((string) pathinfo($name, PATHINFO_EXTENSION)) !== $oldExt) {
+                    $name = (string) $att->original_name;
+                }
+            }
+
+            $storedPath = (string) $att->stored_path;
+            $dirRel = trim(str_replace('\\', '/', dirname($storedPath)), '/');
+            if ($newExt !== $oldExt) {
+                $storedPath = $dirRel . '/' . bin2hex(random_bytes(16)) . '.' . $newExt;
+            }
+            $absolute = public_path($storedPath);
+            $root = realpath(public_path());
+            $dirAbs = dirname($absolute);
+            if (!is_dir($dirAbs)) {
+                throw new \RuntimeException('Attachment folder not found.');
+            }
+            $realDir = realpath($dirAbs);
+            if ($root === false || $realDir === false || !str_starts_with($realDir . DIRECTORY_SEPARATOR, $root . DIRECTORY_SEPARATOR)) {
+                throw new \RuntimeException('Invalid attachment path.');
+            }
+
+            $bytes = @file_get_contents($file->getRealPath());
+            if ($bytes === false || $bytes === '') {
+                throw new \RuntimeException('The uploaded file is empty.');
+            }
+            if (@file_put_contents($absolute, $bytes, LOCK_EX) === false) {
+                throw new \RuntimeException('Failed to save the file.');
+            }
+            \App\Support\UploadMirror::push($storedPath, $absolute);
+            if ($storedPath !== $att->stored_path) {
+                $old = public_path((string) $att->stored_path);
+                if (is_file($old)) {
+                    @unlink($old);
+                }
+            }
+
+            $extractedText = null;
+            if (\App\Services\Ai\AttachmentReader::isTextExt($newExt) && strlen($bytes) < 2_000_000) {
+                $extractedText = \App\Services\Ai\AttachmentReader::toUtf8($bytes);
+                $extractedText = $extractedText !== '' ? mb_substr($extractedText, 0, 100000) : null;
+            } elseif (\App\Services\Ai\AttachmentReader::canExtract($newExt) && strlen($bytes) < 30_000_000) {
+                $extractedText = \App\Services\Ai\AttachmentReader::extractText($absolute, $newExt);
+            }
+
+            $mime = (string) ($file->getMimeType() ?: '');
+            if ($mime === '' || $mime === 'application/octet-stream' || ($newExt === $oldExt && !empty($att->mime_type))) {
+                $mime = (string) ($att->mime_type ?: $mime ?: 'application/octet-stream');
+            }
+            $kind = $this->classifyKind($newExt, $name, $mime);
+
+            DB::table('ai_message_attachments')->where('id', (int) $att->id)->update([
+                'stored_path'    => $storedPath,
+                'original_name'  => $name,
+                'mime_type'      => $mime,
+                'extension'      => $newExt,
+                'kind'           => $kind,
+                'size_bytes'     => strlen($bytes),
+                'extracted_text' => $extractedText,
+            ]);
+
+            return $this->apiSuccess([
+                'id'            => (int) $att->id,
+                'kind'          => $kind,
+                'url'           => url('/api/v1/ai-assistant/attachments/' . (int) $att->id . '/download') . '?v=' . time(),
+                'original_name' => $name,
+                'mime_type'     => $mime,
+                'size_bytes'    => strlen($bytes),
+            ], 'Attachment saved.');
+        });
+    }
+
     private function classifyKind(string $extension, ?string $originalName = null, ?string $mime = null): string
     {
         // A recorded voice note is an audio-only .webm: by extension alone it would be classed as video.

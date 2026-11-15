@@ -2564,6 +2564,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/conversations/{id}/messages', [AiAssistantController::class, 'streamMessage']);
 
         Route::get('/attachments/{id}/download', [AiAssistantController::class, 'downloadAttachment']);
+        Route::post('/attachments/{id}/replace', [AiAssistantController::class, 'replaceAttachment'])->where('id', '[0-9]+');
 
         Route::patch('/messages/{id}', [AiAssistantController::class, 'editMessage']);
         Route::delete('/messages/{id}', [AiAssistantController::class, 'deleteMessage']);

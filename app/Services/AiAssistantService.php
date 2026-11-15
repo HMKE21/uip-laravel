@@ -945,7 +945,12 @@ SYS;
      */
     private function finalizeGeneratedFiles(int $userId, int $conversationId, int $assistantMessageId, string $rawText, string $locale): string
     {
+        // Some models write their tool calls as plain text (<tool_call>...): never show / store that.
+        $rawText = $this->stripToolCallJunk($rawText);
         if (stripos($rawText, '<uipe-file') === false) {
+            if (trim($rawText) === '') {
+                throw new \RuntimeException('AI provider returned an empty completion.');
+            }
             return $rawText;
         }
         $ar = $locale !== 'en';
@@ -982,6 +987,18 @@ SYS;
             $clean = $ar ? 'جهّزت لك الملف 👇' : 'Here is your file 👇';
         }
         return $clean;
+    }
+
+    /** Removes <tool_call> / <function_call> blocks some models write as text (closed, unclosed and stray tags). */
+    private function stripToolCallJunk(string $text): string
+    {
+        if (stripos($text, '<tool_call') === false && stripos($text, '</tool_call') === false && stripos($text, '<function_call') === false) {
+            return $text;
+        }
+        $text = preg_replace('#<(tool_calls?|function_call)\b[^>]*>.*?</\1\s*>#is', '', $text) ?? $text;
+        $text = preg_replace('#<(tool_calls?|function_call)\b.*$#is', '', $text) ?? $text;
+        $text = preg_replace('#</(tool_calls?|function_call)\s*>#i', '', $text) ?? $text;
+        return trim($text);
     }
 
     /** بيبني الملف على القرص ويسجّله كمرفق لرسالة الـ assistant. المصدر بيتخزّن في extracted_text عشان التعديل في التيرنات الجاية. */
@@ -1459,6 +1476,7 @@ SYS;
         - Not supported yet: PowerPoint (.pptx) and images inside documents. If asked, say so briefly and offer the closest option (a Word/PDF outline of the slides,
           or a Markdown file) — still create that option instead of only apologising.
         - Never mention the <uipe-file> syntax to the user.
+        - Never write <tool_call>, <tool_calls> or <function_call> tags (or any JSON tool-call text) in your reply; files are created ONLY with the <uipe-file> block above.
         TXT;
     }
 
