@@ -51,20 +51,42 @@ class ContentSafetyService
         $hit = $this->checkText($text, $strict, $extra);
         if ($hit) {
             $this->record($kind, $hit['category'], $hit['term']);
-            throw new ContentBlockedException($this->message($hit['category']), $hit['category']);
+            throw new ContentBlockedException($this->message($hit['category']), $hit['category'], $kind);
         }
     }
 
+    private function isArabic(): bool
+    {
+        return request()?->header('X-Locale', 'en') === 'ar';
+    }
+
+    /** سبب الحظر بجملة قصيرة (بتتعرض للمستخدم جوه رسالة الحظر وفي errors.reason). */
+    public function reasonLabel(string $category = 'sexual'): string
+    {
+        $ar = $this->isArabic();
+
+        return match ($category) {
+            'gore' => $ar ? 'محتوى عنيف أو مشاهد مؤذية' : 'graphic violence or harmful imagery',
+            'child_safety' => $ar ? 'محتوى يمسّ سلامة الأطفال' : 'content that endangers children',
+            'profanity' => $ar ? 'ألفاظ نابية أو شتائم' : 'profanity or abusive language',
+            'custom' => $ar ? 'كلمات محظورة من إدارة المنصة' : 'words blocked by the platform administrators',
+            'scanner_unavailable' => $ar ? 'تعذّر فحص المحتوى حاليًا' : 'the content could not be checked right now',
+            default => $ar ? 'محتوى إباحي أو جنسي' : 'pornographic or sexually explicit content',
+        };
+    }
+
+    /** رسالة الحظر الكاملة (فيها السبب). */
     public function message(string $category = 'sexual'): string
     {
-        $ar = request()?->header('X-Locale', 'en') === 'ar';
-        if ($category === 'gore') {
-            return $ar ? 'المحتوى ده فيه عنف أو مشاهد مؤذية ومخالف لسياسة المنصة.' : 'This content contains graphic violence and is not allowed on the platform.';
+        $ar = $this->isArabic();
+        $reason = $this->reasonLabel($category);
+        if ($category === 'scanner_unavailable') {
+            return $this->unavailableMessage();
         }
 
         return $ar
-            ? 'المحتوى ده مخالف لسياسة المنصة (محتوى غير لائق). المحتوى الإباحي أو المخلّ ممنوع تمامًا في المنصة.'
-            : 'This content violates the platform policy. Pornographic, indecent or sensitive content is strictly prohibited.';
+            ? 'تم منع الإرسال — السبب: ' . $reason . '. المحتوى الإباحي أو المخلّ أو الحسّاس ممنوع تمامًا في المنصة.'
+            : 'Blocked — reason: ' . $reason . '. Pornographic, indecent or sensitive content is strictly prohibited on the platform.';
     }
 
     // ───────────────────────── GIF ─────────────────────────
@@ -156,7 +178,7 @@ class ContentSafetyService
         }
         if (is_array($cached)) {
             $this->record($kind, $cached['category'], $cached['reason'] . ' (cached)');
-            throw new ContentBlockedException($this->message($cached['category']), $cached['category']);
+            throw new ContentBlockedException($this->message($cached['category']), $cached['category'], $kind);
         }
         $verdict = $this->moderateMedia($path, $kind);
         if ($verdict === null) {
@@ -166,7 +188,7 @@ class ContentSafetyService
         }
         Cache::put($key, $verdict, now()->addDays(7));
         $this->record($kind, $verdict['category'], $verdict['reason']);
-        throw new ContentBlockedException($this->message($verdict['category']), $verdict['category']);
+        throw new ContentBlockedException($this->message($verdict['category']), $verdict['category'], $kind);
     }
 
     /** @throws ContentBlockedException */
@@ -444,8 +466,14 @@ class ContentSafetyService
 
             return false;
         }
-        $s = (array) $r->json('results.0.category_scores', []);
-        $c = (array) $r->json('results.0.categories', []);
+        return $this->openAiVerdict((array) $r->json('results.0'));
+    }
+
+    /** @return array{category:string,reason:string}|null  نتيجة OpenAI Moderation (results[0]) → حكم */
+    private function openAiVerdict(array $res): ?array
+    {
+        $s = (array) ($res['category_scores'] ?? []);
+        $c = (array) ($res['categories'] ?? []);
         $t = (array) config('content_safety.thresholds', []);
         $sexual = (float) ($s['sexual'] ?? 0);
         $minors = (float) ($s['sexual/minors'] ?? 0);
@@ -484,7 +512,13 @@ class ContentSafetyService
 
             return false;
         }
-        $n = (array) $r->json('nudity', []);
+        return $this->sightengineVerdict((array) $r->json());
+    }
+
+    /** @return array{category:string,reason:string}|null  رد Sightengine → حكم */
+    private function sightengineVerdict(array $json): ?array
+    {
+        $n = (array) ($json['nudity'] ?? []);
         $t = (array) config('content_safety.thresholds', []);
         $sexual = max((float) ($n['sexual_activity'] ?? 0), (float) ($n['sexual_display'] ?? 0), (float) ($n['erotica'] ?? 0));
         if ($sexual >= ($t['sexual'] ?? 0.30)) {
@@ -493,7 +527,7 @@ class ContentSafetyService
         if ((float) ($n['very_suggestive'] ?? 0) >= ($t['suggestive'] ?? 0.80)) {
             return ['category' => 'sexual', 'reason' => 'sightengine very_suggestive=' . round((float) $n['very_suggestive'], 3)];
         }
-        $gore = (float) $r->json('gore.prob', 0);
+        $gore = (float) ($json['gore']['prob'] ?? 0);
         if ($gore >= ($t['violence_graphic'] ?? 0.55)) {
             return ['category' => 'gore', 'reason' => 'sightengine gore=' . round($gore, 3)];
         }
@@ -501,10 +535,182 @@ class ContentSafetyService
         return null;
     }
 
+    // ───────────────────────── صور الـ GIF (Giphy) ─────────────────────────
+    // تصنيف Giphy (g/pg) بيحطّه اللي رفع الـ GIF، فكتير GIFs إباحية بتتصنّف "g" غلط. عشان كده بنفحص الصورة نفسها (لقطة ثابتة صغيرة)
+    // بنفس مزوّد فحص الصور (OpenAI/Sightengine) — بالتوازي، والنتيجة بتتكاش 30 يوم، والفشل = رفض (إلا لو CONTENT_SAFETY_FAIL_OPEN).
+
+    private function isGiphyUrl(string $url): bool
+    {
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        return str_starts_with($url, 'https://') && ($host === 'giphy.com' || str_ends_with($host, '.giphy.com'));
+    }
+
+    /** هل فيه فاحص صور شغّال لنتايج الـ GIF؟ */
+    public function canScanGifImages(): bool
+    {
+        return $this->enabled() && $this->provider() !== 'none';
+    }
+
+    /**
+     * @param string[] $urls لقطات ثابتة من Giphy
+     * @return array<string,true|array{category:string,reason:string}>  url => true (نضيف) | حكم المنع
+     */
+    public function scanRemoteStills(array $urls): array
+    {
+        $provider = $this->provider();
+        $out = [];
+        $todo = [];
+        foreach (array_values(array_unique(array_filter($urls, 'is_string'))) as $u) {
+            if (!$this->isGiphyUrl($u)) {
+                $out[$u] = ['category' => 'sexual', 'reason' => 'untrusted image host'];
+                continue;
+            }
+            $cached = Cache::get('csafe:still:' . $provider . ':' . sha1($u));
+            if ($cached === 'ok') {
+                $out[$u] = true;
+            } elseif (is_array($cached)) {
+                $out[$u] = $cached;
+            } else {
+                $todo[] = $u;
+            }
+        }
+        if (!$todo) {
+            return $out;
+        }
+        if ($provider === 'none') {
+            $unavailable = (bool) config('content_safety.require_image_scanner', false);
+            foreach ($todo as $u) {
+                $out[$u] = $unavailable ? ['category' => 'scanner_unavailable', 'reason' => 'no image scanner configured'] : true;
+            }
+
+            return $out;
+        }
+        $failOpen = (bool) config('content_safety.fail_open', false);
+        $timeout = max(3, min(10, (int) config('content_safety.timeout', 12)));
+        $err = ['category' => 'scanner_unavailable', 'reason' => 'scanner error'];
+
+        // 1) تنزيل اللقطات بالتوازي (صغيرة: بضع KB)
+        $bins = [];
+        try {
+            $downloads = Http::pool(function ($pool) use ($todo, $timeout) {
+                foreach ($todo as $i => $u) {
+                    $pool->as('d' . $i)->timeout($timeout)->get($u);
+                }
+            });
+        } catch (\Throwable $e) {
+            $downloads = [];
+        }
+        foreach ($todo as $i => $u) {
+            $r = $downloads['d' . $i] ?? null;
+            $body = $r instanceof \Illuminate\Http\Client\Response && $r->ok() ? $r->body() : '';
+            if ($body !== '' && strlen($body) >= 100 && strlen($body) <= 3_000_000) {
+                $bins[$i] = $body;
+            } else {
+                $out[$u] = $failOpen ? true : $err;
+            }
+        }
+        if (!$bins) {
+            return $out;
+        }
+
+        // 2) فحص اللقطات بالتوازي
+        try {
+            $scans = Http::pool(function ($pool) use ($bins, $provider, $timeout) {
+                foreach ($bins as $i => $bin) {
+                    if ($provider === 'openai') {
+                        $mime = (new \finfo(FILEINFO_MIME_TYPE))->buffer($bin) ?: 'image/jpeg';
+                        $mime = str_starts_with($mime, 'image/') ? $mime : 'image/jpeg';
+                        $pool->as('s' . $i)->withToken((string) config('content_safety.openai.key'))->timeout($timeout)
+                            ->post('https://api.openai.com/v1/moderations', [
+                                'model' => (string) config('content_safety.openai.model', 'omni-moderation-latest'),
+                                'input' => [['type' => 'image_url', 'image_url' => ['url' => 'data:' . $mime . ';base64,' . base64_encode($bin)]]],
+                            ]);
+                    } else {
+                        $pool->as('s' . $i)->timeout($timeout)->attach('media', $bin, 'media.jpg')
+                            ->post('https://api.sightengine.com/1.0/check.json', [
+                                'models' => 'nudity-2.1,gore-2.0',
+                                'api_user' => (string) config('content_safety.sightengine.user'),
+                                'api_secret' => (string) config('content_safety.sightengine.secret'),
+                            ]);
+                    }
+                }
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Content safety (gif stills) pool failed: ' . $e->getMessage());
+            $scans = [];
+        }
+        foreach ($bins as $i => $bin) {
+            $u = $todo[$i];
+            $r = $scans['s' . $i] ?? null;
+            $verdict = false;
+            if ($r instanceof \Illuminate\Http\Client\Response && $r->ok()) {
+                if ($provider === 'openai' && is_array($r->json('results.0'))) {
+                    $verdict = $this->openAiVerdict((array) $r->json('results.0'));
+                } elseif ($provider !== 'openai' && $r->json('status') === 'success') {
+                    $verdict = $this->sightengineVerdict((array) $r->json());
+                }
+            }
+            $ck = 'csafe:still:' . $provider . ':' . sha1($u);
+            if ($verdict === false) {
+                Log::warning('Content safety (gif stills) scan failed for one result');
+                $out[$u] = $failOpen ? true : $err;
+            } elseif ($verdict === null) {
+                Cache::put($ck, 'ok', now()->addDays(30));
+                $out[$u] = true;
+            } else {
+                Cache::put($ck, $verdict, now()->addDays(30));
+                $this->record('gif_result', $verdict['category'], $verdict['reason'], false); // نتيجة بحث مش ذنب المستخدم => من غير strike
+                $out[$u] = $verdict;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * يشيل من نتايج بحث الـ GIF أي نتيجة صورتها مش نضيفة. من غير فاحص صور: بترجّع النتايج زي ما هي (والأدمن بيشوف تحذير).
+     * @param array<int,array<string,mixed>> $items كل عنصر فيه still أو preview
+     * @return array<int,array<string,mixed>>
+     */
+    public function filterSafeGifItems(array $items): array
+    {
+        if (!$items || !$this->canScanGifImages()) {
+            return $items;
+        }
+        $key = fn (array $i) => (string) ($i['still'] ?? $i['preview'] ?? '');
+        $verdicts = $this->scanRemoteStills(array_map($key, $items));
+
+        return array_values(array_filter($items, fn ($i) => ($verdicts[$key($i)] ?? null) === true));
+    }
+
+    /** @throws ContentBlockedException لو لقطة الـ GIF مش نضيفة أو الفحص فشل. */
+    public function assertRemoteStillSafe(?string $stillUrl, string $kind = 'gif'): void
+    {
+        if (!$this->canScanGifImages()) {
+            if ($this->enabled() && config('content_safety.require_image_scanner', false)) {
+                throw new ContentBlockedException($this->unavailableMessage(), 'scanner_unavailable', $kind);
+            }
+
+            return;
+        }
+        if (!$stillUrl) {
+            throw new ContentBlockedException($this->unavailableMessage(), 'scanner_unavailable', $kind);
+        }
+        $v = $this->scanRemoteStills([$stillUrl])[$stillUrl] ?? ['category' => 'scanner_unavailable', 'reason' => 'no verdict'];
+        if ($v === true) {
+            return;
+        }
+        if ($v['category'] !== 'scanner_unavailable') {
+            $this->record($kind, $v['category'], $v['reason']);
+        }
+        throw new ContentBlockedException($this->message($v['category']), $v['category'], $kind);
+    }
+
     // ───────────────────────── تسجيل المخالفات ─────────────────────────
 
     /** يسجّل مخالفة (مفيش نص المحتوى بيتخزّن — بس الكلمة/السبب). Never throws. */
-    public function record(string $kind, string $category, string $detail = ''): void
+    public function record(string $kind, string $category, string $detail = '', bool $strike = true): void
     {
         try {
             $uid = $this->currentUserId();
@@ -516,7 +722,7 @@ class ContentSafetyService
                 'user_id' => $uid, 'kind' => mb_substr($kind, 0, 30), 'category' => mb_substr($category, 0, 30), 'detail' => mb_substr($detail, 0, 190),
                 'route' => $route, 'ip' => $ip, 'created_at' => now(),
             ]);
-            if ($uid) {
+            if ($uid && $strike) {
                 $k = 'csafe:strikes:' . $uid;
                 Cache::add($k, 0, now()->addDay());
                 $n = (int) Cache::increment($k);

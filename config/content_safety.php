@@ -72,4 +72,7 @@ return [
 
     // Giphy: أعلى تصنيف مسموح (g | pg | pg-13). مفيش 'r' أبدًا.
     'gif_max_rating' => env('CONTENT_SAFETY_GIF_MAX_RATING', 'pg'),
+
+    // true = نتايج الـ GIF من القنوات الموثّقة في Giphy بس (أشد أمانًا؛ تصنيف Giphy للـ GIFs المرفوعة بيحطّه أي حد وبيبقى غلط كتير).
+    'gif_verified_only' => (bool) env('CONTENT_SAFETY_GIF_VERIFIED_ONLY', false),
 ];

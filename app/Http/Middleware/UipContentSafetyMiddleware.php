@@ -55,13 +55,8 @@ class UipContentSafetyMiddleware
                 $this->safety->assertUploadSafe($file, $scanMedia);
             }
         } catch (ContentBlockedException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-                'data'    => null,
-                'errors'  => ['code' => 'content_not_allowed', 'category' => $e->category],
-                'meta'    => (object) [],
-            ], 422)->header('Cache-Control', 'no-store');
+            // نفس الشكل في كل مكان: errors = { code, category, kind, reason } والـ message فيها سبب الحظر.
+            return $e->render($request);
         }
 
         return $next($request);
@@ -90,8 +85,9 @@ class UipContentSafetyMiddleware
         if (stripos($value, 'data:image/') !== false) {
             $this->safety->assertDataImagesIn($value);
         }
-        // blob base64 طويل من غير مسافات (مش كلام)
-        if (strlen($value) > 2000 && preg_match('/^[A-Za-z0-9+\/=\s]+$/', substr($value, 0, 4000))) {
+        // blob base64 طويل (مش كلام). ⚠️ لازم يكون من غير مسافات/تاب (الـ base64 بيتقسّم بس بأسطر جديدة) — قبل كده أي رسالة
+        // طويلة حروف وأرقام ومسافات بس كانت بتعدّي من الفحص بالكامل (تحايل: نص +2000 حرف من غير علامات ترقيم).
+        if (strlen($value) > 2000 && preg_match('/^[A-Za-z0-9+\/=\r\n]+$/', substr($value, 0, 4000))) {
             return;
         }
         $strict = $key !== '' && preg_match((string) config('content_safety.strict_fields'), $key) === 1;

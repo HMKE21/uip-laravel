@@ -863,6 +863,9 @@ class MessagingController extends Controller
         } catch (\Illuminate\Database\QueryException $e) {
             // خطأ داتابيز (جدول/عمود ناقص مثلًا) مش "محادثة مش موجودة" — بنسجله ونرجّع 500 بدل 422.
             return $this->dbError($e);
+        } catch (\App\Services\ContentBlockedException $e) {
+            // محتوى ممنوع (نص/GIF/ملف): نرجّع errors.code=content_not_allowed + السبب، عشان الواجهة تعرض سبب الحظر بوضوح.
+            return $e->render(request());
         } catch (\RuntimeException | \InvalidArgumentException $e) {
             return $this->apiError($e->getMessage(), null, 422);
         }

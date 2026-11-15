@@ -25,6 +25,9 @@ class ContentLexicon
         'pornhub', 'redtube', 'youporn', 'brazzers', 'hentai', 'blowjob', 'blowjobs', 'handjob', 'rimjob', 'cumshot', 'gangbang', 'bukkake',
         'deepthroat', 'cunnilingus', 'fellatio', 'dildo', 'pussy', 'nudes', 'jailbait', 'pthc', 'lolicon', 'shotacon', 'snuff', 'bestgore',
         'camgirl', 'camgirls', 'sexcam', 'sexcams', 'sexvideo', 'sexvideos', 'sextape', 'nsfw',
+        // مواقع/منصات إباحية
+        'spankbang', 'tube8', 'xtube', 'xxnx', 'chaturbate', 'stripchat', 'bongacams', 'livejasmin', 'motherless', 'eporner', 'nhentai', 'rule34',
+        'fapello', 'erome', 'thothub', 'hqporner', 'porntrex', 'xxxvideos', 'pornhat', 'hclips', 'txxx',
         // عربيزي
         'sharmota', 'sharmouta', 'sharmoota', 'sharmoot', 'sharmout', 'metnak', 'metnaka', 'mitnak', 'mitnaka', 'kosomak', 'kosomek', 'kosmak',
     ];
@@ -32,6 +35,7 @@ class ContentLexicon
     /** مصطلحات طويلة واضحة بتتدوّر عليها جوه الكلمة (freeporn, xnxxvideos…). */
     private const T1_SUBSTR = [
         'porn', 'xnxx', 'xvideo', 'xhamster', 'redtube', 'youporn', 'brazzers', 'hentai', 'blowjob', 'bukkake', 'gangbang', 'cumshot', 'camgirl', 'bestgore',
+        'spankbang', 'chaturbate', 'stripchat', 'bongacams', 'livejasmin', 'nhentai',
     ];
 
     /** عبارات (بعد الـ normalize). */
@@ -44,7 +48,7 @@ class ContentLexicon
         // عربي
         'نيك امك', 'نيك اختك', 'ابن المتناكه', 'ابن الشرموطه', 'ابن العرص', 'كس امك', 'كس اختك', 'كس ام', 'افلام سكس', 'فيديو سكس', 'فيديوهات سكس',
         'صور سكس', 'قصص سكس', 'قصص جنسيه', 'قصص نيك', 'فيديوهات اباحيه', 'فيديو اباحي', 'مواقع اباحيه', 'مقاطع اباحيه', 'مقاطع سكس', 'سكس مصري', 'سكس عربي',
-        'نيك مصري', 'افلام اباحيه', 'افلام للكبار', 'صور عاريه', 'فيديو عاري', 'فيديوهات عاريه', 'بنات عاريات', 'ممارسه الجنس', 'جروب سكس',
+        'نيك مصري', 'افلام اباحيه', 'افلام للكبار', 'بورن هاب', 'صور عاريه', 'فيديو عاري', 'فيديوهات عاريه', 'بنات عاريات', 'ممارسه الجنس', 'جروب سكس',
     ];
 
     /** كلمات عربية (بعد الـ normalize: ة→ه، ى→ي، أإآ→ا) — بتتطابق مع سوابق، ولواحق بس لو الكلمة ≥ 5 حروف. */
@@ -52,6 +56,7 @@ class ContentLexicon
         'سكس', 'سكسي', 'بورنو', 'اباحي', 'اباحيه', 'اباحيات', 'متناك', 'متناكه', 'منيوك', 'منيوكه', 'شرموط', 'شرموطه', 'شراميط', 'عرص', 'معرص',
         'معرصه', 'قحبه', 'قحاب', 'كس', 'كسم', 'كسمك', 'كسخت', 'كسها', 'طيز', 'طيزها', 'بظر', 'ممحون', 'ممحونه',
         'ينيك', 'هنيك', 'هنيكك', 'انيك', 'انيكك', 'نيكك', 'نيكتك', 'نيكتها', 'نيكها', 'نيكني', 'بنيك', 'نودز',
+        'بورنهاب', 'اكسفيديو', 'اكسفيديوز',
     ];
 
     // ───────────── tier 2 ─────────────
@@ -61,10 +66,21 @@ class ContentLexicon
         'topless', 'onlyfans', 'cum', 'cumming', 'orgasm', 'masturbate', 'masturbation', 'anal', 'dick', 'dicks', 'cock', 'cocks', 'penis', 'vagina', 'nipple',
         'nipples', 'fuck', 'fucking', 'fucked', 'fucker', 'motherfucker', 'shit', 'bitch', 'bitches', 'slut', 'whore', 'cunt', 'milf', 'escort', 'hookup', 'threesome',
         'orgy', 'bdsm', 'dominatrix', 'playboy', 'naughty', 'creampie', 'pedo', 'pedophile', 'loli', 'rape', 'raped', 'gore', 'beheading', 'decapitated', 'corpse',
-        'liveleak', '69',
+        'liveleak', '69', 'bikini', 'bikinis', 'underboob', 'underwear', 'cleavage', 'bra', 'panties', 'nsfw18',
         // عربي (tier2)
         'نيك', 'عاريه', 'عاري', 'عاريات', 'جنس', 'جنسي', 'جنسيه', 'عاهره', 'زنا', 'فاجره', 'استمناء', 'جماع', 'مضاجعه', 'هايجه', 'هايج', 'شهوه', 'شهوانيه', 'زب', 'خول',
         'بزازي', 'مؤخره', 'مؤخرتها', 'صدرها', 'ردف',
+    ];
+
+    /**
+     * عبارات tier 2: أسماء ممثلين/مواقع إباحية معروفة — بتتحجب بس في السياقات الصارمة (بحث/عناوين الـ GIF والملصقات والأسماء)،
+     * مش في الدردشة العادية. (أسماء شائعة جدًا زي "lisa ann" / "angela white" متضافتش عمدًا عشان مفيش أبرياء يتحجبوا.)
+     */
+    private const T2_PHRASES = [
+        'mia khalifa', 'mia khalifah', 'johnny sins', 'johnny sinsmith', 'lana rhoades', 'eva elfie', 'abella danger', 'kendra lust', 'asa akira',
+        'jenna jameson', 'sasha grey', 'adriana chechik', 'mia malkova', 'riley reid', 'elsa jean', 'jordi el nino polla', 'belle delphine',
+        'only fans', 'x videos', 'x nxx', 'xx nx', 'sex scene', 'sex scenes', 'sex position', 'sex positions', 'hot girl bikini', 'bikini girl', 'bikini girls',
+        'ميا خليفه', 'ميا خليفة', 'جوني سينز', 'جوني سنز', 'سني ليون', 'مشاهد جنسيه', 'مقاطع جنسيه', 'وضعيات جنسيه',
     ];
 
     /** مصطلحات جريئة → تصنيفها (غير 'sexual'). */
@@ -205,6 +221,7 @@ class ContentLexicon
             't1_phrases' => self::norm(self::T1_PHRASES),
             't1_ar_re' => $reParts ? '/^(?:' . implode('|', $reParts) . ')$/u' : null,
             't2_tokens' => array_flip(self::norm(self::T2_TOKENS)),
+            't2_phrases' => self::norm(self::T2_PHRASES),
             'cat' => $cat,
         ];
     }
@@ -290,6 +307,16 @@ class ContentLexicon
         foreach ($extraN as $e) {
             if ($e !== '' && str_contains($e, ' ') && str_contains($joined, ' ' . $e . ' ')) {
                 return ['tier' => 1, 'category' => 'custom', 'term' => $e];
+            }
+        }
+        if ($strict) {
+            foreach ($b['t2_phrases'] as $ph) {
+                if (isset($allowSet[$ph])) {
+                    continue;
+                }
+                if (str_contains($joined, ' ' . $ph . ' ')) {
+                    return ['tier' => 2, 'category' => self::categoryOf($ph), 'term' => $ph];
+                }
             }
         }
 

@@ -16,7 +16,8 @@ class ContentLexiconTest extends TestCase
     public static function blocked(): array
     {
         return [['xnxx'], ['XNXX video'], ['p.o.r.n'], ['p o r n'], ['p0rn'], ['pornnnn'], ['freeporn site'], ['سـكـس'], ['فيديوهات سكس مصري'], ['نيك امك'],
-            ['والسكس'], ['شرموطة'], ['sharmota'], ['kos omak'], ['sex videos'], ['ك س امك']];
+            ['والسكس'], ['شرموطة'], ['sharmota'], ['kos omak'], ['sex videos'], ['ك س امك'],
+            ['spankbang.com'], ['ch@turbate'], ['xnxxx'], ['x n x x'], ['بورنهاب']];
     }
 
     /** @dataProvider clean */
@@ -38,6 +39,15 @@ class ContentLexiconTest extends TestCase
         $this->assertNull(ContentLexicon::check('happy birthday', true));
         $this->assertNull(ContentLexicon::check('تصفيق', true));
         $this->assertNull(ContentLexicon::check('sexy dance', false)); // tier 2 مش بتتحجب في النصوص العادية
+    }
+
+    public function test_performer_and_suggestive_terms_are_blocked_in_strict_contexts_only(): void
+    {
+        foreach (['mia khalifa', 'Mia Khalifa gif', 'johnny sins', 'ميا خليفة', 'bikini girl', 'sex scene'] as $q) {
+            $this->assertNotNull(ContentLexicon::check($q, true), $q);
+            $this->assertNull(ContentLexicon::check($q, false), $q . ' (normal chat text must not be blocked)');
+        }
+        $this->assertNull(ContentLexicon::check('Jerome and Mia went to Essex', true));
     }
 
     public function test_allow_list_and_extra_words(): void
