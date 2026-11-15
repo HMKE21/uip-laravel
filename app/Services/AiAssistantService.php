@@ -342,11 +342,20 @@ class AiAssistantService
         $this->fileCutNotice = false;
 
         // بلوكات <uipe-file> مابتتعرضش كنص: بتتحجب من الستريم وبتتحوّل لملف للتحميل بعد ما الرد يخلص.
+        $lastPing = 0.0;
         $fileFilter = new FileBlockStreamFilter(
             $onToken,
             function (string $name) use ($onEvent, $locale): void {
                 if ($onEvent) {
                     $onEvent('tool', ['name' => 'create_file', 'kind' => 'file', 'label' => $this->fileToolLabel($name, $locale)]);
+                }
+            },
+            // keep-alive: while the model writes a hidden file block nothing else reaches the browser (its watchdog is 45s)
+            function () use ($onEvent, &$lastPing): void {
+                $now = microtime(true);
+                if ($onEvent && $now - $lastPing >= 5.0) {
+                    $lastPing = $now;
+                    $onEvent('ping', []);
                 }
             }
         );

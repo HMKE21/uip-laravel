@@ -537,6 +537,7 @@ class AiAssistantController extends Controller
     private function sseResponse(\Closure $emitter): \Symfony\Component\HttpFoundation\StreamedResponse
     {
         return response()->stream(function () use ($emitter) {
+            @set_time_limit(0); // long replies (files / zips) can outlive max_execution_time
             // بند 12: يقفل أي output buffering ممكن يمنع الـ flush لحظة بلحظة.
             while (ob_get_level() > 0) {
                 ob_end_flush();

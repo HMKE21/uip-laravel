@@ -26,16 +26,27 @@ class FileBlockStreamFilter
     private $emit;
     /** @var (callable(string):void)|null */
     private $onStart;
+    /** @var (callable():void)|null */
+    private $onHidden;
 
-    /** @param callable(string):void $emit @param (callable(string):void)|null $onStart called with the file name when a file block starts */
-    public function __construct(callable $emit, ?callable $onStart = null)
+    /**
+     * @param callable(string):void $emit
+     * @param (callable(string):void)|null $onStart called with the file name when a file block starts
+     * @param (callable():void)|null $onHidden called for every chunk swallowed inside a hidden block (lets the caller send a keep-alive,
+     *        otherwise a long file/zip would send no bytes to the browser and the client watchdog would give up)
+     */
+    public function __construct(callable $emit, ?callable $onStart = null, ?callable $onHidden = null)
     {
         $this->emit = $emit;
         $this->onStart = $onStart;
+        $this->onHidden = $onHidden;
     }
 
     public function push(string $delta): void
     {
+        if ($this->inside && $this->onHidden) {
+            ($this->onHidden)();
+        }
         $this->buf .= $delta;
         while (true) {
             if (!$this->inside) {

@@ -272,7 +272,7 @@ class AIClient
                 'Accept: text/event-stream',
             ],
             CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
-            CURLOPT_TIMEOUT        => max($this->timeout, 60),
+            CURLOPT_TIMEOUT        => max($this->timeout, 240), // total time of a streamed reply (long files / zips take minutes)
             CURLOPT_CONNECTTIMEOUT => min(5, $this->timeout),
             CURLOPT_WRITEFUNCTION  => function ($curlHandle, string $chunk) use (&$fullText, &$buffer, &$rawHead, &$sawSseLine, $onToken) {
                 if (strlen($rawHead) < 2000) {
@@ -414,7 +414,7 @@ class AIClient
                 'Accept: text/event-stream',
             ],
             CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),
-            CURLOPT_TIMEOUT        => max($this->timeout, 90),
+            CURLOPT_TIMEOUT        => max($this->timeout, 240),
             CURLOPT_CONNECTTIMEOUT => min(5, $this->timeout),
             CURLOPT_WRITEFUNCTION  => function ($curlHandle, string $chunk) use (&$buffer, &$rawHead, &$sawSseLine, $consumeDelta) {
                 if (strlen($rawHead) < 2000) {
