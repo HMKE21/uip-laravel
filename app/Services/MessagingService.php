@@ -1727,7 +1727,7 @@ class MessagingService
         return $shaped;
     }
 
-    /** يبعت GIF من نتيجة بحث (Giphy) — بنقبل روابط Giphy بس. */
+    /** يبعت GIF من نتيجة بحث (Giphy) — بنقبل روابط Giphy بس، وبنتأكد من تصنيفه وعنوانه من Giphy نفسها (مش من اللي العميل بعته). */
     public function sendGif(int $conversationId, $userId, string $url, ?string $title = null, ?string $preview = null): array
     {
         $host = strtolower((string) parse_url($url, PHP_URL_HOST));
@@ -1738,6 +1738,11 @@ class MessagingService
         if ($title && app(ChatMediaPolicyService::class)->containsBlockedWord((string) $title)) {
             throw new \RuntimeException('This GIF is not allowed on this platform.');
         }
+        $safety = app(\App\Services\ContentSafetyService::class);
+        if ($title) {
+            $safety->assertText((string) $title, true, 'gif_title'); // ContentBlockedException (RuntimeException)
+        }
+        $this->assertGifVerified($url);
         $meta = ['url' => $url, 'title' => mb_substr(trim((string) $title), 0, 140)];
         if ($preview && str_starts_with($preview, 'https://') && $ok(strtolower((string) parse_url($preview, PHP_URL_HOST)))) {
             $meta['preview'] = $preview;
@@ -1745,23 +1750,91 @@ class MessagingService
         return $this->sendMessage($conversationId, $userId, '', ['message_type' => 'gif', 'metadata' => $meta]);
     }
 
+    /** id الـ GIF من رابط Giphy (media/{id}/..., media/v1.xxx/{id}/..., i.giphy.com/{id}.gif). */
+    private function giphyIdFromUrl(string $url): ?string
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if (preg_match('#^/media/(?:v1\.[^/]+/)?([A-Za-z0-9]{5,})/#', $path, $m) || preg_match('#^/([A-Za-z0-9]{5,})\.(?:gif|webp)$#', $path, $m)) {
+            return $m[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * إعادة تحقق وقت الإرسال: بنسأل Giphy عن الـ GIF بالـ id ونرفض لو تصنيفه أعلى من المسموح أو عنوانه/slug مخالف.
+     * fail-closed: لو Giphy مردّتش أو الرابط مش مفهوم => مفيش إرسال.
+     * @throws \RuntimeException
+     */
+    private function assertGifVerified(string $url): void
+    {
+        $safety = app(\App\Services\ContentSafetyService::class);
+        $media = app(ChatMediaPolicyService::class);
+        $id = $this->giphyIdFromUrl($url);
+        $key = $media->giphyKey();
+        if (!$id || $key === '') {
+            $safety->record('gif', 'unverifiable', $id ?: 'no-id');
+            throw new \RuntimeException('This GIF is not allowed on this platform.');
+        }
+        $info = \Illuminate\Support\Facades\Cache::remember('gifv1:' . $id . ':' . sha1($key), 86400, function () use ($id, $key) {
+            try {
+                $r = \Illuminate\Support\Facades\Http::timeout(6)->get('https://api.giphy.com/v1/gifs/' . $id, ['api_key' => $key]);
+            } catch (\Throwable $e) {
+                return null;
+            }
+            if (!$r->ok() || !is_array($r->json('data'))) {
+                return null;
+            }
+
+            return [
+                'rating' => strtolower((string) $r->json('data.rating', '')),
+                'text' => trim((string) $r->json('data.title', '') . ' ' . (string) $r->json('data.slug', '')),
+            ];
+        });
+        if (!$info) {
+            \Illuminate\Support\Facades\Cache::forget('gifv1:' . $id . ':' . sha1($key));
+            throw new \RuntimeException('This GIF is not allowed on this platform.');
+        }
+        $pol = $media->get();
+        if (!in_array($info['rating'], $safety->allowedGifRatings((string) $pol['gif_rating']), true)) {
+            $safety->record('gif', 'sexual', 'rating=' . $info['rating']);
+            throw new \RuntimeException($safety->message('sexual'));
+        }
+        if ($media->containsBlockedWord($info['text'])) {
+            $safety->record('gif', 'custom', 'blocked word in giphy title');
+            throw new \RuntimeException($safety->message('sexual'));
+        }
+        $safety->assertText($info['text'], true, 'gif_title');
+    }
+
     /** بحث/ترند GIF عن طريق Giphy (مفتاح GIPHY_API_KEY في .env). من غير مفتاح => configured=false والواجهة بتعرض رسالة. */
     public function searchGifs(string $q, int $offset = 0): array
     {
         $media = app(ChatMediaPolicyService::class);
+        $safety = app(\App\Services\ContentSafetyService::class);
         $key = $media->giphyKey();
         if ($key === '') {
             return ['configured' => false, 'items' => [], 'next' => null];
         }
         $q = trim($q);
-        if ($q !== '' && $media->containsBlockedWord($q)) {
-            return ['configured' => true, 'items' => [], 'next' => null, 'blocked' => true];
+        if ($q !== '') {
+            // قاموس المحتوى (الطبقة الأشد: sex, nude, شتايم… ممنوعة في بحث الـ GIF) + كلمات الأدمن.
+            $hit = $safety->checkText($q, true);
+            if ($hit) {
+                $safety->record('gif_query', $hit['category'], $hit['term']);
+
+                return ['configured' => true, 'items' => [], 'next' => null, 'blocked' => true, 'message' => $safety->message($hit['category'])];
+            }
+            if ($media->containsBlockedWord($q)) {
+                return ['configured' => true, 'items' => [], 'next' => null, 'blocked' => true, 'message' => $safety->message('sexual')];
+            }
         }
         $pol = $media->get();
         $limit = (int) $pol['gif_per_page'];
         $rating = (string) $pol['gif_rating'];
-        $cacheKey = 'gif3:' . sha1($q . '|' . $offset . '|' . $limit . '|' . $rating . '|' . $pol['gif_blocked_words'] . '|' . sha1($key));
-        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit, $rating, $media) {
+        $allowedRatings = $safety->allowedGifRatings($rating);
+        $cacheKey = 'gif4:' . sha1($q . '|' . $offset . '|' . $limit . '|' . $rating . '|' . $pol['gif_blocked_words'] . '|' . sha1($key));
+        return \Illuminate\Support\Facades\Cache::remember($cacheKey, $q === '' ? 600 : 300, function () use ($key, $q, $offset, $limit, $rating, $media, $safety, $allowedRatings) {
             $resp = \Illuminate\Support\Facades\Http::timeout(6)->get('https://api.giphy.com/v1/gifs/' . ($q === '' ? 'trending' : 'search'), array_filter([
                 'api_key' => $key, 'q' => $q ?: null, 'limit' => $limit, 'offset' => $offset, 'rating' => $rating, 'bundle' => 'messaging_non_clips',
             ], fn ($v) => $v !== null));
@@ -1775,7 +1848,12 @@ class MessagingService
                 $thumb = $img['fixed_width_small']['url'] ?? ($img['fixed_width']['url'] ?? $full);
                 // صورة ثابتة خفيفة (بضع KB) للعرض في الشبكة — الـ GIF المتحرك بيتحمّل بس لما المستخدم يقف عليه.
                 $still = $img['fixed_width_small_still']['url'] ?? ($img['fixed_width_still']['url'] ?? null);
-                if (!$full || $media->containsBlockedWord((string) ($g['title'] ?? '') . ' ' . (string) ($g['slug'] ?? ''))) {
+                $text = (string) ($g['title'] ?? '') . ' ' . (string) ($g['slug'] ?? '') . ' ' . implode(' ', array_map('strval', (array) ($g['tags'] ?? [])));
+                // تصنيف Giphy لازم يكون موجود ومسموح (من غير تصنيف = بنرفض)، والعنوان/الـ slug نضاف.
+                if (!$full || !in_array(strtolower((string) ($g['rating'] ?? '')), $allowedRatings, true)) {
+                    continue;
+                }
+                if ($media->containsBlockedWord($text) || $safety->checkText($text, true)) {
                     continue;
                 }
                 $items[] = [

@@ -160,6 +160,9 @@ class ChunkedUploadService
         if (!is_file($path) || filesize($path) !== $m['size']) {
             throw new \RuntimeException('The uploaded file is damaged. Please upload it again.');
         }
+        // الرفع بالأجزاء مبيعديش على UipContentSafetyMiddleware كملف — بنفحصه هنا بعد التجميع (إباحي/مخلّ).
+        app(\App\Services\ContentSafetyService::class)->assertFileSafe($path, (string) $m['name']);
+
         return new ChunkedUploadedFile($path, $m['name'], $m['mime'] ?: null, $id);
     }
 

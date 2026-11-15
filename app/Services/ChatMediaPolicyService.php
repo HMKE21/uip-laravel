@@ -20,7 +20,8 @@ use App\Support\PlatformPolicy;
 class ChatMediaPolicyService
 {
     public const KEY = 'chat_media_policy';
-    public const RATINGS = ['g', 'pg', 'pg-13', 'r'];
+    /** 'r' اتشال نهائيًا: المنصة تعليمية، فمفيش محتوى ناضج. الحد الأعلى الفعلي كمان بيتقيّد بـ content_safety.gif_max_rating. */
+    public const RATINGS = ['g', 'pg', 'pg-13'];
 
     /** Portal keys (same as MessagingPolicyService::PORTALS) that can be switched per feature. */
     public const ROLE_KEYS = ['student', 'university', 'security', 'data_analyst', 'supervisor', 'faculty'];
@@ -77,6 +78,11 @@ class ChatMediaPolicyService
         } catch (\Throwable $e) {
             // settings outage: keep the permissive defaults so chat keeps working
         }
+        // تصنيف 'r' القديم (أو أي قيمة غريبة) => pg-13، وبعدين بنقيّده بسقف فحص المحتوى (افتراضي pg).
+        $safety = app(ContentSafetyService::class);
+        $rating = in_array($out['gif_rating'] ?? '', self::RATINGS, true) ? $out['gif_rating'] : 'pg-13';
+        $out['gif_rating'] = $safety->minRating($rating, $safety->maxGifRating());
+
         self::$memo = $out;
         self::$memoAt = time();
 

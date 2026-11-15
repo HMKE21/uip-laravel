@@ -1220,6 +1220,12 @@ Route::prefix('v1')->group(function () {
         Route::post('/test-giphy', [\App\Http\Controllers\Api\AdminChatMediaApiController::class, 'testGiphy'])->middleware('throttle:10,1');
     });
 
+    // Admin → Content Safety: حالة فاحص المحتوى الإباحي/المخلّ + سجل المحاولات + اختبار نص على القاموس.
+    Route::prefix('admin/content-safety')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'index']);
+        Route::post('/test-text', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'testText'])->middleware('throttle:60,1');
+    });
+
     Route::prefix('admin/notification-settings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [AdminNotificationSettingsApiController::class, 'show']);
         Route::patch('/', [AdminNotificationSettingsApiController::class, 'update']);

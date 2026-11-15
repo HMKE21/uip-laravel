@@ -44,7 +44,7 @@ class AdminChatMediaApiController extends Controller
         return [
             'policy'   => $this->media->get(),
             'defaults' => ChatMediaPolicyService::defaults(),
-            'ratings'  => ChatMediaPolicyService::RATINGS,
+            'ratings'  => app(\App\Services\ContentSafetyService::class)->allowedGifRatings(),
             'roles'    => ChatMediaPolicyService::ROLE_KEYS,
             'giphy'    => [
                 'configured' => $key !== '',

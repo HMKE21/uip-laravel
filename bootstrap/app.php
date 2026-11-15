@@ -116,6 +116,8 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\UipDeviceRestrictionMiddleware::class,
             // IP + Country Restrictions على كل الـ API (قبل كده كانوا متخزّنين بس ومش متطبقين).
             \App\Http\Middleware\UipNetworkRestrictionMiddleware::class,
+            // فحص المحتوى: أي نص/ملف/صورة إباحي أو مخلّ بيتحجب 422 قبل ما يوصل لأي controller (شوف config/content_safety.php).
+            \App\Http\Middleware\UipContentSafetyMiddleware::class,
         ]);
         // Per-user activity timeline (server half): every write + every failed request of a signed-in user. Appended so it sits
         // INSIDE the response-encryption middleware (the JSON answer is still readable) and writes after the response is sent.
