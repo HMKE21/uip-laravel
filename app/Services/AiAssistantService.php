@@ -1392,11 +1392,32 @@ SYS;
             $notes[$rid] = implode("\n", $lines);
         }
 
+        // تيرن فشل (رد الـ assistant status=error): نشيل معاه رسالة اليوزر اللي سبقته مباشرة، وإلا الموديل يشوف طلبين ورا بعض
+        // من غير رد بينهم (مثلًا "اعمل اكسيل" الفاشل ثم "اعمل pdf") وينفّذ الأول بدل الأخير. إعادة المحاولة بتبعت الطلب تاني كرسالة جديدة.
+        $skipFailedUser = [];
+        $prevUserId = null;
+        foreach ($trimmed as $row) {
+            if ((int) $row['is_deleted'] === 1 || $row['role'] === 'system') {
+                continue;
+            }
+            if ($row['role'] === 'user') {
+                $prevUserId = (int) $row['id'];
+            } elseif ($row['role'] === 'assistant') {
+                if ($row['status'] === 'error' && $prevUserId !== null && $prevUserId !== $overrideUserMessageId) {
+                    $skipFailedUser[$prevUserId] = true;
+                }
+                $prevUserId = null;
+            }
+        }
+
         foreach ($trimmed as $row) {
             if ((int) $row['id'] === $excludeMessageId) {
                 continue; // نفس بلاسهولدر الـ streaming
             }
             if ($row['role'] === 'system' || (int) $row['is_deleted'] === 1) {
+                continue;
+            }
+            if (isset($skipFailedUser[(int) $row['id']])) {
                 continue;
             }
             if ($row['status'] === 'error' || ($row['role'] === 'assistant' && $row['content'] === '')) {
