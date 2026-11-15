@@ -96,6 +96,7 @@ use App\Http\Controllers\Api\LibraryLockApiController;
 use App\Http\Controllers\Api\DesktopVirtualModeApiController;
 use App\Http\Controllers\Api\AdminAiConversationsApiController;
 use App\Http\Controllers\Api\AiAssistantController;
+use App\Http\Controllers\Api\AiUserSettingsController;
 use App\Http\Controllers\Api\AiCodeAssistController;
 use App\Http\Controllers\Api\AiCodeChatHistoryController;
 use App\Http\Controllers\Api\AiAssistantSettingsController;
@@ -2573,6 +2574,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/messages/{id}/react', [AiAssistantController::class, 'reactToMessage']);
 
         Route::get('/search', [AiAssistantController::class, 'search']);
+
+        // إعدادات الـ AI الشخصية لكل يوزر (تخصيص + API خاص + التحكم في البيانات)
+        Route::get('/user-settings', [AiUserSettingsController::class, 'show']);
+        Route::put('/user-settings', [AiUserSettingsController::class, 'update']);
+        Route::post('/user-settings/test', [AiUserSettingsController::class, 'testKey'])->middleware('throttle:10,1');
+        Route::delete('/user-settings/api-key', [AiUserSettingsController::class, 'deleteKey']);
+        Route::delete('/conversations', [AiUserSettingsController::class, 'deleteAllChats']);
+        Route::get('/export-all', [AiUserSettingsController::class, 'exportAll']);
         });
     });
 

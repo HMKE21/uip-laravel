@@ -69,7 +69,7 @@ class AiAssistantController extends Controller
     public function status(Request $request)
     {
         return $this->apiSuccess([
-            'available' => $this->assistant->isAvailable(),
+            'available' => $this->assistant->isAvailableFor($this->uid($request)),
             'portal'    => $this->portalForRole($this->role($request)),
             'data_access' => $this->assistant->toolsEnabledFor($this->role($request)),
         ], 'Status retrieved successfully.');
@@ -654,6 +654,7 @@ class AiAssistantController extends Controller
             'locale'    => in_array($locale, ['ar', 'en'], true) ? $locale : null,
             'role'      => $role,
             'profile'   => $profile ?: null,
+            'user_prefs' => $userId > 0 ? $this->assistant->userPromptText($userId) : null,
             'project'   => is_array($project) ? $project : null,
             'dashboard' => is_array($dashboard) ? $dashboard : null,
         ], fn ($v) => $v !== null && $v !== '');

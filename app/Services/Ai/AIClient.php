@@ -133,6 +133,17 @@ class AIClient
         return $clone;
     }
 
+    /** نسخة موجّهة لمزوّد اليوزر الشخصي (base URL + مفتاح + موديل) — بتتفعّل حتى لو الأدمن مقفّل الـ AI العام. */
+    public function withOwn(string $baseUrl, string $apiKey, string $model): self
+    {
+        $clone = clone $this;
+        $clone->enabled = true;
+        $clone->baseUrl = rtrim(trim($baseUrl), '/');
+        $clone->apiKey = trim($apiKey);
+        $clone->model = trim($model);
+        return $clone;
+    }
+
     /** آخر finish_reason من آخر ستريم ('stop' | 'length' | 'tool_calls' …) — 'length' = الرد اتقطع عند حد الـ max_tokens. */
     public function finishReason(): ?string
     {

@@ -47,6 +47,8 @@ class AiAssistantService
     private ?string $lastFinish = null;
     private bool $lastTruncated = false;
     private bool $fileCutNotice = false;
+    /** التيرن الحالي شغّال على API خاص باليوزر (مفيش fallback بمفتاح المنصة عليه). */
+    private bool $usingOwnKey = false;
 
     public function __construct(
         AIClient $client,
@@ -57,7 +59,8 @@ class AiAssistantService
         private FaqResolverService $faqResolver,
         private FaqIntentRepository $faqRepo,
         private AiUserContextService $userContext,
-        private AiPlatformTools $tools
+        private AiPlatformTools $tools,
+        private AiUserSettingsService $userSettings
     ) {
         $this->client = $client;
         $this->applySettingsOverrides($this->client, $this->settings);
@@ -66,6 +69,18 @@ class AiAssistantService
     public function isAvailable(): bool
     {
         return $this->client->isConfigured();
+    }
+
+    /** متاح لليوزر ده: مزوّد المنصة متظبّط، أو اليوزر مفعّل API الخاص بيه. */
+    public function isAvailableFor(int $userId): bool
+    {
+        return $this->client->isConfigured() || ($userId > 0 && $this->userSettings->ownKeyActive($userId));
+    }
+
+    /** نص تخصيص اليوزر (تعليمات مخصصة/أسلوب) لإضافته لسياق الـ system prompt. */
+    public function userPromptText(int $userId): string
+    {
+        return $userId > 0 ? $this->userSettings->promptText($userId) : '';
     }
 
     /** المساعد يقدر يقرا بيانات المنصة (tools) لدور اليوزر ده؟ */
@@ -341,6 +356,22 @@ class AiAssistantService
         $this->lastTruncated = false;
         $this->fileCutNotice = false;
 
+        // إعدادات اليوزر الشخصية: حدود التوليد، و API خاص بيه (بيحل محل مزوّد المنصة لتيرنه بس).
+        $ownClient = $this->userSettings->clientFor($userId, $this->client);
+        $gen = $this->userSettings->generationOverrides($userId);
+        if ($gen['temperature'] !== null) {
+            $settings['temperature'] = $gen['temperature'];
+        }
+        if ($gen['max_tokens'] !== null) {
+            // على مفتاح المنصة: ماينفعش يعدّى حد الأدمن. على مفتاحه الشخصي: براحته (حتى 8000).
+            $settings['max_tokens'] = $ownClient ? $gen['max_tokens'] : min($gen['max_tokens'], max(64, (int) $settings['max_tokens']));
+        }
+        $platformClient = $this->client;
+        $this->usingOwnKey = $ownClient !== null;
+        if ($ownClient) {
+            $this->client = $ownClient;
+        }
+
         // بلوكات <uipe-file> مابتتعرضش كنص: بتتحجب من الستريم وبتتحوّل لملف للتحميل بعد ما الرد يخلص.
         $lastPing = 0.0;
         $fileFilter = new FileBlockStreamFilter(
@@ -434,8 +465,12 @@ class AiAssistantService
             $this->logCall($userId, $conversationId, $portal, null, null, (int) round((microtime(true) - $started) * 1000), false, null);
             $this->auditToolUse($userId, $conversationId, $role, $usedTools);
 
+            $this->client = $platformClient;
+            $this->usingOwnKey = false;
             return $fullText;
         } catch (\Throwable $e) {
+            $this->client = $platformClient;
+            $this->usingOwnKey = false;
             $message = $this->repo->findMessage($assistantMessageId);
             if ($message) {
                 $message->fill(['status' => 'error', 'error_message' => $e->getMessage(), 'content' => '']);
@@ -632,6 +667,9 @@ SYS;
     /** عميل بموديل احتياطي (إعداد ai_fallback_model من الأدمن، أو AI_FALLBACK_MODEL من .env) — null لو مش متظبّط أو نفس الموديل الأساسي. */
     private function fallbackClient(): ?AIClient
     {
+        if ($this->usingOwnKey) {
+            return null; // مفتاح اليوزر الشخصي: ماينفعش نكمّل بموديل/مفتاح المنصة من وراه
+        }
         $model = trim((string) $this->settings->get('ai_fallback_model', 'global', null, ''));
         if ($model === '') {
             $model = trim((string) config('ai.fallback_model', ''));
@@ -1426,6 +1464,9 @@ SYS;
         $profileText = $this->userContext->toPromptText($profile);
         if ($profileText !== '') {
             $parts[] = $profileText;
+        }
+        if (!empty($context['user_prefs']) && is_string($context['user_prefs'])) {
+            $parts[] = $context['user_prefs'];
         }
 
         $safeContext = array_filter([
