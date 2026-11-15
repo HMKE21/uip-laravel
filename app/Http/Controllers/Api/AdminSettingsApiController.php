@@ -129,6 +129,7 @@ class AdminSettingsApiController extends Controller
             'has_api_key'                   => $hasKeyOverride || (($aiConfig['api_key'] ?? '') !== ''),
             'model'                         => $get('model', $aiConfig['model'] ?? ''),
             'fallback_model'                => $get('fallback_model', $aiConfig['fallback_model'] ?? ''),
+            'image_model'                  => $get('image_model', $aiConfig['image']['model'] ?? ''),
             'email_personalization_enabled' => $storedPersonalization !== '' ? $storedPersonalization === '1' : (bool) ($aiConfig['email_personalization_enabled'] ?? false),
             // تفريغ الصوت للترجمة التلقائية (سيرفر Whisper متوافق مع OpenAI) — المفتاح عمره ما بيرجع للفرونت.
             'transcribe_base_url'           => $get('transcribe_base_url', $aiConfig['transcribe']['base_url'] ?? ''),
@@ -471,6 +472,9 @@ class AdminSettingsApiController extends Controller
         }
         $this->settings->set('ai_model', $model);
         // موديل احتياطي للمساعد عند 402/429/5xx — بنكتبه بس لو الفرونت بعته (نسخة قديمة من الشاشة ماتمسحوش).
+        if ($request->has('ai_image_model')) {
+            $this->settings->set('ai_image_model', trim((string) $request->input('ai_image_model', '')));
+        }
         if ($request->has('ai_fallback_model')) {
             $this->settings->set('ai_fallback_model', trim((string) $request->input('ai_fallback_model', '')));
         }

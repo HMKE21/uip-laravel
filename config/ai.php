@@ -26,6 +26,17 @@ return [
     // زوّد AI_TIMEOUT في .env حسب المزوّد بتاعك لو احتجت.
     'timeout'  => (int) env('AI_TIMEOUT', 30),
 
+    // توليد الصور داخل شات المساعد (أمر /image أو /صورة). base_url/api_key فاضيين = نفس مزوّد الشات (OpenRouter مثلًا).
+    // model: لازم موديل بيطلّع صور (OpenRouter: Output modalities = image). الأدمن يغيّره من Settings -> AI (ai_image_model).
+    // api: 'auto' (الافتراضي: OpenRouter => /images، غيره => /images/generations) | 'images' (نفس auto) | 'chat' = /chat/completions مع modalities.
+    'image' => [
+        'model'    => env('AI_IMAGE_MODEL', ''),
+        'base_url' => rtrim((string) env('AI_IMAGE_BASE_URL', ''), '/'),
+        'api_key'  => env('AI_IMAGE_API_KEY', ''),
+        'api'      => env('AI_IMAGE_API', 'auto'),
+        'timeout'  => (int) env('AI_IMAGE_TIMEOUT', 120),
+    ],
+
     // ترجمة الفيديو التلقائية (VideoPlayer ← POST /api/v1/subtitles/auto): تفريغ الصوت بـ Whisper ثم ترجمة النص.
     // بيستخدم نفس AI_BASE_URL / AI_API_KEY لو سيبت base_url/api_key فاضيين. لو مزوّد الشات عندك مش بيدعم
     // /audio/transcriptions (Ollama مثلاً) حط مزوّد تاني هنا (مثلاً Groq: https://api.groq.com/openai/v1 + whisper-large-v3).

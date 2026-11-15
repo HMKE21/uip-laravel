@@ -78,7 +78,7 @@ class AIClient
      * بيبني Exception واضح من رد المزوّد غير الناجح: بيطلّع رسالة المزوّد الأصلية
      * (error.message) ويشرح الأكواد الشائعة بدل "HTTP 402" المبهمة.
      */
-    private function providerError(int $status, string $rawBody, string $context = ''): AiProviderException
+    public static function providerError(int $status, string $rawBody, string $context = ''): AiProviderException
     {
         $provider = '';
         $decoded = json_decode(trim($rawBody), true);
@@ -181,7 +181,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($status < 200 || $status >= 300) {
-            throw $this->providerError($status, (string) $raw);
+            throw self::providerError($status, (string) $raw);
         }
 
         $decoded = json_decode((string) $raw, true);
@@ -304,7 +304,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($httpStatus < 200 || $httpStatus >= 300) {
-            throw $this->providerError($httpStatus, $rawHead, 'during streaming');
+            throw self::providerError($httpStatus, $rawHead, 'during streaming');
         }
 
         // المزوّد تجاهل "stream": true ورجّع JSON عادي بدل SSE lines — الـ
@@ -437,7 +437,7 @@ class AIClient
             if ($tools && in_array($httpStatus, [400, 404, 422], true)) {
                 throw new AiToolsUnsupportedException("AI provider returned HTTP {$httpStatus} for a request with tools: " . substr($rawHead, 0, 300));
             }
-            throw $this->providerError($httpStatus, $rawHead, 'during streaming');
+            throw self::providerError($httpStatus, $rawHead, 'during streaming');
         }
 
         // المزوّد تجاهل stream:true ورجّع JSON واحد.
@@ -516,7 +516,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($status < 200 || $status >= 300) {
-            throw $this->providerError($status, (string) $raw);
+            throw self::providerError($status, (string) $raw);
         }
 
         return (string) $raw;

@@ -328,6 +328,38 @@ class AiAssistantController extends Controller
             return $this->apiError('Message cannot be empty.', null, 422);
         }
 
+        // أمر توليد صورة: /image <وصف> أو /صورة <وصف> (من غير مرفقات).
+        if (!$attachmentIds && ($imagePrompt = $this->assistant->parseImageCommand($content)) !== null) {
+            if (!$this->assistant->imageGenerationConfigured()) {
+                return $this->apiError('Image generation is not configured. An admin must set an Image model in Settings → AI.', null, 422);
+            }
+            try {
+                $this->assistant->assertNotRateLimited($userId);
+            } catch (\RuntimeException $e) {
+                return $this->apiError($e->getMessage(), null, 429);
+            }
+            try {
+                $prepared = $this->assistant->prepareTurn($userId, $conversationId, $content, [], $context);
+            } catch (\RuntimeException $e) {
+                return $this->apiError($e->getMessage(), null, 404);
+            }
+            return $this->sseResponse(function () use ($userId, $conversationId, $prepared, $context, $imagePrompt) {
+                $send = function (array $payload): void {
+                    echo 'data: ' . json_encode($payload, JSON_UNESCAPED_UNICODE) . "\n\n";
+                    @flush();
+                };
+                $assistantId = (int) $prepared['assistant_message_id'];
+                $send(['type' => 'user_message', 'message' => $prepared['user_message']]);
+                $send(['type' => 'tool', 'label' => 'Generating image']);
+                try {
+                    $res = $this->assistant->generateImageReply($userId, $conversationId, $assistantId, $imagePrompt, (string) ($context['portal'] ?? 'general'));
+                    $send(['type' => 'done', 'message_id' => $assistantId, 'content' => $res['content'], 'attachments' => $res['attachments']]);
+                } catch (\Throwable $e) {
+                    $send(['type' => 'error', 'message_id' => $assistantId, 'message' => $e->getMessage()]);
+                }
+            });
+        }
+
         // طبقة الرد الجاهز الذكي / FAQ: بتقف قبل مسار الـ AI العادي —
         // تيرن نصي بس (بدون مرفقات) بيتفحص الأول؛ تطابق واثق بيرد فورًا
         // من غير AIClient ومن غير استهلاك rate limit؛ miss بيكمل عادي.

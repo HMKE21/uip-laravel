@@ -8,6 +8,7 @@ use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Ai\AiPlatformTools;
 use App\Services\Ai\AiProviderException;
+use App\Services\Ai\ImageClient;
 use App\Services\Ai\AiToolsUnsupportedException;
 use App\Services\Concerns\ConfiguresAIClient;
 use App\Services\Faq\FaqResolverService;
@@ -356,6 +357,92 @@ class AiAssistantService
             $this->auditToolUse($userId, $conversationId, $role, $usedTools);
 
             return $fullText;
+        } catch (\Throwable $e) {
+            $message = $this->repo->findMessage($assistantMessageId);
+            if ($message) {
+                $message->fill(['status' => 'error', 'error_message' => $e->getMessage(), 'content' => '']);
+                $message->save();
+            }
+            $this->logCall($userId, $conversationId, $portal, null, null, (int) round((microtime(true) - $started) * 1000), true, $e->getMessage());
+            throw $e;
+        }
+    }
+
+    // -- Image generation (/image <prompt> or /صورة <prompt>) --------------------
+
+    /** لو الرسالة أمر توليد صورة بيرجّع الـ prompt، وإلا null. */
+    public function parseImageCommand(string $content): ?string
+    {
+        if (preg_match('#^/(?:image|img|imagine|صورة|صوره)\s+(.+)$#su', trim($content), $m)) {
+            $prompt = trim($m[1]);
+            return $prompt !== '' ? mb_substr($prompt, 0, 2000) : null;
+        }
+        return null;
+    }
+
+    private function imageClient(): ImageClient
+    {
+        return new ImageClient($this->client, (string) $this->settings->get('ai_image_model', 'global', null, ''));
+    }
+
+    public function imageGenerationConfigured(): bool
+    {
+        return $this->client->isConfigured() && $this->imageClient()->isConfigured();
+    }
+
+    /**
+     * بيولّد الصورة، بيخزّنها كمرفق (kind=image) على رسالة الـ assistant، وبيكمّل الرسالة.
+     * عند الفشل بيعلّم الرسالة status=error وبيرمي (أبدًا مايختلقش صورة).
+     *
+     * @return array{content:string, attachments:array<int,array>}
+     */
+    public function generateImageReply(int $userId, int $conversationId, int $assistantMessageId, string $prompt, string $portal): array
+    {
+        $started = microtime(true);
+        try {
+            if (!$this->client->isConfigured()) {
+                throw new \RuntimeException('AI client is not configured (feature flag, base URL, API key, or model missing).');
+            }
+            $img = $this->imageClient()->generate($prompt);
+            $ext = ['image/png' => 'png', 'image/jpeg' => 'jpg', 'image/webp' => 'webp', 'image/gif' => 'gif'][$img['mime']] ?? 'png';
+
+            $relativeDir = (string) config('upload.paths.ai_assistant', 'uploads/ai_assistant') . '/conv_' . $conversationId;
+            $targetDir = \App\Services\FileUploadService::diskDir($relativeDir);
+            if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+                throw new \RuntimeException('Could not prepare the image destination.');
+            }
+            $storedName = bin2hex(random_bytes(16)) . '.' . $ext;
+            if (@file_put_contents($targetDir . '/' . $storedName, $img['bytes']) === false) {
+                throw new \RuntimeException('Failed to save the generated image.');
+            }
+            \App\Support\UploadMirror::push($relativeDir . '/' . $storedName, $targetDir . '/' . $storedName);
+
+            \Illuminate\Support\Facades\DB::table('ai_message_attachments')->insert([
+                'message_id'      => $assistantMessageId,
+                'conversation_id' => $conversationId,
+                'uploader_id'     => $userId,
+                'kind'            => 'image',
+                'stored_path'     => $relativeDir . '/' . $storedName,
+                'original_name'   => 'ai-image-' . date('Ymd-His') . '.' . $ext,
+                'mime_type'       => $img['mime'],
+                'extension'       => $ext,
+                'size_bytes'      => strlen($img['bytes']),
+                'extracted_text'  => null,
+                'created_at'      => now(),
+            ]);
+
+            $content = $img['caption'] !== '' ? $img['caption'] : (app()->getLocale() === 'ar' ? 'تم توليد الصورة.' : 'Here is your image.');
+            $message = $this->repo->findMessage($assistantMessageId);
+            $message->fill(['content' => $content, 'status' => 'complete', 'answer_source' => 'ai']);
+            $message->save();
+            $this->repo->touchConversation($conversationId);
+
+            $this->logCall($userId, $conversationId, $portal, null, null, (int) round((microtime(true) - $started) * 1000), false, null);
+
+            return [
+                'content'     => $content,
+                'attachments' => $this->shapeMessage($message->fresh()->toArray())['attachments'],
+            ];
         } catch (\Throwable $e) {
             $message = $this->repo->findMessage($assistantMessageId);
             if ($message) {
