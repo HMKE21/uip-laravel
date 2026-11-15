@@ -7,6 +7,7 @@ use App\Repositories\FaqIntentRepository;
 use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Ai\AiPlatformTools;
+use App\Services\Ai\AiProviderException;
 use App\Services\Ai\AiToolsUnsupportedException;
 use App\Services\Concerns\ConfiguresAIClient;
 use App\Services\Faq\FaqResolverService;
@@ -322,7 +323,30 @@ class AiAssistantService
         $usedTools = [];
 
         try {
-            $fullText = $this->runModel($userId, $role, $promptMessages, $settings, $onToken, $onEvent, $locale, $usedTools);
+            $streamed = false;
+            $trackedOnToken = function (string $delta) use ($onToken, &$streamed) {
+                $streamed = true;
+                $onToken($delta);
+            };
+            try {
+                $fullText = $this->runModel($userId, $role, $promptMessages, $settings, $trackedOnToken, $onEvent, $locale, $usedTools);
+            } catch (AiProviderException $e) {
+                // رصيد/كوتا/ضغط/سيرفر واقع عند المزوّد (402/429/5xx...) → جرّب الموديل الاحتياطي لو متظبّط
+                // (AI_FALLBACK_MODEL أو إعداد ai_fallback_model)، بس لو لسه مفيش ولا توكن اتبعت للواجهة.
+                $fallback = (!$streamed && $e->isFallbackWorthy()) ? $this->fallbackClient() : null;
+                if ($fallback === null) {
+                    throw $e;
+                }
+                Log::warning('AI primary model failed; retrying with fallback model', ['status' => $e->httpStatus, 'primary' => $this->client->model(), 'fallback' => $fallback->model(), 'error' => $e->getMessage()]);
+                $primary = $this->client;
+                $this->client = $fallback;
+                try {
+                    $usedTools = [];
+                    $fullText = $this->runModel($userId, $role, $promptMessages, $settings, $onToken, $onEvent, $locale, $usedTools);
+                } finally {
+                    $this->client = $primary;
+                }
+            }
 
             $message = $this->repo->findMessage($assistantMessageId);
             $message->fill(['content' => $fullText, 'status' => 'complete', 'answer_source' => 'ai']);
@@ -341,6 +365,19 @@ class AiAssistantService
             $this->logCall($userId, $conversationId, $portal, null, null, (int) round((microtime(true) - $started) * 1000), true, $e->getMessage());
             throw $e;
         }
+    }
+
+    /** عميل بموديل احتياطي (إعداد ai_fallback_model من الأدمن، أو AI_FALLBACK_MODEL من .env) — null لو مش متظبّط أو نفس الموديل الأساسي. */
+    private function fallbackClient(): ?AIClient
+    {
+        $model = trim((string) $this->settings->get('ai_fallback_model', 'global', null, ''));
+        if ($model === '') {
+            $model = trim((string) config('ai.fallback_model', ''));
+        }
+        if ($model === '' || $model === $this->client->model()) {
+            return null;
+        }
+        return $this->client->withFallback($model, config('ai.fallback_base_url') ?: null, config('ai.fallback_api_key') ?: null);
     }
 
     /**

@@ -15,6 +15,12 @@ return [
     'base_url' => rtrim((string) env('AI_BASE_URL', 'https://api.openai.com/v1'), '/'),
     'api_key'  => env('AI_API_KEY', ''),
     'model'    => env('AI_MODEL', 'gpt-4o-mini'),
+
+    // موديل احتياطي للمساعد لما الأساسي يفشل بـ 402/429/5xx (رصيد/كوتا/ضغط). اختياري —
+    // base_url/api_key لو فاضيين بيستخدموا نفس الأساسيين. مثال: AI_FALLBACK_MODEL=gpt-oss:20b
+    'fallback_model'    => env('AI_FALLBACK_MODEL', ''),
+    'fallback_base_url' => rtrim((string) env('AI_FALLBACK_BASE_URL', ''), '/'),
+    'fallback_api_key'  => env('AI_FALLBACK_API_KEY', ''),
     // نفس القديمة: 30 ثانية كحد أدنى آمن (بعض الطلبات — خصوصًا AI
     // Assistant الكامل بسياق طويل — بتاخد أكتر من الافتراضي القديم 12s).
     // زوّد AI_TIMEOUT في .env حسب المزوّد بتاعك لو احتجت.

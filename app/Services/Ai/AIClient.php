@@ -75,6 +75,69 @@ class AIClient
     }
 
     /**
+     * بيبني Exception واضح من رد المزوّد غير الناجح: بيطلّع رسالة المزوّد الأصلية
+     * (error.message) ويشرح الأكواد الشائعة بدل "HTTP 402" المبهمة.
+     */
+    private function providerError(int $status, string $rawBody, string $context = ''): AiProviderException
+    {
+        $provider = '';
+        $decoded = json_decode(trim($rawBody), true);
+        if (is_array($decoded)) {
+            $err = $decoded['error'] ?? $decoded['message'] ?? null;
+            if (is_array($err)) {
+                $err = $err['message'] ?? json_encode($err, JSON_UNESCAPED_UNICODE);
+            }
+            $provider = is_string($err) ? trim($err) : '';
+        } elseif (trim($rawBody) !== '' && !str_starts_with(ltrim($rawBody), '<')) {
+            $provider = trim($rawBody);
+        }
+        $provider = mb_substr($provider, 0, 300);
+
+        $hint = match (true) {
+            $status === 401 => 'the API key is missing or invalid',
+            $status === 402 => 'payment/subscription required or usage quota exhausted on the AI provider account (check billing/plan, or switch the model/provider in Admin → Settings → AI)',
+            $status === 403 => 'the API key is not allowed to use this model',
+            $status === 404 => 'model or endpoint not found (check the Base URL and Model name)',
+            $status === 429 => 'the AI provider rate limit was hit, try again shortly',
+            $status >= 500  => 'the AI provider is temporarily unavailable',
+            default         => '',
+        };
+
+        $msg = "AI provider returned HTTP {$status}" . ($context !== '' ? " {$context}" : '');
+        if ($hint !== '') {
+            $msg .= " — {$hint}";
+        }
+        if ($provider !== '') {
+            $msg .= ". Provider said: {$provider}";
+        }
+
+        return new AiProviderException($status, $msg, $provider);
+    }
+
+    /** نسخة من العميل بموديل (ومزوّد اختياريًا) احتياطي — لـ AiAssistantService عند 402/429/5xx. */
+    public function withFallback(?string $model, ?string $baseUrl = null, ?string $apiKey = null): ?self
+    {
+        $model = trim((string) $model);
+        if ($model === '') {
+            return null;
+        }
+        $clone = clone $this;
+        $clone->model = $model;
+        if ($baseUrl !== null && trim($baseUrl) !== '') {
+            $clone->baseUrl = rtrim(trim($baseUrl), '/');
+        }
+        if ($apiKey !== null && trim($apiKey) !== '') {
+            $clone->apiKey = trim($apiKey);
+        }
+        return $clone;
+    }
+
+    public function model(): string
+    {
+        return $this->model;
+    }
+
+    /**
      * @throws \RuntimeException عند نقص الإعداد، فشل النقل، أو ريسبونس غير 2xx
      */
     public function complete(string $systemPrompt, string $userPrompt, float $temperature = 0.6): string
@@ -118,7 +181,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($status < 200 || $status >= 300) {
-            throw new \RuntimeException("AI provider returned HTTP {$status}: " . substr((string) $raw, 0, 300));
+            throw $this->providerError($status, (string) $raw);
         }
 
         $decoded = json_decode((string) $raw, true);
@@ -189,6 +252,7 @@ class AIClient
 
         $fullText = '';
         $buffer = '';
+        $rawHead = '';
         $sawSseLine = false;
 
         $ch = curl_init($this->baseUrl . '/chat/completions');
@@ -202,7 +266,10 @@ class AIClient
             CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE),
             CURLOPT_TIMEOUT        => max($this->timeout, 60),
             CURLOPT_CONNECTTIMEOUT => min(5, $this->timeout),
-            CURLOPT_WRITEFUNCTION  => function ($curlHandle, string $chunk) use (&$fullText, &$buffer, &$sawSseLine, $onToken) {
+            CURLOPT_WRITEFUNCTION  => function ($curlHandle, string $chunk) use (&$fullText, &$buffer, &$rawHead, &$sawSseLine, $onToken) {
+                if (strlen($rawHead) < 2000) {
+                    $rawHead .= substr($chunk, 0, 2000 - strlen($rawHead));
+                }
                 $buffer .= $chunk;
                 while (($pos = strpos($buffer, "\n")) !== false) {
                     $line = substr($buffer, 0, $pos);
@@ -237,7 +304,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($httpStatus < 200 || $httpStatus >= 300) {
-            throw new \RuntimeException("AI provider returned HTTP {$httpStatus} during streaming.");
+            throw $this->providerError($httpStatus, $rawHead, 'during streaming');
         }
 
         // المزوّد تجاهل "stream": true ورجّع JSON عادي بدل SSE lines — الـ
@@ -370,7 +437,7 @@ class AIClient
             if ($tools && in_array($httpStatus, [400, 404, 422], true)) {
                 throw new AiToolsUnsupportedException("AI provider returned HTTP {$httpStatus} for a request with tools: " . substr($rawHead, 0, 300));
             }
-            throw new \RuntimeException("AI provider returned HTTP {$httpStatus} during streaming.");
+            throw $this->providerError($httpStatus, $rawHead, 'during streaming');
         }
 
         // المزوّد تجاهل stream:true ورجّع JSON واحد.
@@ -449,7 +516,7 @@ class AIClient
             throw new \RuntimeException('AI request failed: ' . $error);
         }
         if ($status < 200 || $status >= 300) {
-            throw new \RuntimeException("AI provider returned HTTP {$status}: " . substr((string) $raw, 0, 300));
+            throw $this->providerError($status, (string) $raw);
         }
 
         return (string) $raw;
