@@ -329,7 +329,15 @@ class AiAssistantController extends Controller
         }
 
         // أمر توليد صورة: /image <وصف> أو /صورة <وصف> (من غير مرفقات).
-        if (!$attachmentIds && ($imagePrompt = $this->assistant->parseImageCommand($content)) !== null) {
+        $isImageCommand = !$attachmentIds && $this->assistant->parseImageCommand($content) !== null;
+        $imagePrompt = null;
+        if (!$attachmentIds) {
+            // الأمر الصريح دايمًا؛ والطلب بلغة عادية ("اعمل لي صورة لوجو…") بس لو توليد الصور متظبّط.
+            $imagePrompt = $isImageCommand
+                ? $this->assistant->parseImageCommand($content)
+                : ($this->assistant->imageGenerationConfigured() ? $this->assistant->parseImageIntent($content) : null);
+        }
+        if ($imagePrompt !== null) {
             if (!$this->assistant->imageGenerationConfigured()) {
                 return $this->apiError('Image generation is not configured. An admin must set an Image model in Settings → AI.', null, 422);
             }
@@ -350,7 +358,7 @@ class AiAssistantController extends Controller
                 };
                 $assistantId = (int) $prepared['assistant_message_id'];
                 $send(['type' => 'user_message', 'message' => $prepared['user_message']]);
-                $send(['type' => 'tool', 'label' => 'Generating image']);
+                $send(['type' => 'tool', 'label' => 'Generating image', 'kind' => 'image']);
                 try {
                     $res = $this->assistant->generateImageReply($userId, $conversationId, $assistantId, $imagePrompt, (string) ($context['portal'] ?? 'general'));
                     $send(['type' => 'done', 'message_id' => $assistantId, 'content' => $res['content'], 'attachments' => $res['attachments']]);

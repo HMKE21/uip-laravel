@@ -380,6 +380,30 @@ class AiAssistantService
         return null;
     }
 
+    /**
+     * طلب صورة بلغة عادية (عربي/إنجليزي) من غير أمر: فعل إنشاء + اسم صورة/لوجو في أول الجملة
+     * ("قم بانشاء صورة لوجو باسم X"، "اعمل لي بوستر…"، "generate an image of…"، "draw a cat").
+     * متحفّظ عمدًا: الأسئلة عن الصور ("إزاي أعمل صورة؟"، "what is an image?") مش بتتحسب طلب توليد.
+     */
+    public function parseImageIntent(string $content): ?string
+    {
+        $text = trim($content);
+        if ($text === '' || mb_strlen($text) > 1500 || str_starts_with($text, '/')) {
+            return null;
+        }
+        // أسئلة "إزاي/كيف/how to/why…" أو علامة استفهام = سؤال مش طلب.
+        if (preg_match('/^(?:ازاي|إزاي|كيف|كيفية|ليه|لماذا|what|how|why|can you explain|هل)\b/iu', $text) || preg_match('/[?؟]\s*$/u', $text)) {
+            return null;
+        }
+        $head = mb_substr($text, 0, 60);
+        $verb = '(?:قم\s*ب?|قوم\s*ب?|انشئ|أنشئ|إنشاء|انشاء|اعمل|اعملي|اعمللي|عايز|عاوز|أريد|اريد|ولّد|ولد|توليد|صمم|صمّم|ارسم|ارسملي|اصنع|generate|create|make|draw|design|produce|render)';
+        $noun = '(?:صورة|صوره|صور|لوجو|شعار|لوغو|بوستر|ملصق|رسمة|رسم|تصميم|logo|image|picture|photo|illustration|poster|icon|banner|wallpaper|artwork|avatar)';
+        if (preg_match('/^(?:ارسم|ارسملي|ارسم لي|draw)\\s+\\S/iu', $head) || preg_match('/' . $verb . '[^\n]{0,25}?' . $noun . '/iu', $head)) {
+            return mb_substr($text, 0, 2000);
+        }
+        return null;
+    }
+
     private function imageClient(): ImageClient
     {
         return new ImageClient($this->client, (string) $this->settings->get('ai_image_model', 'global', null, ''));
