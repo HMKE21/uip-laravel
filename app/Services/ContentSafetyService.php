@@ -229,6 +229,72 @@ class ContentSafetyService
         }
     }
 
+    /** @var array<int,array<string,mixed>>|null درجات الفاحص لكل إطار — بتتملي بس أثناء analyzeFile (صفحة الأدمن). */
+    private ?array $trace = null;
+
+    /**
+     * اختبار ملف من صفحة الأدمن: بيرجّع الحكم + درجات الفاحص لكل إطار، من غير كاش ومن غير تسجيل في سجل المحاولات.
+     *
+     * @return array{kind:?string,provider:string,scanned:bool,blocked:bool,category:?string,reason:?string,error:?string,filename_hit:?array,frames:array,thresholds:array,note:?string}
+     */
+    public function analyzeFile(string $path, string $displayName): array
+    {
+        $out = [
+            'kind' => null, 'provider' => $this->provider(), 'scanned' => false, 'blocked' => false, 'category' => null,
+            'reason' => null, 'error' => null, 'filename_hit' => null, 'frames' => [], 'thresholds' => (array) config('content_safety.thresholds', []),
+            'note' => null,
+        ];
+        $base = str_replace(['_', '-', '.'], ' ', pathinfo($displayName, PATHINFO_FILENAME));
+        $hit = $this->checkText($base, false);
+        if ($hit !== null) {
+            $out['filename_hit'] = $hit;
+            $out['blocked'] = true;
+            $out['category'] = $hit['category'] ?? 'sexual';
+            $out['reason'] = 'filename: ' . ($hit['term'] ?? '');
+        }
+        if (strtolower(pathinfo($displayName, PATHINFO_EXTENSION)) === 'svg' && filesize($path) < 1_500_000) {
+            $svgHit = $this->checkText((string) @file_get_contents($path), false);
+            if ($svgHit !== null && !$out['blocked']) {
+                $out['blocked'] = true;
+                $out['category'] = $svgHit['category'] ?? 'sexual';
+                $out['reason'] = 'svg_text: ' . ($svgHit['term'] ?? '');
+            }
+        }
+
+        $kind = $this->mediaKind($path, $displayName);
+        $out['kind'] = $kind;
+        if ($kind === null) {
+            $out['note'] = 'unsupported_type'; // مش صورة/فيديو: اسم الملف (ونص SVG) بس اتفحصوا
+            return $out;
+        }
+        if ($out['provider'] === 'none') {
+            $out['note'] = 'no_provider';
+
+            return $out;
+        }
+
+        $this->trace = [];
+        $failOpen = config('content_safety.fail_open', false);
+        config(['content_safety.fail_open' => false]); // في الاختبار نعرض أخطاء الفاحص بدل ما نخبّيها
+        try {
+            $verdict = $this->moderateMedia($path, $kind);
+            $out['scanned'] = true;
+            if ($verdict !== null && !$out['blocked']) {
+                $out['blocked'] = true;
+                $out['category'] = $verdict['category'];
+                $out['reason'] = $verdict['reason'];
+            }
+        } catch (ContentBlockedException $e) {
+            $out['error'] = $e->getMessage();
+        } finally {
+            config(['content_safety.fail_open' => $failOpen]);
+            $out['frames'] = $this->trace ?? [];
+            $this->trace = null;
+        }
+
+        return $out;
+    }
+
     // ───────────────────────── مزوّد الصور ─────────────────────────
 
     public function provider(): string
@@ -274,7 +340,13 @@ class ContentSafetyService
                 throw new ContentBlockedException($this->unavailableMessage(), 'scanner_unavailable');
             }
 
-            return null; // مفيش مزوّد صور — بيتسجّل في status للأدمن
+            // مفيش مزوّد صور متظبط => الصورة/الـ GIF/الفيديو المرفوع بيعدّي من غير فحص محتوى (النص واسم الملف بس بيتفحصوا).
+            // قبل كده كان ده بيحصل بصمت؛ دلوقتي بيتسجّل تحذير في اللوج (مرة كل ساعة) عشان يبان.
+            if (Cache::add('csafe:no_scanner_warned', 1, now()->addHour())) {
+                Log::warning('Content safety: NO image scanner configured — uploaded images/videos are NOT being checked. Set CONTENT_SAFETY_OPENAI_KEY (or SIGHTENGINE_API_USER/SECRET) in .env, then php artisan config:clear.');
+            }
+
+            return null;
         }
         $maxBytes = max(1, (int) config('content_safety.max_scan_mb', 25)) * 1048576;
         $size = (int) @filesize($path);
@@ -357,6 +429,10 @@ class ContentSafetyService
         static $bin = false;
         if ($bin === false) {
             $bin = null;
+            $env = trim((string) env('FFMPEG_PATH', ''));
+            if ($env !== '' && is_file($env) && is_executable($env)) {
+                return $bin = $env;
+            }
             if (function_exists('exec')) {
                 $out = [];
                 @exec('command -v ffmpeg 2>/dev/null', $out);
@@ -478,7 +554,10 @@ class ContentSafetyService
         $sexual = (float) ($s['sexual'] ?? 0);
         $minors = (float) ($s['sexual/minors'] ?? 0);
         $gore = (float) ($s['violence/graphic'] ?? 0);
-        if ($minors >= ($t['sexual_minors'] ?? 0.02) || !empty($c['sexual/minors'])) {
+        if ($this->trace !== null) {
+            $this->trace[] = ['sexual' => round($sexual, 3), 'sexual_minors' => round($minors, 3), 'violence_graphic' => round($gore, 3)];
+        }
+        if ($minors >=($t['sexual_minors'] ?? 0.02) || !empty($c['sexual/minors'])) {
             return ['category' => 'child_safety', 'reason' => 'openai sexual/minors=' . round($minors, 3)];
         }
         if ($sexual >= ($t['sexual'] ?? 0.30) || !empty($c['sexual'])) {
@@ -524,8 +603,26 @@ class ContentSafetyService
         if ($sexual >= ($t['sexual'] ?? 0.30)) {
             return ['category' => 'sexual', 'reason' => 'sightengine nudity=' . round($sexual, 3)];
         }
-        if ((float) ($n['very_suggestive'] ?? 0) >= ($t['suggestive'] ?? 0.80)) {
-            return ['category' => 'sexual', 'reason' => 'sightengine very_suggestive=' . round((float) $n['very_suggestive'], 3)];
+        $very = (float) ($n['very_suggestive'] ?? 0);
+        $mid = (float) ($n['suggestive'] ?? 0);
+        if ($this->trace !== null) {
+            $this->trace[] = [
+                'sexual' => round($sexual, 3), 'very_suggestive' => round($very, 3), 'suggestive' => round($mid, 3),
+                'mildly_suggestive' => round((float) ($n['mildly_suggestive'] ?? 0), 3), 'gore' => round((float) ($json['gore']['prob'] ?? 0), 3),
+            ];
+        }
+        if (config('content_safety.debug', false)) {
+            Log::info('Content safety (sightengine) scores', [
+                'sexual' => round($sexual, 3), 'very_suggestive' => round($very, 3), 'suggestive' => round($mid, 3),
+                'mildly_suggestive' => round((float) ($n['mildly_suggestive'] ?? 0), 3), 'none' => round((float) ($n['none'] ?? 0), 3),
+            ]);
+        }
+        if ($very >= ($t['suggestive'] ?? 0.50)) {
+            return ['category' => 'sexual', 'reason' => 'sightengine very_suggestive=' . round($very, 3)];
+        }
+        // صور إيحائية (قُبَل/ملابس داخلية/بيكيني…) بتتصنّف "suggestive" — قبل كده كانت بتعدّي.
+        if ($mid >= ($t['suggestive_mid'] ?? 0.70)) {
+            return ['category' => 'sexual', 'reason' => 'sightengine suggestive=' . round($mid, 3)];
         }
         $gore = (float) ($json['gore']['prob'] ?? 0);
         if ($gore >= ($t['violence_graphic'] ?? 0.55)) {

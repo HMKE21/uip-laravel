@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
  *
  *   GET  /api/v1/admin/content-safety?page=&kind=&category=   حالة الفاحص + إحصائيات + سجل المحاولات
  *   POST /api/v1/admin/content-safety/test-text  { text, strict? }   اختبار نص على القاموس (من غير ما يتسجّل)
+ *   POST /api/v1/admin/content-safety/test-file  multipart { file }   اختبار صورة/فيديو/GIF (حكم + درجات الفاحص) من غير تخزين أو تسجيل
  *   DELETE /api/v1/admin/content-safety/events/{id}       حذف محاولة واحدة من السجل
  *   DELETE /api/v1/admin/content-safety/events?kind=&category=   حذف كل المحاولات (أو المطابقة للفلتر الحالي)
  *
@@ -85,6 +86,23 @@ class AdminContentSafetyApiController extends Controller
         $hit = $this->safety->checkText($text, (bool) $request->input('strict', false));
 
         return $this->apiSuccess(['blocked' => $hit !== null, 'match' => $hit], 'Tested.');
+    }
+
+    /** اختبار ملف (صورة/فيديو/GIF/أي ملف) — الملف بيتفحص من الملف المؤقت وبيتمسح، مفيش تخزين ولا تسجيل في السجل. */
+    public function testFile(Request $request)
+    {
+        if ($deny = $this->requireAdmin($request)) {
+            return $deny;
+        }
+        $file = $request->file('file');
+        if (!$file instanceof \Illuminate\Http\UploadedFile || !$file->isValid() || !$file->getRealPath()) {
+            return $this->apiError('Choose a valid file to test.', null, 422);
+        }
+        $report = $this->safety->analyzeFile($file->getRealPath(), $file->getClientOriginalName());
+        $report['name'] = $file->getClientOriginalName();
+        $report['size'] = (int) $file->getSize();
+
+        return $this->apiSuccess($report, 'Tested.');
     }
 
     /** حذف محاولة واحدة من سجل المحاولات المحجوبة. */

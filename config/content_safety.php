@@ -37,8 +37,12 @@ return [
         'sexual'          => (float) env('CONTENT_SAFETY_T_SEXUAL', 0.30),
         'sexual_minors'   => (float) env('CONTENT_SAFETY_T_MINORS', 0.02),
         'violence_graphic' => (float) env('CONTENT_SAFETY_T_GORE', 0.55),
-        'suggestive'      => (float) env('CONTENT_SAFETY_T_SUGGESTIVE', 0.80), // Sightengine very_suggestive
+        'suggestive'      => (float) env('CONTENT_SAFETY_T_SUGGESTIVE', 0.50), // Sightengine very_suggestive
+        'suggestive_mid'  => (float) env('CONTENT_SAFETY_T_SUGGESTIVE_MID', 0.70), // Sightengine suggestive (قُبَل/ملابس داخلية/بيكيني)
     ],
+
+    // true = يسجّل درجات الفاحص لكل صورة في storage/logs (لظبط العتبات). اقفله بعد الظبط.
+    'debug' => (bool) env('CONTENT_SAFETY_DEBUG', false),
 
     // أقصى حجم ملف بنفحصه (MB) — الأكبر بيتفحص على إطارات بس (فيديو) أو بيترفض لو صورة.
     'max_scan_mb' => (int) env('CONTENT_SAFETY_MAX_SCAN_MB', 25),
