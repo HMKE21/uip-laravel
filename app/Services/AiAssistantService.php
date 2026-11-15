@@ -423,6 +423,13 @@ class AiAssistantService
                     try {
                         $usedTools = [];
                         return $this->runModel($userId, $role, $msgs, $settings, $onToken, $onEvent, $locale, $usedTools);
+                    } catch (AiProviderException $e2) {
+                        // الاحتياطي فشل كمان: نعرض السببين (وإلا خطأ الاحتياطي بس بيخبّي السبب الحقيقي عند الأساسي).
+                        throw new AiProviderException(
+                            $e->httpStatus,
+                            'Primary model (' . $primary->model() . ') failed: ' . $e->getMessage() . ' — then the fallback model (' . $fallback->model() . ') failed too: ' . $e2->getMessage(),
+                            $e->providerMessage
+                        );
                     } finally {
                         $this->client = $primary;
                     }
