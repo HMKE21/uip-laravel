@@ -500,6 +500,36 @@ class MessagingController extends Controller
         });
     }
 
+    /**
+     * GET /api/v1/messaging/gif-proxy?url= — بايتات GIF من Giphy للواجهة (حفظ / نسخ الصورة).
+     * سياسة الأمان (CSP connect-src 'self') بتمنع المتصفح يعمل fetch لـ giphy مباشرة، فبنوصّلها من السيرفر.
+     * Giphy بس (https + giphy.com)، من غير redirects، بحد حجم، والنوع بيتتحقق من أول بايتات الملف.
+     */
+    public function gifProxy(Request $request)
+    {
+        $url = (string) $request->query('url', '');
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if (!str_starts_with($url, 'https://') || !($host === 'giphy.com' || str_ends_with($host, '.giphy.com'))) {
+            return $this->apiError('Unsupported GIF source.', null, 422);
+        }
+        try {
+            $r = \Illuminate\Support\Facades\Http::timeout(15)->withOptions(['allow_redirects' => false])->get($url);
+        } catch (\Throwable $e) {
+            return $this->apiError('Could not load the GIF.', null, 502);
+        }
+        $body = $r->ok() ? $r->body() : '';
+        if (strlen($body) < 100 || strlen($body) > 12 * 1048576) {
+            return $this->apiError('Could not load the GIF.', null, 502);
+        }
+        $head = substr($body, 0, 12);
+        $mime = str_starts_with($head, 'GIF8') ? 'image/gif' : ((str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP') ? 'image/webp' : null);
+        if ($mime === null) {
+            return $this->apiError('Unsupported GIF format.', null, 422);
+        }
+
+        return response($body, 200, ['Content-Type' => $mime, 'Cache-Control' => 'private, max-age=3600', 'X-Content-Type-Options' => 'nosniff']);
+    }
+
     /** POST /api/v1/messaging/stickers/from-gif — { url (Giphy), title? } يحوّل GIF لاستيكر في ستيكراتي */
     public function createStickerFromGif(Request $request)
     {
