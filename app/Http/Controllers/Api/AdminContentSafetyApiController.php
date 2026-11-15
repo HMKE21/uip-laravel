@@ -48,8 +48,8 @@ class AdminContentSafetyApiController extends Controller
                 ->selectRaw('kind, COUNT(*) c')->groupBy('kind')->pluck('c', 'kind')->all();
             $stats['top_users'] = DB::table('content_safety_events as e')->join('users as u', 'u.id', '=', 'e.user_id')
                 ->where('e.created_at', '>=', now()->subDays(7))
-                ->selectRaw('u.id, u.full_name, u.email, COUNT(*) c')->groupBy('u.id', 'u.full_name', 'u.email')->orderByDesc('c')->limit(8)->get()
-                ->map(fn ($r) => ['id' => (int) $r->id, 'full_name' => $r->full_name, 'email' => $r->email, 'count' => (int) $r->c])->all();
+                ->selectRaw('u.id, u.uuid, u.full_name, u.email, COUNT(*) c')->groupBy('u.id', 'u.uuid', 'u.full_name', 'u.email')->orderByDesc('c')->limit(8)->get()
+                ->map(fn ($r) => ['id' => (int) $r->id, 'uuid' => $r->uuid, 'full_name' => $r->full_name, 'email' => $r->email, 'count' => (int) $r->c])->all();
 
             $q = DB::table('content_safety_events as e')->leftJoin('users as u', 'u.id', '=', 'e.user_id');
             if ($k = (string) $request->query('kind', '')) {
@@ -59,10 +59,10 @@ class AdminContentSafetyApiController extends Controller
                 $q->where('e.category', $c);
             }
             $rows = $q->orderByDesc('e.id')->offset(($page - 1) * $per)->limit($per + 1)
-                ->get(['e.id', 'e.user_id', 'u.full_name', 'u.email', 'e.kind', 'e.category', 'e.detail', 'e.route', 'e.ip', 'e.created_at'])->all();
+                ->get(['e.id', 'e.user_id', 'u.uuid as user_uuid', 'u.full_name', 'u.email', 'e.kind', 'e.category', 'e.detail', 'e.route', 'e.ip', 'e.created_at'])->all();
             $hasMore = count($rows) > $per;
             $items = array_map(fn ($r) => [
-                'id' => (int) $r->id, 'user_id' => $r->user_id ? (int) $r->user_id : null, 'full_name' => $r->full_name, 'email' => $r->email,
+                'id' => (int) $r->id, 'user_id' => $r->user_id ? (int) $r->user_id : null, 'user_uuid' => $r->user_uuid, 'full_name' => $r->full_name, 'email' => $r->email,
                 'kind' => $r->kind, 'category' => $r->category, 'detail' => $r->detail, 'route' => $r->route, 'ip' => $r->ip, 'created_at' => $r->created_at,
             ], array_slice($rows, 0, $per));
         } catch (\Throwable $e) {

@@ -1304,6 +1304,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/{id}/activity/sessions', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'sessions']);
         Route::get('/{id}/activity/export', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'export']);
         Route::delete('/{id}/activity', [\App\Http\Controllers\Api\AdminUserActivityApiController::class, 'destroy']);
+        Route::get('/{id}/safety-events', [AdminUsersApiController::class, 'safetyEvents']);
+        Route::post('/{id}/warn', [AdminUsersApiController::class, 'warn'])->middleware('throttle:20,1');
         Route::get('/{id}', [AdminUsersApiController::class, 'show']);
         Route::patch('/{id}', [AdminUsersApiController::class, 'update']);
         Route::delete('/{id}', [AdminUsersApiController::class, 'destroy']);

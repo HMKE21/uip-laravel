@@ -640,6 +640,75 @@ class AdminUsersApiController extends Controller
             : $this->apiError('That IP is already blocked.', null, 422);
     }
 
+    /**
+     * POST /api/v1/admin/users/{id}/warn  { message }  — تحذير رسمي من الأدمن: بيوصل للمستخدم كإشعار (جرس + push) وبيتسجّل في الـ audit log.
+     */
+    public function warn(Request $request, $id)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+        $target = $this->users->findWithRoleByUuid((string) $id);
+        if (!$target) {
+            return $this->apiError('User not found.', null, 404);
+        }
+        $adminId = $request->attributes->get('uip_user_id');
+        if ((int) $target['id'] === (int) $adminId) {
+            return $this->apiError('You cannot send a warning to yourself.', null, 422);
+        }
+        $message = trim((string) $request->input('message', ''));
+        $len = mb_strlen($message);
+        if ($len < 3 || $len > 1000) {
+            return $this->apiError('Write a warning message (3–1000 characters).', ['message' => ['Write a warning message (3–1000 characters).']], 422);
+        }
+
+        app(\App\Services\NotificationService::class)->notify(
+            (int) $target['id'],
+            'admin_warning',
+            'تحذير من إدارة المنصة · Warning from the platform administration',
+            $message,
+            null,
+            'high'
+        );
+        $this->auditLog->record($adminId, 'user.warn', 'User', $target['id'], null, [
+            'message' => mb_substr($message, 0, 300),
+            'event_id' => $request->input('event_id') ? (int) $request->input('event_id') : null,
+        ]);
+
+        return $this->apiSuccess(['sent' => true], 'Warning sent.');
+    }
+
+    /** GET /api/v1/admin/users/{id}/safety-events — محاولات المحتوى المحجوبة لليوزر ده + عدد التحذيرات اللي اتبعتتله. */
+    public function safetyEvents(Request $request, $id)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+        $target = $this->users->findWithRoleByUuid((string) $id);
+        if (!$target) {
+            return $this->apiError('User not found.', null, 404);
+        }
+        $out = ['total' => 0, 'last_7d' => 0, 'by_category' => [], 'items' => [], 'warnings_count' => 0, 'last_warning_at' => null];
+        try {
+            $q = DB::table('content_safety_events')->where('user_id', (int) $target['id']);
+            $out['total'] = (int) (clone $q)->count();
+            $out['last_7d'] = (int) (clone $q)->where('created_at', '>=', now()->subDays(7))->count();
+            $out['by_category'] = (clone $q)->selectRaw('category, COUNT(*) c')->groupBy('category')->pluck('c', 'category')->all();
+            $out['items'] = (clone $q)->orderByDesc('id')->limit(20)->get(['id', 'kind', 'category', 'detail', 'route', 'created_at'])->all();
+        } catch (\Throwable $e) {
+            // الجدول لسه معمولش migrate
+        }
+        try {
+            $w = DB::table('audit_logs')->where('action', 'user.warn')->where('subject_type', 'User')->where('subject_id', $target['id']);
+            $out['warnings_count'] = (int) (clone $w)->count();
+            $out['last_warning_at'] = (clone $w)->max('created_at');
+        } catch (\Throwable $e) {
+            // ignore
+        }
+
+        return $this->apiSuccess($out, 'Safety events retrieved.');
+    }
+
     /** GET /api/v1/admin/users/filter-options — دومينات الإيميل الأكتر استخدامًا + السنوات الدراسية (لقوائم الفلاتر). */
     public function filterOptions(Request $request)
     {
