@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Admin → Content Safety (فحص المحتوى الإباحي / المخلّ / الحسّاس).
+ * Admin → Content Safety (فحص المحتوى غير اللائق / الحسّاس).
  *
  *   GET  /api/v1/admin/content-safety?page=&kind=&category=   حالة الفاحص + إحصائيات + سجل المحاولات
  *   POST /api/v1/admin/content-safety/test-text  { text, strict? }   اختبار نص على القاموس (من غير ما يتسجّل)

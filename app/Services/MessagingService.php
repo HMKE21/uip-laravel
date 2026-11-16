@@ -1889,7 +1889,7 @@ class MessagingService
         }
         $q = trim($q);
         if ($q !== '') {
-            // قاموس المحتوى (الطبقة الأشد: sex, nude, شتايم… ممنوعة في بحث الـ GIF) + كلمات الأدمن.
+            // قاموس المحتوى (الطبقة الأشد ممنوعة في بحث الـ GIF) + كلمات الأدمن.
             $hit = $safety->checkText($q, true);
             if ($hit) {
                 $safety->record('gif_query', $hit['category'], $hit['term']);
@@ -1936,7 +1936,7 @@ class MessagingService
                     'w' => (int) ($img['fixed_width_small']['width'] ?? 0), 'h' => (int) ($img['fixed_width_small']['height'] ?? 0),
                 ];
             }
-            // فحص الصورة نفسها (لقطة ثابتة) بفاحص الصور — بيشيل أي GIF إباحي اتصنّف "g/pg" غلط.
+            // فحص الصورة نفسها (لقطة ثابتة) بفاحص الصور — بيشيل أي GIF غير لائق اتصنّف "g/pg" غلط.
             $items = $safety->filterSafeGifItems($items);
             $total = (int) $resp->json('pagination.total_count', 0);
             $next = $offset + $limit < $total ? $offset + $limit : null;

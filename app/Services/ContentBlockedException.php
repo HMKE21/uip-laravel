@@ -6,7 +6,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * محتوى ممنوع (إباحي / مخلّ / حسّاس). الرسالة آمنة تتعرض للمستخدم وفيها سبب الحظر.
+ * محتوى ممنوع (غير لائق / حسّاس). الرسالة آمنة تتعرض للمستخدم وفيها سبب الحظر.
  *
  * Laravel بيستدعي render() تلقائيًا لو الاستثناء وصل للـ handler، وأي controller بيمسك RuntimeException
  * ممكن يرجّع $e->render() بنفس الشكل — فالواجهة دايمًا بتاخد { errors.code = 'content_not_allowed', category, kind, reason }.

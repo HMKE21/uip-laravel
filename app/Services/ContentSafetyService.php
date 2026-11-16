@@ -71,7 +71,7 @@ class ContentSafetyService
             'profanity' => $ar ? 'ألفاظ نابية أو شتائم' : 'profanity or abusive language',
             'custom' => $ar ? 'كلمات محظورة من إدارة المنصة' : 'words blocked by the platform administrators',
             'scanner_unavailable' => $ar ? 'تعذّر فحص المحتوى حاليًا' : 'the content could not be checked right now',
-            default => $ar ? 'محتوى إباحي أو جنسي' : 'pornographic or sexually explicit content',
+            default => $ar ? 'محتوى غير لائق' : 'inappropriate or adult content',
         };
     }
 
@@ -85,8 +85,8 @@ class ContentSafetyService
         }
 
         return $ar
-            ? 'تم منع الإرسال — السبب: ' . $reason . '. المحتوى الإباحي أو المخلّ أو الحسّاس ممنوع تمامًا في المنصة.'
-            : 'Blocked — reason: ' . $reason . '. Pornographic, indecent or sensitive content is strictly prohibited on the platform.';
+            ? 'تم منع الإرسال — السبب: ' . $reason . '. المحتوى غير اللائق أو الحسّاس ممنوع تمامًا في المنصة.'
+            : 'Blocked — reason: ' . $reason . '. Inappropriate or sensitive content is strictly prohibited on the platform.';
     }
 
     // ───────────────────────── GIF ─────────────────────────
@@ -853,7 +853,7 @@ class ContentSafetyService
         if ($very >= ($t['suggestive'] ?? 0.50)) {
             return ['category' => 'sexual', 'reason' => 'sightengine very_suggestive=' . round($very, 3)];
         }
-        // صور إيحائية (قُبَل/ملابس داخلية/بيكيني…) بتتصنّف "suggestive" — قبل كده كانت بتعدّي.
+        // صور إيحائية (إيحائية…) بتتصنّف "suggestive" — قبل كده كانت بتعدّي.
         if ($mid >= ($t['suggestive_mid'] ?? 0.70)) {
             return ['category' => 'sexual', 'reason' => 'sightengine suggestive=' . round($mid, 3)];
         }
@@ -866,7 +866,7 @@ class ContentSafetyService
     }
 
     // ───────────────────────── صور الـ GIF (Giphy) ─────────────────────────
-    // تصنيف Giphy (g/pg) بيحطّه اللي رفع الـ GIF، فكتير GIFs إباحية بتتصنّف "g" غلط. عشان كده بنفحص الصورة نفسها (لقطة ثابتة صغيرة)
+    // تصنيف Giphy (g/pg) بيحطّه اللي رفع الـ GIF، فكتير GIFs غير لائقة بتتصنّف "g" غلط. عشان كده بنفحص الصورة نفسها (لقطة ثابتة صغيرة)
     // بنفس مزوّد فحص الصور (OpenAI/Sightengine) — بالتوازي، والنتيجة بتتكاش 30 يوم، والفشل = رفض (إلا لو CONTENT_SAFETY_FAIL_OPEN).
 
     private function isGiphyUrl(string $url): bool

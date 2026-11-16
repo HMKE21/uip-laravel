@@ -87,7 +87,7 @@ class FileUploadService
         $this->assertContentMatchesExtension($file->getRealPath(), $extension);
         $this->assertPdfHasNoActiveContent($file->getRealPath(), $extension, $file->getClientOriginalName());
         $this->scanForMalware($file->getRealPath(), $file->getClientOriginalName(), $category);
-        // فحص المحتوى (إباحي/مخلّ): اسم الملف + الصورة/الفيديو/GIF نفسه. كاميرا مراقبة الامتحان مستثناة (خصوصية).
+        // فحص المحتوى (غير لائق): اسم الملف + الصورة/الفيديو/GIF نفسه. كاميرا مراقبة الامتحان مستثناة (خصوصية).
         // @throws \App\Services\ContentBlockedException (RuntimeException — رسالتها بتتعرض للمستخدم)
         app(\App\Services\ContentSafetyService::class)->assertUploadSafe(
             $file,

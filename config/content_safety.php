@@ -1,7 +1,7 @@
 <?php
 
 /**
- * فحص المحتوى (Content Safety) — ممنوع أي محتوى إباحي / مخلّ / حسّاس في كل المنصة.
+ * فحص المحتوى (Content Safety) — ممنوع أي محتوى غير لائق / حسّاس في كل المنصة.
  *
  * الطبقات:
  *  1) نصوص: قاموس عربي/إنجليزي/عربيزي بيتطبّق على كل كتابة (رسائل، منشورات، تعليقات، بروفايل، مشاريع…) + أي اسم ملف.
@@ -38,7 +38,7 @@ return [
         'sexual_minors'   => (float) env('CONTENT_SAFETY_T_MINORS', 0.02),
         'violence_graphic' => (float) env('CONTENT_SAFETY_T_GORE', 0.55),
         'suggestive'      => (float) env('CONTENT_SAFETY_T_SUGGESTIVE', 0.50), // Sightengine very_suggestive
-        'suggestive_mid'  => (float) env('CONTENT_SAFETY_T_SUGGESTIVE_MID', 0.70), // Sightengine suggestive (قُبَل/ملابس داخلية/بيكيني)
+        'suggestive_mid'  => (float) env('CONTENT_SAFETY_T_SUGGESTIVE_MID', 0.70), // Sightengine suggestive (صور إيحائية)
     ],
 
     // true = يسجّل درجات الفاحص لكل صورة في storage/logs (لظبط العتبات). اقفله بعد الظبط.
