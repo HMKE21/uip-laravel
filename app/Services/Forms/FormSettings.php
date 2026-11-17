@@ -39,9 +39,9 @@ final class FormSettings
                 'show_correct_answers' => false,
                 'passing_percent' => 50,
                 'block_tab_switch' => $mode === 'exam',
-                'fullscreen_required' => false,
+                'fullscreen_required' => $mode === 'exam',
                 'block_copy_paste' => $mode === 'exam',
-                'max_violations' => 0,            // 0 = just log
+                'max_violations' => $mode === 'exam' ? 3 : 0,   // 0 = just log
                 'auto_submit_on_max_violations' => true,
                 'one_question_at_a_time' => false,
             ],
