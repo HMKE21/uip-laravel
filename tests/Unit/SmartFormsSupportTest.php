@@ -5,6 +5,7 @@ namespace Tests\Unit;
 use App\Services\Forms\FormSettings;
 use App\Support\Forms\EgyptianNationalId;
 use App\Support\Forms\EgyptianPhone;
+use App\Support\Forms\RespondentIdentity;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -46,5 +47,25 @@ class SmartFormsSupportTest extends TestCase
         $this->assertTrue($s['require_login']);
         $this->assertSame(['user'], $s['unique_by']);
         $this->assertSame(30, $s['edit_after_submit']['minutes']);
+    }
+
+    #[Test]
+    public function names_must_be_real_names_not_numbers_or_symbols(): void
+    {
+        foreach (['55', '١٢٣', 'ارقام 55', 'a', '!!', 'aaaa', 'احمد@'] as $bad) {
+            $this->assertNull(RespondentIdentity::name($bad, 1)[0], $bad);
+        }
+        $this->assertSame('أحمد محمد', RespondentIdentity::name('  أحمد   محمد ', 2)[0]);
+        $this->assertSame('name_short', RespondentIdentity::name('أحمد', 2)[1]);
+        $this->assertSame("Sara O'Neil-Smith", RespondentIdentity::name("Sara O'Neil-Smith", 2)[0]);
+    }
+
+    #[Test]
+    public function unique_by_rules_force_their_identity_field_to_required(): void
+    {
+        $s = FormSettings::normalize(['unique_by' => ['email', 'phone'], 'identity' => ['email' => 'off', 'phone' => 'optional']], 'form');
+        $this->assertSame('required', $s['identity']['email']);
+        $this->assertSame('required', $s['identity']['phone']);
+        $this->assertSame('off', $s['identity']['national_id']);
     }
 }

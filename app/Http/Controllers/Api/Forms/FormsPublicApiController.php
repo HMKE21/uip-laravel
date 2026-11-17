@@ -118,7 +118,8 @@ class FormsPublicApiController extends Controller
         $actor = $this->actor($r);
         $data = ['form' => $this->basics($form), 'access' => $form->setting('access', 'public'), 'state' => 'open', 'fields' => null, 'exam' => $this->examSettings($form),
             'edit_after_submit' => (bool) $form->setting('edit_after_submit.allowed', false) && !$form->isExam(), 'one_per_device' => (bool) $form->setting('one_per_device', false),
-            'ask_name' => (bool) $form->setting('ask_name', true)];
+            'ask_name' => \App\Support\Forms\RespondentIdentity::resolve((array) ($form->settings ?? []))['name'] !== 'off',
+            'identity' => \App\Support\Forms\RespondentIdentity::resolve((array) ($form->settings ?? []))];
         $isOwnerPreview = $form->status === 'draft';
         try {
             if (!$isOwnerPreview) {
@@ -192,7 +193,7 @@ class FormsPublicApiController extends Controller
             return $this->apiError('Response not found.', ['code' => 'not_found'], 404);
         }
         try {
-            $resp = $this->subs->saveDraft($form, $resp, (array) $r->input('answers', []), $this->ctx($r) + ['respondent_name' => $r->input('respondent_name')]);
+            $resp = $this->subs->saveDraft($form, $resp, (array) $r->input('answers', []), $this->ctx($r) + ['respondent_name' => $r->input('respondent_name'), 'respondent' => (array) $r->input('respondent', [])]);
         } catch (FormException $e) {
             return $this->fail($e);
         }
@@ -228,6 +229,7 @@ class FormsPublicApiController extends Controller
         try {
             $res = $this->subs->submit($form, $resp, $this->actor($r), $this->ctx($r), (array) $r->input('answers', []), [
                 'honeypot' => $r->input('website') ?: $r->input('hp'), 'opened_at_ms' => $r->input('opened_at_ms'), 'respondent_name' => $r->input('respondent_name'),
+                'respondent' => (array) $r->input('respondent', []),
             ]);
         } catch (FormException $e) {
             return $this->fail($e);

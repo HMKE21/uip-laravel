@@ -2,6 +2,8 @@
 
 namespace App\Services\Forms;
 
+use App\Support\Forms\RespondentIdentity;
+
 /** Defaults + sanitising of the per-form settings JSON. Unknown keys are dropped. */
 final class FormSettings
 {
@@ -24,7 +26,9 @@ final class FormSettings
             'show_summary_to_respondent' => false,
             'notify_owner' => true,
             'collect_ip' => true,
-            'ask_name' => true,              // guests (not logged in) are asked for their name first
+            'ask_name' => true,              // legacy mirror of identity.name !== 'off'
+            // data collected about the respondent by the form itself: required | optional | off  (see RespondentIdentity)
+            'identity' => ['name' => 'required', 'email' => 'off', 'phone' => 'off', 'national_id' => 'off', 'name_min_words' => 2],
             'allow_save_draft' => true,
             // exam
             'exam' => [
@@ -48,6 +52,9 @@ final class FormSettings
     {
         $out = array_replace_recursive(self::defaults($mode), $current ?? []);
         $b = fn ($v) => filter_var($v, FILTER_VALIDATE_BOOLEAN);
+        if ($current !== null && !isset($current['identity']) && array_key_exists('ask_name', $current) && !$b($current['ask_name'])) {
+            $out['identity']['name'] = 'off'; // forms saved before identity settings existed
+        }
 
         if (isset($in['access']) && in_array($in['access'], ['public', 'platform', 'roles', 'invited'], true)) {
             $out['access'] = $in['access'];
@@ -67,7 +74,7 @@ final class FormSettings
             }
             $out['invited_emails'] = array_slice(array_keys($emails), 0, $max);
         }
-        foreach (['one_per_device', 'notify_owner', 'collect_ip', 'allow_save_draft', 'show_summary_to_respondent', 'ask_name'] as $k) {
+        foreach (['one_per_device', 'notify_owner', 'collect_ip', 'allow_save_draft', 'show_summary_to_respondent'] as $k) {
             if (array_key_exists($k, $in)) {
                 $out[$k] = $b($in[$k]);
             }
@@ -115,6 +122,21 @@ final class FormSettings
             }
             unset($e);
         }
+        if (isset($in['identity']) && is_array($in['identity'])) {
+            foreach (RespondentIdentity::FIELDS as $f) {
+                if (isset($in['identity'][$f]) && in_array($in['identity'][$f], RespondentIdentity::MODES, true)) {
+                    $out['identity'][$f] = $in['identity'][$f];
+                }
+            }
+            if (isset($in['identity']['name_min_words'])) {
+                $out['identity']['name_min_words'] = max(1, min(4, (int) $in['identity']['name_min_words']));
+            }
+        } elseif (array_key_exists('ask_name', $in) && !isset($in['identity'])) { // old clients
+            $out['identity']['name'] = $b($in['ask_name']) ? 'required' : 'off';
+        }
+        // a unique-by rule on email / mobile / national ID needs that data, so the field is forced to "required"
+        $out['identity'] = array_intersect_key(RespondentIdentity::resolve(['identity' => $out['identity'], 'unique_by' => $out['unique_by']]), $out['identity']);
+        $out['ask_name'] = $out['identity']['name'] !== 'off';
         // a login-bound rule is meaningless for fully public forms: force platform access
         if (in_array('user', $out['unique_by'], true) && $out['access'] === 'public') {
             $out['access'] = 'platform';

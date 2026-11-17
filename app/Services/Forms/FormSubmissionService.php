@@ -4,7 +4,10 @@ namespace App\Services\Forms;
 
 use App\Models\Form;
 use App\Models\FormResponse;
+use App\Support\Forms\EgyptianNationalId;
+use App\Support\Forms\EgyptianPhone;
 use App\Support\Forms\FormFieldTypes;
+use App\Support\Forms\RespondentIdentity;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -233,10 +236,7 @@ class FormSubmissionService
         $fields = $this->fieldsFor($form);
         $res = $this->validator->validate($form, $fields, $answers, $r, ['lenient' => true, 'locale' => $ctx['locale'] ?? 'ar']);
         $this->storeAnswers($r, $res['values'], $fields, true);
-        if (($name = $this->cleanName($ctx['respondent_name'] ?? null)) !== null && !$r->user_id) {
-            $r->respondent_name = $name;
-            $r->save();
-        }
+        $this->applyIdentityDraft($form, $r, (array) ($ctx['respondent'] ?? []) + ['name' => $ctx['respondent_name'] ?? null]);
         return $r;
     }
 
@@ -300,14 +300,8 @@ class FormSubmissionService
         if ($res['errors']) {
             throw new FormException('validation_failed', 'Some answers need your attention.', 422, ['errors' => $res['errors']]);
         }
+        $this->applyIdentity($form, $r, $actor, (array) ($meta['respondent'] ?? []) + ['name' => $meta['respondent_name'] ?? null], $ctx['locale'] ?? 'ar');
         $this->assertIdentity($form, $r, $fields, $res['values'], $actor, $ctx);
-        $name = $this->cleanName($meta['respondent_name'] ?? null);
-        if (!$actor['user_id'] && $form->setting('ask_name', true) && $name === null && !$r->respondent_name) {
-            throw new FormException('name_required', 'Please enter your name.', 422);
-        }
-        if ($name !== null && !$actor['user_id']) {
-            $r->respondent_name = $name;
-        }
 
         DB::transaction(function () use ($form, $r, $res, $fields) {
             $this->storeAnswers($r, $res['values'], $fields, true);
@@ -319,16 +313,105 @@ class FormSubmissionService
         return ['response' => $r->fresh(), 'late' => false];
     }
 
-    private function cleanName($v): ?string
+    /**
+     * Respondent data asked by the form itself (identity settings). Signed-in users already have a name and email
+     * on their account, so only what the account cannot give (mobile, national ID) is asked of them.
+     *
+     * @return array{errors:array<string,string>, values:array<string,?string>}
+     */
+    public function checkIdentity(Form $form, array $actor, array $in, string $locale): array
     {
-        $v = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $v)));
-        return $v === '' ? null : mb_substr($v, 0, 190);
+        $cfg = RespondentIdentity::resolve((array) ($form->settings ?? []));
+        $ar = $locale !== 'en';
+        $errors = [];
+        $values = [];
+        foreach (RespondentIdentity::FIELDS as $f) {
+            $mode = $cfg[$f];
+            if ($mode === 'off' || ($actor['user_id'] && in_array($f, ['name', 'email'], true))) {
+                continue;
+            }
+            $raw = trim((string) ($in[$f] ?? ''));
+            if ($raw === '') {
+                if ($mode === 'required') {
+                    $errors[$f] = RespondentIdentity::message($f . '_required', $ar);
+                }
+                continue;
+            }
+            switch ($f) {
+                case 'name':
+                    [$val, $err] = RespondentIdentity::name($raw, (int) $cfg['name_min_words']);
+                    if ($err) {
+                        $errors[$f] = RespondentIdentity::message($err, $ar, (int) $cfg['name_min_words']);
+                    } else {
+                        $values[$f] = $val;
+                    }
+                    break;
+                case 'email':
+                    ($val = RespondentIdentity::email($raw)) ? $values[$f] = $val : $errors[$f] = RespondentIdentity::message('email_invalid', $ar);
+                    break;
+                case 'phone':
+                    ($val = EgyptianPhone::normalize($raw)) ? $values[$f] = $val : $errors[$f] = RespondentIdentity::message('phone_invalid', $ar);
+                    break;
+                case 'national_id':
+                    ($val = EgyptianNationalId::normalize($raw)) ? $values[$f] = $val : $errors[$f] = RespondentIdentity::message('national_id_invalid', $ar);
+                    break;
+            }
+        }
+        return ['errors' => $errors, 'values' => $values];
+    }
+
+    /** Final submit: every required item must be present and valid. */
+    private function applyIdentity(Form $form, FormResponse $r, array $actor, array $in, string $locale): void
+    {
+        $res = $this->checkIdentity($form, $actor, $in, $locale);
+        // data entered earlier (autosave) counts when the final request does not repeat it
+        foreach ($res['errors'] as $f => $msg) {
+            $have = $f === 'name' ? $r->respondent_name : $r->{$f};
+            if ($have && (string) trim((string) ($in[$f] ?? '')) === '') {
+                unset($res['errors'][$f]);
+            }
+        }
+        if ($res['errors']) {
+            throw new FormException('identity_invalid', 'Some of your details need attention.', 422, ['identity_errors' => $res['errors']]);
+        }
+        $this->fillIdentityValues($r, $res['values']);
+        if ($actor['user_id'] && $actor['email'] && !$r->email) { // signed-in: the account email is the identity
+            $r->email = $actor['email'];
+        }
+    }
+
+    /** Autosave: keep what is valid, never fail. */
+    private function applyIdentityDraft(Form $form, FormResponse $r, array $in): void
+    {
+        $actor = ['user_id' => $r->user_id, 'role' => $r->role, 'email' => null];
+        $res = $this->checkIdentity($form, $actor, $in, 'ar');
+        if ($res['values']) {
+            $this->fillIdentityValues($r, $res['values']);
+            $r->save();
+        }
+    }
+
+    private function fillIdentityValues(FormResponse $r, array $v): void
+    {
+        if (isset($v['name'])) {
+            $r->respondent_name = $v['name'];
+        }
+        foreach (['email', 'phone', 'national_id'] as $f) {
+            if (isset($v[$f])) {
+                $r->{$f} = $v[$f];
+            }
+        }
     }
 
     /** Duplicate rules: unique_by email/phone/national_id/user + invite list. */
     private function assertIdentity(Form $form, FormResponse $r, Collection $fields, array $values, array $actor, array $ctx): void
     {
         $ident = $this->identityValues($fields, $values);
+        foreach (['email', 'phone', 'national_id'] as $k) { // identity collected by the form wins over a same-type question
+            if (!empty($r->{$k})) {
+                $ident[$k] = (string) $r->{$k};
+            }
+        }
         if ($form->setting('access') === 'invited') {
             $inv = (array) $form->setting('invited_emails', []);
             $mail = $ident['email'] ?? $actor['email'];
@@ -374,9 +457,9 @@ class FormSubmissionService
     private function fillIdentity(FormResponse $r, Collection $fields, array $values): void
     {
         $id = $this->identityValues($fields, $values);
-        $r->email = $id['email'] ?? $r->email;
-        $r->phone = $id['phone'] ?? $r->phone;
-        $r->national_id = $id['national_id'] ?? $r->national_id;
+        $r->email = $r->email ?: ($id['email'] ?? null);
+        $r->phone = $r->phone ?: ($id['phone'] ?? null);
+        $r->national_id = $r->national_id ?: ($id['national_id'] ?? null);
     }
 
     /** Mark final, grade, bump counters, notify owner. */
