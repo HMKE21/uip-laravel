@@ -233,6 +233,10 @@ class FormSubmissionService
         $fields = $this->fieldsFor($form);
         $res = $this->validator->validate($form, $fields, $answers, $r, ['lenient' => true, 'locale' => $ctx['locale'] ?? 'ar']);
         $this->storeAnswers($r, $res['values'], $fields, true);
+        if (($name = $this->cleanName($ctx['respondent_name'] ?? null)) !== null && !$r->user_id) {
+            $r->respondent_name = $name;
+            $r->save();
+        }
         return $r;
     }
 
@@ -297,6 +301,13 @@ class FormSubmissionService
             throw new FormException('validation_failed', 'Some answers need your attention.', 422, ['errors' => $res['errors']]);
         }
         $this->assertIdentity($form, $r, $fields, $res['values'], $actor, $ctx);
+        $name = $this->cleanName($meta['respondent_name'] ?? null);
+        if (!$actor['user_id'] && $form->setting('ask_name', true) && $name === null && !$r->respondent_name) {
+            throw new FormException('name_required', 'Please enter your name.', 422);
+        }
+        if ($name !== null && !$actor['user_id']) {
+            $r->respondent_name = $name;
+        }
 
         DB::transaction(function () use ($form, $r, $res, $fields) {
             $this->storeAnswers($r, $res['values'], $fields, true);
@@ -306,6 +317,12 @@ class FormSubmissionService
         });
 
         return ['response' => $r->fresh(), 'late' => false];
+    }
+
+    private function cleanName($v): ?string
+    {
+        $v = trim(preg_replace('/\s+/u', ' ', strip_tags((string) $v)));
+        return $v === '' ? null : mb_substr($v, 0, 190);
     }
 
     /** Duplicate rules: unique_by email/phone/national_id/user + invite list. */

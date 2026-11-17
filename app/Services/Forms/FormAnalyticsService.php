@@ -260,7 +260,7 @@ class FormAnalyticsService
         }
         if (!empty($f['search'])) {
             $s = '%' . str_replace(['%', '_'], ['\%', '\_'], (string) $f['search']) . '%';
-            $q->where(fn ($w) => $w->where('r.email', 'like', $s)->orWhere('r.phone', 'like', $s)->orWhere('u.full_name', 'like', $s)->orWhere('r.national_id', 'like', $s));
+            $q->where(fn ($w) => $w->where('r.email', 'like', $s)->orWhere('r.phone', 'like', $s)->orWhere('u.full_name', 'like', $s)->orWhere('r.respondent_name', 'like', $s)->orWhere('r.national_id', 'like', $s));
         }
         if (!empty($f['needs_manual'])) {
             $q->where('r.needs_manual', 1);
@@ -275,7 +275,7 @@ class FormAnalyticsService
         $per = max(1, min(100, (int) ($f['per_page'] ?? 25)));
         $page = max(1, (int) ($f['page'] ?? 1));
         $items = $q->orderBy($col, $dir)->orderBy('r.id', 'desc')->forPage($page, $per)
-            ->get(['r.id', 'r.uuid', 'r.status', 'r.email', 'r.phone', 'r.role', 'r.submitted_at', 'r.started_at', 'r.duration_seconds', 'r.score', 'r.max_score', 'r.needs_manual', 'r.violations', 'r.edits_count', 'u.full_name'])
+            ->get(['r.id', 'r.uuid', 'r.status', 'r.email', 'r.phone', 'r.role', 'r.submitted_at', 'r.started_at', 'r.duration_seconds', 'r.score', 'r.max_score', 'r.needs_manual', 'r.violations', 'r.edits_count', DB::raw('COALESCE(u.full_name, r.respondent_name) as full_name')])
             ->map(fn ($r) => (array) $r)->all();
         return ['items' => $items, 'page' => $page, 'per_page' => $per, 'total' => $total, 'total_pages' => (int) ceil($total / $per)];
     }
@@ -304,7 +304,7 @@ class FormAnalyticsService
         $events = DB::table('form_events')->where('response_id', $r->id)->orderBy('id')->limit(300)->get(['type', 'detail', 'counted', 'created_at']);
         $user = $r->user_id ? DB::table('users')->where('id', $r->user_id)->first(['id', 'full_name', 'email']) : null;
         return [
-            'response' => $r->only(['id', 'uuid', 'status', 'email', 'phone', 'national_id', 'role', 'score', 'max_score', 'needs_manual', 'violations', 'edits_count', 'duration_seconds', 'ip']) + [
+            'response' => $r->only(['id', 'uuid', 'status', 'respondent_name', 'email', 'phone', 'national_id', 'role', 'score', 'max_score', 'needs_manual', 'violations', 'edits_count', 'duration_seconds', 'ip']) + [
                 'started_at' => $r->started_at?->toIso8601String(), 'submitted_at' => $r->submitted_at?->toIso8601String(),
                 'user' => $user ? (array) $user : null, 'device' => UserAgentParser::parse($r->user_agent),
             ],
@@ -354,7 +354,7 @@ class FormAnalyticsService
                 $fileRows = \App\Models\FormFile::whereIn('response_id', $ids)->get()->keyBy('id');
                 foreach ($rows as $r) {
                     $by = ($ans->get($r->id) ?? collect())->keyBy('field_id');
-                    $line = [$r->id, $r->status, $r->submitted_at, $r->full_name, $r->email, $r->phone, $r->role, $r->duration_seconds];
+                    $line = [$r->id, $r->status, $r->submitted_at, $r->full_name ?: $r->respondent_name, $r->email, $r->phone, $r->role, $r->duration_seconds];
                     if ($graded) {
                         array_push($line, $r->score, $r->max_score, $r->max_score > 0 ? round($r->score / $r->max_score * 100, 1) : '');
                     }

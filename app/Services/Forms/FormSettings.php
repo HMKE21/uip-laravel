@@ -24,6 +24,7 @@ final class FormSettings
             'show_summary_to_respondent' => false,
             'notify_owner' => true,
             'collect_ip' => true,
+            'ask_name' => true,              // guests (not logged in) are asked for their name first
             'allow_save_draft' => true,
             // exam
             'exam' => [
@@ -66,7 +67,7 @@ final class FormSettings
             }
             $out['invited_emails'] = array_slice(array_keys($emails), 0, $max);
         }
-        foreach (['one_per_device', 'notify_owner', 'collect_ip', 'allow_save_draft', 'show_summary_to_respondent'] as $k) {
+        foreach (['one_per_device', 'notify_owner', 'collect_ip', 'allow_save_draft', 'show_summary_to_respondent', 'ask_name'] as $k) {
             if (array_key_exists($k, $in)) {
                 $out[$k] = $b($in[$k]);
             }
