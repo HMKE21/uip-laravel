@@ -61,6 +61,10 @@ final class RespondentIdentity
         if (preg_match('/[^\p{L}\p{M} .\'’\-]/u', $v)) {
             return [null, 'name_invalid'];
         }
+        // no leading punctuation, no repeated or stray punctuation ("..", "- -", ". .")
+        if (preg_match('/^[.\'’\-]|[.\'’\-]{2,}| [.\'’\-]+ /u', $v)) {
+            return [null, 'name_invalid'];
+        }
         $letters = preg_match_all('/\p{L}/u', $v);
         if ($letters < 2 || mb_strlen($v) > 190 || preg_match('/^(\p{L})\1+$/u', str_replace(' ', '', $v))) {
             return [null, 'name_invalid'];
@@ -75,7 +79,35 @@ final class RespondentIdentity
     public static function email(?string $raw): ?string
     {
         $e = mb_strtolower(trim((string) $raw));
-        return $e !== '' && mb_strlen($e) <= 190 && filter_var($e, FILTER_VALIDATE_EMAIL) ? $e : null;
+        if ($e === '' || mb_strlen($e) > 190 || !filter_var($e, FILTER_VALIDATE_EMAIL)) {
+            return null;
+        }
+        // stricter than PHP's filter: a real TLD of letters, no "..", no dot next to the @
+        if (!preg_match('/^[^@\s.][^@\s]*@[^@\s.]+(\.[^@\s.]+)*\.[a-z]{2,}$/i', $e) || str_contains($e, '..') || str_contains($e, '.@')) {
+            return null;
+        }
+        return $e;
+    }
+
+    /** Is this short-text question's title obviously asking for a person's name ("الاسم", "الاسم الثلاثي", "Full name")? */
+    public static function looksLikeNameLabel(?string $label): bool
+    {
+        $l = mb_strtolower(trim((string) preg_replace('/[\s:؟?*]+$/u', '', trim((string) $label))));
+        if ($l === '') {
+            return false;
+        }
+        return (bool) (preg_match('/^(ال)?اسم(ك|ي)?(\s+(ال)?(ثلاثي|رباعي|ثنائي|كامل|بالكامل|الكامل|الثلاثي|الرباعي))?(\s+(ب)?(الكامل|بالكامل))?$/u', $l)
+            || preg_match('/^((your|full|student)\s+)*(full\s+)?name$/', $l));
+    }
+
+    /** Effective content rule of a short-text question: any | name | letters | digits. */
+    public static function textContentRule(array $cfg, ?string $label): string
+    {
+        $c = $cfg['content'] ?? null;
+        if (in_array($c, ['any', 'name', 'letters', 'digits'], true)) {
+            return $c;
+        }
+        return self::looksLikeNameLabel($label) ? 'name' : 'any';
     }
 
     public static function message(string $key, bool $ar, int $minWords = 2): string

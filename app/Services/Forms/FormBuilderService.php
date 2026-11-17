@@ -210,6 +210,11 @@ class FormBuilderService
         if (in_array($type, ['short_text', 'long_text'], true)) {
             $out['config']['min_length'] = isset($cfg['min_length']) ? max(0, (int) $cfg['min_length']) : null;
             $out['config']['max_length'] = isset($cfg['max_length']) ? min((int) config('forms.limits.max_text_answer'), max(1, (int) $cfg['max_length'])) : null;
+            if ($type === 'short_text') {
+                // allowed content: any | name | letters | digits (null = auto: a question titled like "Name" is letters-only)
+                $out['config']['content'] = isset($cfg['content']) && in_array($cfg['content'], ['any', 'name', 'letters', 'digits'], true) ? $cfg['content'] : null;
+                $out['config']['min_words'] = isset($cfg['min_words']) ? max(1, min(4, (int) $cfg['min_words'])) : null;
+            }
         }
         if ($type === 'scale') {
             $min = (int) ($cfg['min'] ?? 1);

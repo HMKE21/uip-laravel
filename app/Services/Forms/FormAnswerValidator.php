@@ -6,6 +6,7 @@ use App\Models\Form;
 use App\Models\FormFile;
 use App\Models\FormResponse;
 use App\Support\DisposableEmail;
+use App\Support\Forms\RespondentIdentity;
 use App\Support\Forms\EgyptianNationalId;
 use App\Support\Forms\EgyptianPhone;
 use App\Support\Forms\FormFieldTypes;
@@ -102,6 +103,23 @@ class FormAnswerValidator
                 }
                 if (!empty($cfg['min_length']) && mb_strlen($s) < (int) $cfg['min_length']) {
                     $this->fail($ar, "الحد الأدنى {$cfg['min_length']} حرف.", "Minimum {$cfg['min_length']} characters.");
+                }
+                if ($f->type === 'short_text' && $s !== '') {
+                    $rule = RespondentIdentity::textContentRule($cfg, (string) $f->label);
+                    if ($rule === 'name') {
+                        $minWords = max(1, (int) ($cfg['min_words'] ?? 1));
+                        [$clean, $err] = RespondentIdentity::name($s, $minWords);
+                        if ($err) {
+                            $this->fail($ar, RespondentIdentity::message($err, true, $minWords), RespondentIdentity::message($err, false, $minWords));
+                        }
+                        return $clean;
+                    }
+                    if ($rule === 'letters' && preg_match('/[^\p{L}\p{M} ]/u', $s)) {
+                        $this->fail($ar, 'حروف فقط (من غير أرقام أو رموز).', 'Letters only (no digits or symbols).');
+                    }
+                    if ($rule === 'digits' && preg_match('/\D/', $s)) {
+                        $this->fail($ar, 'أرقام فقط.', 'Digits only.');
+                    }
                 }
                 return $s;
 

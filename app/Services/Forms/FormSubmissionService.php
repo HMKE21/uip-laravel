@@ -347,7 +347,13 @@ class FormSubmissionService
                     }
                     break;
                 case 'email':
-                    ($val = RespondentIdentity::email($raw)) ? $values[$f] = $val : $errors[$f] = RespondentIdentity::message('email_invalid', $ar);
+                    if (!($val = RespondentIdentity::email($raw))) {
+                        $errors[$f] = RespondentIdentity::message('email_invalid', $ar);
+                    } elseif ($why = \App\Support\DisposableEmail::problem($val, $ar ? 'ar' : 'en', true)) {
+                        $errors[$f] = $why; // temporary / non-existent mail domain
+                    } else {
+                        $values[$f] = $val;
+                    }
                     break;
                 case 'phone':
                     ($val = EgyptianPhone::normalize($raw)) ? $values[$f] = $val : $errors[$f] = RespondentIdentity::message('phone_invalid', $ar);
