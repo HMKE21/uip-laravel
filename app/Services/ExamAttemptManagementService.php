@@ -90,7 +90,8 @@ class ExamAttemptManagementService
             'Your attempt on "' . $exam->title . '" was cancelled by your instructor.'
                 . ($reason ? ' Reason: ' . $reason : '')
                 . ($allowRetake ? ' You have been allowed to retake the exam.' : ''),
-            $allowRetake ? 'high' : 'normal'
+            $allowRetake ? 'high' : 'normal',
+            '/student/my-exams/' . $exam->id
         );
 
         return ['attempt' => $attempt, 'override' => $override];
@@ -158,7 +159,8 @@ class ExamAttemptManagementService
                 'You can retake: ' . $exam->title,
                 'Your instructor allowed you another attempt on "' . $exam->title . '".'
                     . ($availableUntil ? ' Available until ' . $availableUntil->toDayDateTimeString() . '.' : ''),
-                'high'
+                'high',
+                '/student/my-exams/' . $exam->id
             );
         }
 
@@ -201,7 +203,8 @@ class ExamAttemptManagementService
             'exam_retake_revoked',
             'Retake withdrawn: ' . $exam->title,
             'Your instructor withdrew the extra attempt on "' . $exam->title . '".',
-            'normal'
+            'normal',
+            '/student/my-exams/' . $exam->id
         );
 
         return $override;
@@ -260,7 +263,8 @@ class ExamAttemptManagementService
             'exam_extra_time_granted',
             'Extra time added: ' . $exam->title,
             'Your instructor added ' . $minutes . ' minute(s) to your attempt on \"' . $exam->title . '\".' . ($reason ? ' Reason: ' . $reason : ''),
-            'high'
+            'high',
+            '/student/my-exams/' . $exam->id
         );
 
         // الأوبجكت اللي جه من برّه بيتحدّث كمان.
@@ -359,11 +363,11 @@ class ExamAttemptManagementService
         ], $rows);
     }
 
-    private function notifyStudent($studentId, string $type, string $title, string $body, string $priority): void
+    private function notifyStudent($studentId, string $type, string $title, string $body, string $priority, ?string $link = null): void
     {
         $student = $this->students->find($studentId);
         if ($student) {
-            $this->notifications->notify($student->user_id, $type, $title, $body, null, $priority);
+            $this->notifications->notify($student->user_id, $type, $title, $body, $link, $priority);
         }
     }
 }
