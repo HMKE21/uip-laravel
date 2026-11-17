@@ -171,6 +171,8 @@ return [
         // upload isn't tied to one of the domain-specific categories above.
         // Union of the broadest existing lists ('ai_assistant', 'messages')
         // plus a few extra vector/design formats for completeness.
+        // Smart Forms: any file type (zip etc.) - protection comes from scanning + private storage.
+        'forms' => ['*'],
         'general' => [
             'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'svg',
             'mp4', 'webm', 'mov', 'avi', 'mkv',
@@ -211,6 +213,7 @@ return [
         // تتخزن في مجلد مستقل، أسهل في الأرشفة/التنظيف لاحقًا.
         'meeting-recordings' => 'uploads/meeting-recordings',
         'general'   => 'uploads/general',
+        'forms'     => 'uploads/forms',
         'posts'     => 'uploads/posts',
     ],
     /*
@@ -222,7 +225,7 @@ return [
     | الـ stored_path في الداتابيز بيفضل نسبي بنفس الشكل (uploads/messages/conv_N/xxx) — القديم لسه بيتقرأ من public/ لحد
     | ما `php artisan messages:privatize-attachments` ينقله.
     */
-    'private_categories' => ['messages', 'posts', 'avatar_originals'],
+    'private_categories' => ['messages', 'posts', 'avatar_originals', 'forms'],
 
     /*
     |--------------------------------------------------------------------------

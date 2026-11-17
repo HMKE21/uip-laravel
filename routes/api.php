@@ -2806,3 +2806,58 @@ Route::prefix('v1/cloud/google')->group(function () {
         Route::delete('/connection', [GoogleDriveConnectionApiController::class, 'disconnect']);
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| Smart Forms (Google-Forms-like, every role) — see FORMS_API.md
+|--------------------------------------------------------------------------
+*/
+Route::prefix('v1')->group(function () {
+    $manage = \App\Http\Controllers\Api\Forms\FormsManageApiController::class;
+    $public = \App\Http\Controllers\Api\Forms\FormsPublicApiController::class;
+
+    // Signed relative link for previews/downloads (<img>, <video>, <iframe> cannot send Authorization).
+    Route::get('/forms/files/{id}', [$public, 'serveFile'])->where('id', '[0-9]+')
+        ->middleware(['signed:relative', 'throttle:240,1'])->name('forms.file');
+
+    // Respondent side — guest or logged-in (uip.auth.optional).
+    Route::prefix('f/{code}')->where(['code' => '[A-Za-z0-9_-]{3,80}'])->middleware(['uip.auth.optional'])->group(function () use ($public) {
+        Route::get('/', [$public, 'show'])->middleware('throttle:120,1');
+        Route::post('/start', [$public, 'start'])->middleware('throttle:60,1');
+        Route::post('/submit', [$public, 'submit'])->middleware('throttle:30,1');
+        Route::post('/files', [$public, 'upload'])->middleware('throttle:60,1');
+        Route::delete('/files/{token}', [$public, 'deleteUpload'])->middleware('throttle:60,1');
+        Route::put('/responses/{uuid}/draft', [$public, 'draft'])->middleware('throttle:240,1');
+        Route::post('/responses/{uuid}/events', [$public, 'event'])->middleware('throttle:240,1');
+        Route::get('/responses/{uuid}', [$public, 'mine'])->middleware('throttle:120,1');
+        Route::put('/responses/{uuid}', [$public, 'edit'])->middleware('throttle:30,1');
+    });
+
+    // Owner / collaborator side — any logged-in role.
+    Route::prefix('forms')->middleware(['uip.auth', 'throttle:180,1'])->group(function () use ($manage) {
+        Route::get('/meta', [$manage, 'meta']);
+        Route::get('/', [$manage, 'index']);
+        Route::post('/', [$manage, 'store']);
+        Route::get('/{id}', [$manage, 'show'])->where('id', '[0-9]+');
+        Route::put('/{id}', [$manage, 'update'])->where('id', '[0-9]+');
+        Route::patch('/{id}', [$manage, 'update'])->where('id', '[0-9]+');
+        Route::delete('/{id}', [$manage, 'destroy'])->where('id', '[0-9]+');
+        Route::post('/{id}/publish', [$manage, 'publish'])->where('id', '[0-9]+');
+        Route::post('/{id}/close', [$manage, 'close'])->where('id', '[0-9]+');
+        Route::post('/{id}/duplicate', [$manage, 'duplicate'])->where('id', '[0-9]+');
+        Route::post('/{id}/slug-check', [$manage, 'slugCheck'])->where('id', '[0-9]+');
+        Route::get('/{id}/collaborators', [$manage, 'collaborators'])->where('id', '[0-9]+');
+        Route::put('/{id}/collaborators', [$manage, 'addCollaborator'])->where('id', '[0-9]+');
+        Route::delete('/{id}/collaborators/{userId}', [$manage, 'removeCollaborator'])->where(['id' => '[0-9]+', 'userId' => '[0-9]+']);
+        Route::get('/{id}/analytics', [$manage, 'analytics'])->where('id', '[0-9]+');
+        Route::get('/{id}/responses', [$manage, 'responses'])->where('id', '[0-9]+');
+        Route::get('/{id}/responses/{rid}', [$manage, 'showResponse'])->where(['id' => '[0-9]+', 'rid' => '[0-9]+']);
+        Route::delete('/{id}/responses/{rid}', [$manage, 'destroyResponse'])->where(['id' => '[0-9]+', 'rid' => '[0-9]+']);
+        Route::post('/{id}/responses/{rid}/grade', [$manage, 'grade'])->where(['id' => '[0-9]+', 'rid' => '[0-9]+']);
+        Route::post('/{id}/responses/{rid}/reopen', [$manage, 'reopen'])->where(['id' => '[0-9]+', 'rid' => '[0-9]+']);
+        Route::post('/{id}/regrade', [$manage, 'regrade'])->where('id', '[0-9]+');
+        Route::get('/{id}/export.csv', [$manage, 'exportCsv'])->where('id', '[0-9]+');
+        Route::get('/{id}/files-archive', [$manage, 'filesArchive'])->where('id', '[0-9]+');
+        Route::get('/{id}/files/{fileId}/preview', [$manage, 'filePreview'])->where(['id' => '[0-9]+', 'fileId' => '[0-9]+']);
+    });
+});

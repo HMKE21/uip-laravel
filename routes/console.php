@@ -74,3 +74,7 @@ Schedule::command('posts:prune')->dailyAt('04:45')->withoutOverlapping();
 
 // Per-user activity timeline: keep ACTIVITY_LOG_RETENTION_DAYS (90) days.
 Schedule::command('activity:prune')->dailyAt('04:30')->withoutOverlapping();
+
+// Smart Forms — auto-submit expired exam attempts + prune orphan uploads. Run from crontab every 5 minutes:
+//   php artisan forms:maintenance
+// or via Laravel's scheduler: Schedule::command('forms:maintenance')->everyFiveMinutes();
