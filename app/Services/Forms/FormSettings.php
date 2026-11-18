@@ -8,6 +8,7 @@ use App\Support\Forms\RespondentIdentity;
 final class FormSettings
 {
     public const APPEARANCE_THEMES = ['classic', 'midnight', 'ocean', 'sunset', 'forest', 'rose', 'lavender', 'paper', 'mono', 'auto'];
+    public const APPEARANCE_BACKGROUNDS = ['none', 'aurora', 'mesh', 'spotlight', 'horizon', 'dots', 'grid', 'diagonal', 'blobs', 'sunrise'];
     public const APPEARANCE_FONTS = ['default', 'serif', 'rounded', 'mono', 'cairo', 'tajawal', 'almarai', 'amiri', 'naskh', 'kufi', 'readex', 'plex', 'inter', 'poppins', 'playfair', 'jakarta'];
 
     /** Settings as the owner's builder may see them: the password hash is replaced by a boolean. */
@@ -43,7 +44,7 @@ final class FormSettings
             'identity' => ['name' => 'required', 'email' => 'off', 'phone' => 'off', 'national_id' => 'off', 'name_min_words' => 2],
             'allow_save_draft' => true,
             // look of the public page (see APPEARANCE_THEMES) + small wording options
-            'appearance' => ['theme' => 'classic', 'accent' => '', 'font' => 'default', 'show_progress' => true, 'submit_label' => ''],
+            'appearance' => ['theme' => 'classic', 'accent' => '', 'font' => 'default', 'background' => 'none', 'show_progress' => true, 'submit_label' => ''],
             'closed_message' => '',          // shown instead of the generic text when the form is closed / full
             'allow_another' => false,        // "submit another response" button after submitting
             // password gate: only the bcrypt hash is stored (never returned to the client — see publicView())
@@ -128,6 +129,9 @@ final class FormSettings
             }
             if (array_key_exists('accent', $a)) {
                 $ap['accent'] = preg_match('/^#[0-9a-fA-F]{6}$/', (string) $a['accent']) ? strtolower((string) $a['accent']) : '';
+            }
+            if (isset($a['background']) && in_array($a['background'], self::APPEARANCE_BACKGROUNDS, true)) {
+                $ap['background'] = $a['background'];
             }
             if (isset($a['font']) && in_array($a['font'], self::APPEARANCE_FONTS, true)) {
                 $ap['font'] = $a['font'];
