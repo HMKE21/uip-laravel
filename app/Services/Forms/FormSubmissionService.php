@@ -489,6 +489,23 @@ class FormSubmissionService
         return $r;
     }
 
+    /** رابط صفحة الردود داخل بوابة المالك (الفرونت مفيهوش /forms/... من غير prefix البوابة → 404). */
+    private function responsesLinkFor(Form $form): string
+    {
+        $role = (string) ($form->owner_role ?: '');
+        if ($role === '') {
+            $role = app(\App\Services\RoleService::class)->primaryRoleFor((int) $form->owner_user_id);
+        }
+        $prefix = [
+            'data_analyst'     => 'data-analysis',
+            'security_admin'   => 'security',
+            'security_officer' => 'security',
+            'academic_staff'   => 'academic-staff',
+        ][$role] ?? str_replace('_', '-', $role);
+
+        return '/' . ($prefix !== '' ? $prefix : 'student') . '/forms/' . $form->id . '/responses';
+    }
+
     private function notifyOwner(Form $form, FormResponse $r): void
     {
         if (!$form->setting('notify_owner', true)) {
@@ -502,7 +519,7 @@ class FormSubmissionService
             app(\App\Services\NotificationService::class)->notify(
                 (int) $form->owner_user_id, 'form_response', 'رد جديد على: ' . $form->title,
                 $n > 20 ? "وصل عدد الردود إلى {$n}." : 'وصل رد جديد على النموذج.',
-                '/forms/' . $form->id . '/responses'
+                $this->responsesLinkFor($form)
             );
         } catch (\Throwable $e) {
             // notifications must never break a submission
