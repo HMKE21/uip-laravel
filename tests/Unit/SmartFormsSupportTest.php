@@ -68,4 +68,40 @@ class SmartFormsSupportTest extends TestCase
         $this->assertSame('required', $s['identity']['phone']);
         $this->assertSame('off', $s['identity']['national_id']);
     }
+
+    #[Test]
+    public function appearance_settings_are_sanitised(): void
+    {
+        $s = FormSettings::normalize(['appearance' => ['theme' => 'midnight', 'accent' => '#AABBCC', 'font' => 'serif', 'submit_label' => '<b>Send it</b>']], 'form');
+        $this->assertSame('midnight', $s['appearance']['theme']);
+        $this->assertSame('#aabbcc', $s['appearance']['accent']);
+        $this->assertSame('serif', $s['appearance']['font']);
+        $this->assertSame('Send it', $s['appearance']['submit_label']);
+
+        $bad = FormSettings::normalize(['appearance' => ['theme' => 'javascript:alert(1)', 'accent' => 'red', 'font' => 'comic']], 'form');
+        $this->assertSame('classic', $bad['appearance']['theme']);
+        $this->assertSame('', $bad['appearance']['accent']);
+        $this->assertSame('default', $bad['appearance']['font']);
+    }
+
+    #[Test]
+    public function a_password_hash_can_never_come_from_the_client_and_is_kept_or_cleared_by_the_server(): void
+    {
+        $this->assertSame('', FormSettings::normalize(['password_hash' => 'forged'], 'form')['password_hash']);
+
+        $current = FormSettings::defaults('form');
+        $current['password_hash'] = '$2y$10$existinghash';
+        $this->assertSame('$2y$10$existinghash', FormSettings::normalize(['allow_another' => true], 'form', $current)['password_hash']);
+        $this->assertSame('$2y$10$existinghash', FormSettings::normalize(['password_hash' => 'forged'], 'form', $current)['password_hash']);
+        $this->assertSame('', FormSettings::normalize(['clear_password' => true], 'form', $current)['password_hash']);
+    }
+
+    #[Test]
+    public function the_builder_view_of_settings_never_contains_the_hash(): void
+    {
+        $with = FormSettings::publicView(['password_hash' => '$2y$10$secret', 'access' => 'public']);
+        $this->assertTrue($with['has_password']);
+        $this->assertArrayNotHasKey('password_hash', $with);
+        $this->assertFalse(FormSettings::publicView(['access' => 'public'])['has_password']);
+    }
 }

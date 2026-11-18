@@ -13,6 +13,7 @@ use App\Services\Forms\FormException;
 use App\Services\Forms\FormFileService;
 use App\Services\Forms\FormSubmissionService;
 use App\Support\Forms\FormFieldTypes;
+use App\Support\Forms\FormUnlock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -54,6 +55,22 @@ class FormsPublicApiController extends Controller
         return $this->apiError($e->getMessage(), ['code' => $e->errorCode] + $e->extra, $e->httpStatus);
     }
 
+    /** Password-protected forms: the visitor must hold a valid unlock token (the form's owner is never asked). */
+    private function gate(Form $form, Request $r): void
+    {
+        if (!FormUnlock::protected($form)) {
+            return;
+        }
+        $uid = $r->attributes->get('uip_user_id');
+        if ($uid && (int) $uid === (int) $form->owner_user_id) {
+            return;
+        }
+        $token = $r->header('X-Form-Unlock') ?: ($r->input('unlock') ?: $r->query('unlock'));
+        if (!FormUnlock::valid($form, $token ? (string) $token : null)) {
+            throw new FormException('password_required', 'This form is protected by a password.', 403);
+        }
+    }
+
     private function form(string $code): ?Form
     {
         return $this->builder->findByCode($code);
@@ -63,6 +80,8 @@ class FormsPublicApiController extends Controller
     {
         return [
             'title' => $f->title, 'description' => $f->description, 'icon' => $f->icon, 'color' => $f->color, 'mode' => $f->mode,
+            'appearance' => (array) $f->setting('appearance', []), 'closed_message' => (string) $f->setting('closed_message', ''),
+            'allow_another' => (bool) $f->setting('allow_another', false), 'has_password' => FormUnlock::protected($f),
             'code' => $f->slug ?: $f->public_code, 'closes_at' => $f->closes_at?->toIso8601String(), 'opens_at' => $f->opens_at?->toIso8601String(),
         ];
     }
@@ -124,6 +143,7 @@ class FormsPublicApiController extends Controller
         try {
             if (!$isOwnerPreview) {
                 $this->subs->assertAccess($form, $actor);
+                $this->gate($form, $r);
             }
         } catch (FormException $e) {
             $data['state'] = $e->errorCode; // not_open_yet | closed | full | login_required | role_not_allowed | not_invited
@@ -132,6 +152,21 @@ class FormsPublicApiController extends Controller
         }
         $data['fields'] = $this->publicFields($form, null);
         return $this->apiSuccess($data);
+    }
+
+    // ---------------------------------------------------------------- POST /f/{code}/unlock
+
+    public function unlock(Request $r, string $code): JsonResponse
+    {
+        $form = $this->form($code);
+        if (!$form || !FormUnlock::protected($form)) {
+            return $this->apiError('Form not found.', ['code' => 'not_found'], 404);
+        }
+        $plain = (string) $r->input('password', '');
+        if ($plain === '' || !FormUnlock::check($form, $plain)) {
+            return $this->apiError('Wrong password.', ['code' => 'wrong_password'], 403);
+        }
+        return $this->apiSuccess(['unlock_token' => FormUnlock::issue($form), 'expires_in' => FormUnlock::TTL]);
     }
 
     // ---------------------------------------------------------------- start / resume
@@ -143,6 +178,7 @@ class FormsPublicApiController extends Controller
             return $this->apiError('Form not found.', ['code' => 'not_found'], 404);
         }
         try {
+            $this->gate($form, $r);
             $res = $this->subs->start($form, $this->actor($r), $this->ctx($r));
         } catch (FormException $e) {
             return $this->fail($e);
@@ -227,6 +263,7 @@ class FormsPublicApiController extends Controller
             }
         }
         try {
+            $this->gate($form, $r);
             $res = $this->subs->submit($form, $resp, $this->actor($r), $this->ctx($r), (array) $r->input('answers', []), [
                 'honeypot' => $r->input('website') ?: $r->input('hp'), 'opened_at_ms' => $r->input('opened_at_ms'), 'respondent_name' => $r->input('respondent_name'),
                 'respondent' => (array) $r->input('respondent', []),
@@ -286,6 +323,7 @@ class FormsPublicApiController extends Controller
         }
         try {
             $this->subs->assertAccess($form, $this->actor($r));
+            $this->gate($form, $r);
             $field = FormField::where('form_id', $form->id)->where('id', (int) $r->input('field_id'))->first();
             if (!$field) {
                 throw new FormException('not_file_field', 'Question not found.', 404);

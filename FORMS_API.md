@@ -9,6 +9,9 @@ Envelope on every response: `{success, message, data, errors, meta}`. Error `err
 | GET/POST | `/forms` | list (`scope=mine|shared|all`, `status`, `mode`, `search`, `page`) / create (`template=<key>` or full body) |
 | GET/PUT/DELETE | `/forms/{id}` | PUT takes meta + `settings` + `fields[]` (full ordered list; send `id` to keep a question) |
 | POST | `/forms/{id}/publish` `/close` `/duplicate` `/slug-check` | |
+| — | `settings.password` / `settings.clear_password` | PUT: a non-empty `password` (4–100 chars) protects the public form (only a bcrypt hash is stored; GET returns `settings.has_password`, never the hash); `clear_password: true` removes it |
+| — | `settings.appearance` | `{theme, accent(#rrggbb|''), font, show_progress, submit_label}`; also `closed_message`, `allow_another` |
+| POST | `/f/{code}/unlock` | public, `{password}` → `{unlock_token}`; send it as header `X-Form-Unlock` on every later `/f/{code}/*` call. `GET /f/{code}` answers `state: password_required` until then |
 | GET/PUT/DELETE | `/forms/{id}/collaborators[/{userId}]` | PUT `{email, permission: view|edit}` (owner only) |
 | GET | `/forms/{id}/analytics` | totals, 30-day timeline, by hour, devices, browsers, roles, per-question stats, exam stats |
 | GET | `/forms/{id}/responses` | `status=final|in_progress|all`, `search`, `needs_manual`, `flagged`, `sort`, `dir`, `page`, `per_page` |

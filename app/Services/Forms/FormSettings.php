@@ -7,6 +7,18 @@ use App\Support\Forms\RespondentIdentity;
 /** Defaults + sanitising of the per-form settings JSON. Unknown keys are dropped. */
 final class FormSettings
 {
+    public const APPEARANCE_THEMES = ['classic', 'midnight', 'ocean', 'sunset', 'forest', 'rose', 'lavender', 'paper', 'mono', 'auto'];
+    public const APPEARANCE_FONTS = ['default', 'serif', 'rounded', 'mono'];
+
+    /** Settings as the owner's builder may see them: the password hash is replaced by a boolean. */
+    public static function publicView(?array $settings): array
+    {
+        $out = (array) $settings;
+        $out['has_password'] = !empty($out['password_hash']);
+        unset($out['password_hash'], $out['password']);
+        return $out;
+    }
+
     public static function defaults(string $mode): array
     {
         return [
@@ -30,6 +42,12 @@ final class FormSettings
             // data collected about the respondent by the form itself: required | optional | off  (see RespondentIdentity)
             'identity' => ['name' => 'required', 'email' => 'off', 'phone' => 'off', 'national_id' => 'off', 'name_min_words' => 2],
             'allow_save_draft' => true,
+            // look of the public page (see APPEARANCE_THEMES) + small wording options
+            'appearance' => ['theme' => 'classic', 'accent' => '', 'font' => 'default', 'show_progress' => true, 'submit_label' => ''],
+            'closed_message' => '',          // shown instead of the generic text when the form is closed / full
+            'allow_another' => false,        // "submit another response" button after submitting
+            // password gate: only the bcrypt hash is stored (never returned to the client — see publicView())
+            'password_hash' => '',
             // exam
             'exam' => [
                 'duration_minutes' => $mode === 'exam' ? 30 : 0,
@@ -101,6 +119,45 @@ final class FormSettings
         }
         if ($out['redirect_url'] !== '' && !preg_match('#^https?://#i', $out['redirect_url'])) {
             $out['redirect_url'] = '';
+        }
+        if (isset($in['appearance']) && is_array($in['appearance'])) {
+            $a = $in['appearance'];
+            $ap = &$out['appearance'];
+            if (isset($a['theme']) && in_array($a['theme'], self::APPEARANCE_THEMES, true)) {
+                $ap['theme'] = $a['theme'];
+            }
+            if (array_key_exists('accent', $a)) {
+                $ap['accent'] = preg_match('/^#[0-9a-fA-F]{6}$/', (string) $a['accent']) ? strtolower((string) $a['accent']) : '';
+            }
+            if (isset($a['font']) && in_array($a['font'], self::APPEARANCE_FONTS, true)) {
+                $ap['font'] = $a['font'];
+            }
+            if (array_key_exists('show_progress', $a)) {
+                $ap['show_progress'] = $b($a['show_progress']);
+            }
+            if (array_key_exists('submit_label', $a)) {
+                $ap['submit_label'] = mb_substr(trim(strip_tags((string) $a['submit_label'])), 0, 40);
+            }
+            unset($ap);
+        }
+        if (array_key_exists('closed_message', $in)) {
+            $out['closed_message'] = mb_substr(trim((string) $in['closed_message']), 0, 500);
+        }
+        if (array_key_exists('allow_another', $in)) {
+            $out['allow_another'] = $b($in['allow_another']);
+        }
+        // password: a non-empty "password" sets/changes it; "clear_password" removes it; otherwise the stored hash is kept.
+        // (the client never sends the hash back, and a hash coming from the client is ignored)
+        $out['password_hash'] = (string) (($current ?? [])['password_hash'] ?? '');
+        if (!empty($in['clear_password'])) {
+            $out['password_hash'] = '';
+        }
+        if (isset($in['password']) && is_string($in['password']) && trim($in['password']) !== '') {
+            $pw = (string) $in['password'];
+            if (mb_strlen($pw) < 4 || mb_strlen($pw) > 100) {
+                throw new FormException('validation_failed', 'The form password must be between 4 and 100 characters.', 422);
+            }
+            $out['password_hash'] = \Illuminate\Support\Facades\Hash::make($pw);
         }
         if (isset($in['exam']) && is_array($in['exam'])) {
             $x = $in['exam'];

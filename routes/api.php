@@ -2823,6 +2823,7 @@ Route::prefix('v1')->group(function () {
     // Respondent side — guest or logged-in (uip.auth.optional).
     Route::prefix('f/{code}')->where(['code' => '[A-Za-z0-9_-]{3,80}'])->middleware(['uip.auth.optional'])->group(function () use ($public) {
         Route::get('/', [$public, 'show'])->middleware('throttle:120,1');
+        Route::post('/unlock', [$public, 'unlock'])->middleware('throttle:12,1'); // password-protected forms
         Route::post('/start', [$public, 'start'])->middleware('throttle:60,1');
         Route::post('/submit', [$public, 'submit'])->middleware('throttle:30,1');
         Route::post('/files', [$public, 'upload'])->middleware('throttle:60,1');

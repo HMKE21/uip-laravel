@@ -63,7 +63,7 @@ class FormsManageApiController extends Controller
     private function full(Form $f): array
     {
         return $this->card($f) + [
-            'settings' => $f->settings,
+            'settings' => \App\Services\Forms\FormSettings::publicView($f->settings),
             'fields' => $f->fields()->get()->map(fn ($x) => [
                 'id' => (int) $x->id, 'type' => $x->type, 'label' => $x->label, 'help' => $x->help, 'required' => (bool) $x->required, 'position' => (int) $x->position,
                 'config' => $x->config ?: (object) [], 'logic' => $x->logic, 'points' => (float) $x->points, 'correct' => $x->correct, 'explanation' => $x->explanation,
