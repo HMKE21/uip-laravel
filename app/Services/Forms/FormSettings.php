@@ -8,7 +8,7 @@ use App\Support\Forms\RespondentIdentity;
 final class FormSettings
 {
     public const APPEARANCE_THEMES = ['classic', 'midnight', 'ocean', 'sunset', 'forest', 'rose', 'lavender', 'paper', 'mono', 'auto'];
-    public const APPEARANCE_FONTS = ['default', 'serif', 'rounded', 'mono'];
+    public const APPEARANCE_FONTS = ['default', 'serif', 'rounded', 'mono', 'cairo', 'tajawal', 'almarai', 'amiri', 'naskh', 'kufi', 'readex', 'plex', 'inter', 'poppins', 'playfair', 'jakarta'];
 
     /** Settings as the owner's builder may see them: the password hash is replaced by a boolean. */
     public static function publicView(?array $settings): array

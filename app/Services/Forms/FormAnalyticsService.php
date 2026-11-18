@@ -295,6 +295,7 @@ class FormAnalyticsService
             $display = $this->display($f, $val, $fileRows);
             $items[] = [
                 'field_id' => (int) $f->id, 'type' => $f->type, 'label' => $f->label, 'value' => $val, 'display' => $display,
+                'national_info' => $f->type === 'national_id' ? EgyptianNationalId::parse((string) (is_scalar($val) ? $val : '')) : null,
                 'files' => $f->type === 'file' && $val ? collect((array) $val)->map(fn ($id) => $fileRows->get($id))->filter()->map(fn ($x) => $this->files->toArray($x))->values()->all() : null,
                 'points' => $a?->points !== null ? (float) $a->points : null, 'max_points' => (float) $f->points,
                 'is_correct' => $a && $a->is_correct !== null ? (bool) $a->is_correct : null, 'feedback' => $a->feedback ?? null,
@@ -307,9 +308,26 @@ class FormAnalyticsService
             'response' => $r->only(['id', 'uuid', 'status', 'respondent_name', 'email', 'phone', 'national_id', 'role', 'score', 'max_score', 'needs_manual', 'violations', 'edits_count', 'duration_seconds', 'ip']) + [
                 'started_at' => $r->started_at?->toIso8601String(), 'submitted_at' => $r->submitted_at?->toIso8601String(),
                 'user' => $user ? (array) $user : null, 'device' => UserAgentParser::parse($r->user_agent),
+                // derived from the 14-digit national ID: governorate, birth date, gender, age
+                'national_info' => $r->national_id ? EgyptianNationalId::parse((string) $r->national_id) : null,
+                'ip_country' => $this->ipCountry((string) $r->ip),
             ],
             'answers' => $items, 'events' => $events,
         ];
+    }
+
+    /** Country of the stored IP (cached lookup) so the owner can sanity-check it; null when private / unknown. */
+    private function ipCountry(string $ip): ?array
+    {
+        if ($ip === '') {
+            return null;
+        }
+        try {
+            $g = app(\App\Services\GeoIpService::class)->resolve($ip);
+        } catch (\Throwable $e) {
+            return null;
+        }
+        return ($g['status'] ?? '') === 'ok' ? ['code' => $g['code'], 'name' => $g['name']] : null;
     }
 
     private function display($f, $val, $fileRows)
@@ -335,7 +353,7 @@ class FormAnalyticsService
         fwrite($handle, "\xEF\xBB\xBF"); // UTF-8 BOM so Excel shows Arabic correctly
         $fields = $form->fields()->get()->filter(fn ($f) => !FormFieldTypes::isLayout($f->type))->values();
         $graded = (new FormGradingService())->isGraded($form, $form->fields()->get());
-        $head = ['#', 'Status', 'Submitted at', 'Name', 'Email', 'Phone', 'Role', 'Duration (s)'];
+        $head = ['#', 'Status', 'Submitted at', 'Name', 'Email', 'Phone', 'National ID', 'Governorate', 'Birth date', 'Gender', 'IP', 'Role', 'Duration (s)'];
         if ($graded) {
             array_push($head, 'Score', 'Max', 'Percent');
         }
@@ -354,7 +372,8 @@ class FormAnalyticsService
                 $fileRows = \App\Models\FormFile::whereIn('response_id', $ids)->get()->keyBy('id');
                 foreach ($rows as $r) {
                     $by = ($ans->get($r->id) ?? collect())->keyBy('field_id');
-                    $line = [$r->id, $r->status, $r->submitted_at, $r->full_name ?: $r->respondent_name, $r->email, $r->phone, $r->role, $r->duration_seconds];
+                    $ni = $r->national_id ? EgyptianNationalId::parse((string) $r->national_id) : null;
+                    $line = [$r->id, $r->status, $r->submitted_at, $r->full_name ?: $r->respondent_name, $r->email, $r->phone, $r->national_id, $ni['governorate_ar'] ?? '', $ni['birth_date'] ?? '', $ni ? ($ni['gender'] === 'male' ? 'ذكر' : 'أنثى') : '', $r->ip, $r->role, $r->duration_seconds];
                     if ($graded) {
                         array_push($line, $r->score, $r->max_score, $r->max_score > 0 ? round($r->score / $r->max_score * 100, 1) : '');
                     }

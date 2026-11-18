@@ -13,6 +13,14 @@ final class EgyptianNationalId
         '33' => 'Matrouh', '34' => 'North Sinai', '35' => 'South Sinai', '88' => 'Born abroad',
     ];
 
+    private const GOVERNORATES_AR = [
+        '01' => 'القاهرة', '02' => 'الإسكندرية', '03' => 'بورسعيد', '04' => 'السويس', '11' => 'دمياط', '12' => 'الدقهلية',
+        '13' => 'الشرقية', '14' => 'القليوبية', '15' => 'كفر الشيخ', '16' => 'الغربية', '17' => 'المنوفية', '18' => 'البحيرة',
+        '19' => 'الإسماعيلية', '21' => 'الجيزة', '22' => 'بني سويف', '23' => 'الفيوم', '24' => 'المنيا', '25' => 'أسيوط',
+        '26' => 'سوهاج', '27' => 'قنا', '28' => 'أسوان', '29' => 'الأقصر', '31' => 'البحر الأحمر', '32' => 'الوادي الجديد',
+        '33' => 'مطروح', '34' => 'شمال سيناء', '35' => 'جنوب سيناء', '88' => 'مولود بالخارج',
+    ];
+
     /** @return array{birth_date:string,gender:string,governorate:string,governorate_code:string,age:int}|null */
     public static function parse(?string $raw): ?array
     {
@@ -39,6 +47,7 @@ final class EgyptianNationalId
             'gender' => ((int) $d[12]) % 2 === 1 ? 'male' : 'female',
             'governorate' => self::GOVERNORATES[$gov],
             'governorate_code' => $gov,
+            'governorate_ar' => self::GOVERNORATES_AR[$gov] ?? self::GOVERNORATES[$gov],
             'age' => (int) floor((time() - strtotime($birth)) / 31557600),
         ];
     }

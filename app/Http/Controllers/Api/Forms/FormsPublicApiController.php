@@ -40,7 +40,7 @@ class FormsPublicApiController extends Controller
     private function ctx(Request $r): array
     {
         return [
-            'ip' => $r->ip(), 'ua' => $r->userAgent(), 'device_id' => $r->header('X-Device-Id'),
+            'ip' => preg_replace('/^::ffff:/i', '', (string) $r->ip()) ?: null, 'ua' => $r->userAgent(), 'device_id' => $r->header('X-Device-Id'),
             'locale' => $r->header('X-Locale', 'ar') === 'en' ? 'en' : 'ar',
         ];
     }
