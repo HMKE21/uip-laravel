@@ -35,7 +35,7 @@ class FormBuilderService
                 $this->syncFields($form, $data['fields']);
             }
             return $form;
-        });
+        }, 3);
     }
 
     public function createFromTemplate(int $userId, string $role, string $key, ?string $title = null): Form
@@ -53,6 +53,12 @@ class FormBuilderService
     public function update(Form $form, array $data): Form
     {
         return DB::transaction(function () use ($form, $data) {
+            // serialise concurrent saves of the same form (autosave + manual save / two tabs): avoids duplicated
+            // questions and lock-wait / deadlock errors that surfaced as a random "server error".
+            $locked = Form::whereKey($form->id)->lockForUpdate()->first();
+            if ($locked) {
+                $form = $locked;
+            }
             if (isset($data['mode']) && in_array($data['mode'], ['form', 'exam'], true) && $data['mode'] !== $form->mode) {
                 $form->mode = $data['mode'];
             }
@@ -65,7 +71,7 @@ class FormBuilderService
                 $this->syncFields($form, $data['fields']);
             }
             return $form->fresh();
-        });
+        }, 3);
     }
 
     private function fillMeta(Form $form, array $d, bool $creating): void
@@ -131,7 +137,8 @@ class FormBuilderService
         $existing = FormField::where('form_id', $form->id)->get()->keyBy('id');
         $keep = [];
         foreach (array_values($fields) as $i => $raw) {
-            $clean = $this->sanitizeField((array) $raw);
+            $raw = is_array($raw) ? $raw : (array) $raw;
+            $clean = $this->sanitizeField($raw);
             $clean['position'] = $i;
             $id = (int) ($raw['id'] ?? 0);
             if ($id && $existing->has($id)) {

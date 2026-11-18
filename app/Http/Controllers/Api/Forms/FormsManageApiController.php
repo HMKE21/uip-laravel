@@ -39,6 +39,13 @@ class FormsManageApiController extends Controller
         return $this->apiError($e->getMessage(), ['code' => $e->errorCode] + $e->extra, $e->httpStatus);
     }
 
+    /** Unknown failure while saving: log the real cause, answer with a clear, retryable message (the builder retries by itself). */
+    private function unexpected(\Throwable $e, string $op): JsonResponse
+    {
+        \Log::error('forms.' . $op . ' failed: ' . $e->getMessage(), ['exception' => $e]);
+        return $this->apiError('تعذّر الحفظ مؤقتاً، هنحاول تاني تلقائياً.', ['code' => 'save_failed', 'retryable' => true], 500);
+    }
+
     /** @return Form|JsonResponse */
     private function load(Request $r, $id, bool $needEdit = true)
     {
@@ -125,6 +132,8 @@ class FormsManageApiController extends Controller
             }
         } catch (FormException $e) {
             return $this->fail($e);
+        } catch (\Throwable $e) {
+            return $this->unexpected($e, 'create');
         }
         return $this->apiSuccess($this->full($form), 'Form created successfully.', 201);
     }
@@ -145,6 +154,8 @@ class FormsManageApiController extends Controller
             $form = $this->builder->update($form, $r->all());
         } catch (FormException $e) {
             return $this->fail($e);
+        } catch (\Throwable $e) {
+            return $this->unexpected($e, 'update');
         }
         return $this->apiSuccess($this->full($form), 'Form saved.');
     }
