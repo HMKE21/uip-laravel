@@ -92,6 +92,8 @@ return Application::configure(basePath: dirname(__DIR__))
             // صالح، وبتكمل عادي من غير فشل لو مفيش (ضيف من غير حساب UIP).
             // مقصورة على prefix('meetings/join') بس، مش global.
             'uip.auth.optional' => \App\Http\Middleware\UipAuthOptionalMiddleware::class,
+            // Developer API (المرحلة 6): Bearer بمفتاح API (uipk_…) أو OAuth access token (uipo_…) + scope اختياري: dev.auth:mail.read
+            'dev.auth' => \App\Http\Middleware\DevAuthMiddleware::class,
         ]);
 
         // المكالمات: الـ SDP لازم ينتهي بـ \r\n. TrimStrings الافتراضي كان بيشيله فالمستلم يرفض الـ offer

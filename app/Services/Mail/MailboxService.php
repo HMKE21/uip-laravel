@@ -4,6 +4,7 @@ namespace App\Services\Mail;
 
 use App\Models\Mail\MailAccount;
 use App\Models\User;
+use App\Services\Developer\DevEventBus;
 use App\Support\MailHtmlSanitizer;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
@@ -556,6 +557,10 @@ class MailboxService
         }
 
         $recips = DB::table('mail_recipients')->where('message_id', $mid)->get();
+        if (!$msg->is_auto && !$msg->confidential) { // Webhook: mail.message.sent (المرحلة 6) — من غير أجسام رسائل، ومن غير الـ Bcc
+            $this->emitDev('mail.message.sent', $senderId, ['message_id' => $mid, 'thread_id' => (int) $msg->thread_id, 'subject' => (string) $msg->subject,
+                'to' => $recips->where('kind', '!=', 'bcc')->pluck('address')->values()->all(), 'sent_at' => $now->toIso8601String()]);
+        }
         // مستلمين خارجيين (مفيش حساب UIPE ليهم): الإرسال الفعلي بعد ما الـ transaction يتأكد.
         if (!$msg->is_auto && $this->external->enabled() && $recips->whereNull('account_id')->isNotEmpty()) {
             DB::afterCommit(fn () => $this->sendExternal($mid));
@@ -586,7 +591,13 @@ class MailboxService
                 DB::table('mail_item_labels')->insertOrIgnore(['item_id' => $itemId, 'label_id' => $lid]);
             }
             if ($fx['folder'] === 'inbox' && $accId !== $senderId && !$msg->is_auto && !$msg->confidential) {
-                $this->notifyNewMail((int) ($userOf[$accId] ?? 0), $itemId, (string) ($sender?->display_name ?: $sender?->address ?: ''), (string) $msg->subject, (string) $msg->snippet);
+                $this->notifyNewMail((int) ($userOf[$accId] ?? 0), $itemId, (string) ($sender?->display_name ?: $sender?->address ?: ''), (string) $msg->subject, (string) $msg->snippet,
+                    $accId, (string) ($sender?->address ?? ''));
+            }
+            if (!$trash && $accId !== $senderId && !$msg->is_auto && !$msg->confidential) { // Webhook: mail.message.received (المرحلة 6)
+                $this->emitDev('mail.message.received', $accId, ['item_id' => $itemId, 'message_id' => $mid, 'thread_id' => (int) $msg->thread_id, 'folder' => $fx['folder'],
+                    'from' => ['address' => (string) ($sender->address ?? ''), 'name' => $sender->display_name ?? null], 'subject' => (string) $msg->subject,
+                    'snippet' => (string) $msg->snippet, 'has_attachments' => $hasAtt, 'received_at' => $now->toIso8601String()]);
             }
         }
 
@@ -599,10 +610,28 @@ class MailboxService
         }
     }
 
+    /** يطلق حدث Webhook للمستخدم صاحب الصندوق بعد ما الـ transaction يتأكد. أي فشل مبيكسرش التسليم. */
+    private function emitDev(string $event, int $accountId, array $data): void
+    {
+        DB::afterCommit(function () use ($event, $accountId, $data) {
+            try {
+                $uid = (int) DB::table('mail_accounts')->where('id', $accountId)->value('user_id');
+                if ($uid > 0) {
+                    app(DevEventBus::class)->emit($event, $uid, ['account_id' => $accountId] + $data, $accountId, 'live');
+                }
+            } catch (\Throwable $e) {
+                Log::warning('UIPE Mail: dev event failed', ['event' => $event, 'error' => $e->getMessage()]);
+            }
+        });
+    }
+
     /** إشعار داخل المنصة (جرس + لحظي) لما تجي رسالة جديدة في الوارد. أي فشل مبيكسرش التسليم. */
-    private function notifyNewMail(int $userId, int $itemId, string $from, string $subject, string $snippet): void
+    private function notifyNewMail(int $userId, int $itemId, string $from, string $subject, string $snippet, ?int $accountId = null, string $fromAddress = ''): void
     {
         if ($userId <= 0) {
+            return;
+        }
+        if ($accountId && !MailNotificationPrefs::allows($accountId, $fromAddress)) { // إعدادات إشعارات البريد (المرحلة 6): كتم / VIP فقط
             return;
         }
         DB::afterCommit(function () use ($userId, $itemId, $from, $subject, $snippet) {

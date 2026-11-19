@@ -2872,3 +2872,6 @@ require __DIR__ . '/mail.php';
 
 // UIPE Mail (المرحلة 5)
 require __DIR__ . '/identity.php';
+
+// UIPE Mail (المرحلة 6) — Developer Center / OAuth / Developer API
+require __DIR__ . '/developer.php';

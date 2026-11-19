@@ -1,0 +1,455 @@
+<?php
+
+namespace App\Services\Developer;
+
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+
+/** Webhooks: تسجيل، توقيع HMAC، تسليم مع إعادة محاولة (backoff)، حماية SSRF، تعطيل تلقائي، وإعادة إرسال. */
+class WebhookService
+{
+    public function __construct(private DevLogService $logs, private DeveloperAppService $apps)
+    {
+    }
+
+    private function fail(string $msg, int $code = 422): never
+    {
+        throw new \DomainException($msg, $code);
+    }
+
+    /* ------------------------------------------------------------ SSRF */
+
+    public function publicIp(string $ip): bool
+    {
+        if (str_starts_with(strtolower($ip), '::ffff:')) {
+            $ip = substr($ip, 7);
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return false;
+        }
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            $l = ip2long($ip);
+            if ($l !== false) {
+                $l &= 0xFFFFFFFF;
+                if (($l & 0xFFC00000) === 0x64400000) { // 100.64.0.0/10 (CGNAT)
+                    return false;
+                }
+                if (($l & 0xFFFFFF00) === 0xC0000000 || ($l & 0xFFFE0000) === 0xC6120000) { // 192.0.0.0/24 · 198.18.0.0/15
+                    return false;
+                }
+            }
+        } else {
+            $bin = @inet_pton($ip);
+            if ($bin !== false && (ord($bin[0]) === 0x20 && ord($bin[1]) === 0x01 && ord($bin[2]) === 0x0d && ord($bin[3]) === 0xb8)) { // 2001:db8::/32 (توثيق)
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** @return string[] */
+    private function resolve(string $host): array
+    {
+        if (filter_var(trim($host, '[]'), FILTER_VALIDATE_IP)) {
+            return [trim($host, '[]')];
+        }
+        $ips = [];
+        foreach (@dns_get_record($host, DNS_A) ?: [] as $r) {
+            if (!empty($r['ip'])) {
+                $ips[] = $r['ip'];
+            }
+        }
+        foreach (@dns_get_record($host, DNS_AAAA) ?: [] as $r) {
+            if (!empty($r['ipv6'])) {
+                $ips[] = $r['ipv6'];
+            }
+        }
+        if (!$ips) {
+            $ips = @gethostbynamel($host) ?: [];
+        }
+        return array_values(array_unique($ips));
+    }
+
+    /**
+     * يتحقق من الرابط (https، من غير credentials، مش localhost، ومفيش IP خاص/داخلي في أي من نتايج الـ DNS).
+     * @return array{host:string,port:int,ip:?string,url:string}
+     */
+    public function assertSafeUrl(string $url): array
+    {
+        $url = trim($url);
+        $p = parse_url($url);
+        if ($url === '' || strlen($url) > 500 || !$p || empty($p['scheme']) || empty($p['host']) || isset($p['user']) || isset($p['pass']) || preg_match('/[\s\x00-\x1f]/', $url)) {
+            $this->fail('Invalid webhook URL.');
+        }
+        $scheme = strtolower($p['scheme']);
+        $allowHttp = (bool) config('developer.webhooks.allow_http');
+        if ($scheme !== 'https' && !($scheme === 'http' && $allowHttp)) {
+            $this->fail('Webhook URLs must use https.');
+        }
+        $host = strtolower(trim((string) $p['host'], '[]'));
+        $port = (int) ($p['port'] ?? ($scheme === 'https' ? 443 : 80));
+        if ($port < 1 || $port > 65535) {
+            $this->fail('Invalid webhook port.');
+        }
+        $allowPrivate = (bool) config('developer.webhooks.allow_private');
+        if (!$allowPrivate && ($host === 'localhost' || preg_match('/\.(local|localhost|internal|lan|home|intranet)$/', $host))) {
+            $this->fail('Webhook URLs must point to a public host.');
+        }
+        $ips = $this->resolve($host);
+        if (!$ips) {
+            $this->fail('Could not resolve the webhook host.');
+        }
+        if (!$allowPrivate) {
+            foreach ($ips as $ip) {
+                if (!$this->publicIp($ip)) {
+                    $this->fail('Webhook URLs must point to a public host.');
+                }
+            }
+        }
+        $v4 = array_values(array_filter($ips, fn ($i) => filter_var($i, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)));
+        $isLiteral = (bool) filter_var($host, FILTER_VALIDATE_IP);
+        return ['host' => $host, 'port' => $port, 'ip' => $isLiteral ? null : ($v4[0] ?? $ips[0]), 'url' => $url];
+    }
+
+    /* ------------------------------------------------------------ CRUD */
+
+    private function secretOf(object $h): string
+    {
+        try {
+            return Crypt::decryptString((string) $h->secret_enc);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    public function payload(object $h, ?string $secret = null): array
+    {
+        $out = [
+            'id' => (int) $h->id, 'name' => $h->name, 'url' => $h->url, 'events' => (array) json_decode((string) $h->events, true), 'mode' => $h->mode,
+            'app_id' => $h->app_id ? (int) $h->app_id : null, 'mail_account_id' => $h->mail_account_id ? (int) $h->mail_account_id : null,
+            'is_active' => (bool) $h->is_active, 'failure_count' => (int) $h->failure_count, 'last_status' => $h->last_status, 'last_delivery_at' => DevTokens::iso($h->last_delivery_at),
+            'disabled_at' => DevTokens::iso($h->disabled_at), 'disabled_reason' => $h->disabled_reason, 'created_at' => DevTokens::iso($h->created_at),
+        ];
+        if ($secret !== null) {
+            $out['secret'] = $secret; // بيظهر مرة واحدة بس
+        }
+        return $out;
+    }
+
+    private function assertAllowed(int $userId): void
+    {
+        if (!config('developer.enabled')) {
+            $this->fail('The Developer Center is disabled.', 503);
+        }
+        $p = $this->apps->policyFor($userId);
+        if (!$p['apps_enabled'] || !$p['webhooks_enabled']) {
+            $this->fail('Webhooks are turned off by your university.', 403);
+        }
+    }
+
+    public function list(int $userId): array
+    {
+        return DB::table('dev_webhooks')->where('user_id', $userId)->orderByDesc('id')->get()->map(fn ($h) => $this->payload($h))->values()->all();
+    }
+
+    public function own(int $userId, int $id): object
+    {
+        $h = DB::table('dev_webhooks')->where('id', $id)->where('user_id', $userId)->first();
+        if (!$h) {
+            $this->fail('Webhook not found.', 404);
+        }
+        return $h;
+    }
+
+    private function cleanEvents($in): array
+    {
+        $ev = array_values(array_unique(array_filter(array_map(fn ($e) => trim((string) $e), (array) $in), fn ($e) => $e !== '')));
+        if (!$ev) {
+            $this->fail('Choose at least one event.');
+        }
+        $known = array_keys((array) config('developer.events', []));
+        if ($bad = array_diff($ev, $known)) {
+            $this->fail('Unknown event: ' . implode(', ', $bad));
+        }
+        return $ev;
+    }
+
+    public function create(int $userId, array $in, ?int $appId = null): array
+    {
+        $this->assertAllowed($userId);
+        if (DB::table('dev_webhooks')->where('user_id', $userId)->count() >= (int) config('developer.limits.webhooks_per_user', 10)) {
+            $this->fail('You reached the maximum number of webhooks.', 403);
+        }
+        $this->assertSafeUrl((string) ($in['url'] ?? ''));
+        $mode = (string) ($in['mode'] ?? 'live');
+        if (!in_array($mode, ['live', 'sandbox'], true)) {
+            $this->fail('Invalid mode.');
+        }
+        $appId = $appId ?: (!empty($in['app_id']) ? (int) $in['app_id'] : null);
+        if ($appId && !DB::table('dev_apps')->where('id', $appId)->where('owner_user_id', $userId)->exists()) {
+            $this->fail('App not found.', 404);
+        }
+        $accId = !empty($in['mail_account_id']) ? (int) $in['mail_account_id'] : null;
+        if ($accId && !DB::table('mail_accounts')->where('id', $accId)->where('user_id', $userId)->exists()) {
+            $this->fail('Mailbox not found.', 404);
+        }
+        $secret = DevTokens::make('whsec_', 40);
+        $id = DB::table('dev_webhooks')->insertGetId([
+            'user_id' => $userId, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => isset($in['name']) ? Str::limit(trim((string) $in['name']), 80, '') : null,
+            'url' => trim((string) $in['url']), 'secret_enc' => Crypt::encryptString($secret), 'events' => json_encode($this->cleanEvents($in['events'] ?? [])),
+            'mode' => $mode, 'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        return $this->payload(DB::table('dev_webhooks')->find($id), $secret);
+    }
+
+    public function update(int $userId, int $id, array $in): array
+    {
+        $this->assertAllowed($userId);
+        $h = $this->own($userId, $id);
+        $upd = ['updated_at' => now()];
+        if (array_key_exists('name', $in)) {
+            $upd['name'] = $in['name'] !== null ? Str::limit(trim((string) $in['name']), 80, '') : null;
+        }
+        if (array_key_exists('url', $in)) {
+            $this->assertSafeUrl((string) $in['url']);
+            $upd['url'] = trim((string) $in['url']);
+        }
+        if (array_key_exists('events', $in)) {
+            $upd['events'] = json_encode($this->cleanEvents($in['events']));
+        }
+        if (array_key_exists('mail_account_id', $in)) {
+            $accId = $in['mail_account_id'] ? (int) $in['mail_account_id'] : null;
+            if ($accId && !DB::table('mail_accounts')->where('id', $accId)->where('user_id', $userId)->exists()) {
+                $this->fail('Mailbox not found.', 404);
+            }
+            $upd['mail_account_id'] = $accId;
+        }
+        DB::table('dev_webhooks')->where('id', $h->id)->update($upd);
+        return $this->payload(DB::table('dev_webhooks')->find($h->id));
+    }
+
+    public function setActive(int $userId, int $id, bool $active): array
+    {
+        $this->assertAllowed($userId);
+        $h = $this->own($userId, $id);
+        if ($active) {
+            $this->assertSafeUrl((string) $h->url);
+            DB::table('dev_webhooks')->where('id', $h->id)->update(['is_active' => 1, 'failure_count' => 0, 'disabled_at' => null, 'disabled_reason' => null, 'updated_at' => now()]);
+        } else {
+            DB::table('dev_webhooks')->where('id', $h->id)->update(['is_active' => 0, 'disabled_at' => now(), 'disabled_reason' => 'Paused by the owner', 'updated_at' => now()]);
+        }
+        return $this->payload(DB::table('dev_webhooks')->find($h->id));
+    }
+
+    public function rotateSecret(int $userId, int $id): array
+    {
+        $h = $this->own($userId, $id);
+        $secret = DevTokens::make('whsec_', 40);
+        DB::table('dev_webhooks')->where('id', $h->id)->update(['secret_enc' => Crypt::encryptString($secret), 'updated_at' => now()]);
+        return $this->payload(DB::table('dev_webhooks')->find($h->id), $secret);
+    }
+
+    public function delete(int $userId, int $id): void
+    {
+        $h = $this->own($userId, $id);
+        DB::transaction(function () use ($h) {
+            DB::table('dev_webhook_deliveries')->where('webhook_id', $h->id)->delete();
+            DB::table('dev_webhooks')->where('id', $h->id)->delete();
+        });
+    }
+
+    public function deliveries(int $userId, int $webhookId, int $page = 1, int $per = 25): array
+    {
+        $h = $this->own($userId, $webhookId);
+        $per = max(1, min(100, $per));
+        $page = max(1, $page);
+        $q = DB::table('dev_webhook_deliveries')->where('webhook_id', $h->id);
+        $total = (clone $q)->count();
+        $items = $q->orderByDesc('id')->forPage($page, $per)->get()->map(fn ($d) => $this->deliveryPayload($d))->values()->all();
+        return ['items' => $items, 'total' => $total, 'page' => $page, 'per_page' => $per];
+    }
+
+    private function deliveryPayload(object $d, bool $withBody = false): array
+    {
+        $out = ['id' => (int) $d->id, 'event_id' => $d->event_id, 'event' => $d->event, 'status' => $d->status, 'attempts' => (int) $d->attempts, 'next_attempt_at' => DevTokens::iso($d->next_attempt_at),
+            'response_code' => $d->response_code !== null ? (int) $d->response_code : null, 'response_ms' => $d->response_ms !== null ? (int) $d->response_ms : null,
+            'response_excerpt' => $d->response_excerpt, 'error' => $d->error, 'delivered_at' => DevTokens::iso($d->delivered_at), 'created_at' => DevTokens::iso($d->created_at)];
+        if ($withBody) {
+            $out['payload'] = json_decode((string) $d->payload, true);
+        }
+        return $out;
+    }
+
+    public function delivery(int $userId, int $deliveryId): array
+    {
+        $d = DB::table('dev_webhook_deliveries as d')->join('dev_webhooks as w', 'w.id', '=', 'd.webhook_id')->where('d.id', $deliveryId)->where('w.user_id', $userId)->first(['d.*']);
+        if (!$d) {
+            $this->fail('Delivery not found.', 404);
+        }
+        return $this->deliveryPayload($d, true);
+    }
+
+    /* ------------------------------------------------------------ enqueue / deliver */
+
+    public function enqueue(object $hook, string $event, array $data, ?string $eventId = null): int
+    {
+        $eventId = $eventId ?: (string) Str::uuid();
+        $body = ['id' => $eventId, 'type' => $event, 'api_version' => (string) config('developer.api_version'), 'created_at' => now()->toIso8601String(), 'mode' => $hook->mode, 'data' => $data];
+        $id = (int) DB::table('dev_webhook_deliveries')->insertGetId(['webhook_id' => $hook->id, 'event_id' => $eventId, 'event' => $event, 'payload' => json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'status' => 'pending', 'attempts' => 0, 'created_at' => now()]);
+        $this->dispatch($id);
+        return $id;
+    }
+
+    private function dispatch(int $deliveryId): void
+    {
+        try {
+            if (config('queue.default') === 'sync') {
+                \App\Jobs\DeliverWebhookJob::dispatchAfterResponse($deliveryId);
+            } else {
+                \App\Jobs\DeliverWebhookJob::dispatch($deliveryId)->afterCommit();
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Webhook dispatch failed', ['delivery' => $deliveryId, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /** ping تجريبي (بيتسلّم فورًا ومتزامن عشان نرجّع النتيجة للمطوّر). */
+    public function test(int $userId, int $id): array
+    {
+        $this->assertAllowed($userId);
+        $h = $this->own($userId, $id);
+        $eventId = (string) Str::uuid();
+        $body = ['id' => $eventId, 'type' => 'webhook.test', 'api_version' => (string) config('developer.api_version'), 'created_at' => now()->toIso8601String(), 'mode' => $h->mode, 'data' => ['message' => 'This is a test event from UIPE.']];
+        $did = (int) DB::table('dev_webhook_deliveries')->insertGetId(['webhook_id' => $h->id, 'event_id' => $eventId, 'event' => 'webhook.test', 'payload' => json_encode($body), 'status' => 'pending', 'attempts' => 0, 'created_at' => now()]);
+        $this->deliver($did, true);
+        return $this->deliveryPayload(DB::table('dev_webhook_deliveries')->find($did), true);
+    }
+
+    public function redeliver(int $userId, int $deliveryId): array
+    {
+        $this->assertAllowed($userId);
+        $d = DB::table('dev_webhook_deliveries as d')->join('dev_webhooks as w', 'w.id', '=', 'd.webhook_id')->where('d.id', $deliveryId)->where('w.user_id', $userId)->first(['d.*']);
+        if (!$d) {
+            $this->fail('Delivery not found.', 404);
+        }
+        $id = (int) DB::table('dev_webhook_deliveries')->insertGetId(['webhook_id' => $d->webhook_id, 'event_id' => $d->event_id, 'event' => $d->event, 'payload' => $d->payload, 'status' => 'pending', 'attempts' => 0, 'created_at' => now()]);
+        $this->deliver($id, true);
+        return $this->deliveryPayload(DB::table('dev_webhook_deliveries')->find($id));
+    }
+
+    public function sign(string $secret, int $ts, string $body): string
+    {
+        return hash_hmac('sha256', $ts . '.' . $body, $secret);
+    }
+
+    /** يسلّم محاولة واحدة. $manual = تسليم يدوي (اختبار/إعادة إرسال): مبيحسبش على فشل الـ webhook ولا بيعمل retry. */
+    public function deliver(int $deliveryId, bool $manual = false): void
+    {
+        $d = DB::table('dev_webhook_deliveries')->where('id', $deliveryId)->first();
+        if (!$d || !in_array($d->status, ['pending', 'retrying'], true)) {
+            return;
+        }
+        $h = DB::table('dev_webhooks')->where('id', $d->webhook_id)->first();
+        if (!$h || (!$h->is_active && !$manual)) {
+            DB::table('dev_webhook_deliveries')->where('id', $d->id)->update(['status' => 'failed', 'error' => 'Webhook is disabled or deleted.']);
+            return;
+        }
+        $attempt = (int) $d->attempts + 1;
+        $ms = null; $code = null; $excerpt = null; $err = null; $ok = false;
+        try {
+            $safe = $this->assertSafeUrl((string) $h->url);
+            $secret = $this->secretOf($h);
+            if ($secret === '') {
+                throw new \RuntimeException('Webhook secret is unreadable. Rotate the secret.');
+            }
+            $ts = time();
+            $body = (string) $d->payload;
+            $opts = ['allow_redirects' => false, 'connect_timeout' => 5, 'http_errors' => false];
+            if ($safe['ip'] && defined('CURLOPT_RESOLVE')) { // نثبّت الـ IP اللي اتفحص (ضد DNS rebinding)
+                $ip = str_contains($safe['ip'], ':') ? '[' . $safe['ip'] . ']' : $safe['ip'];
+                $opts['curl'] = [CURLOPT_RESOLVE => ["{$safe['host']}:{$safe['port']}:{$ip}"]];
+            }
+            $t0 = microtime(true);
+            $res = Http::withOptions($opts)->timeout((int) config('developer.webhooks.timeout', 8))->withHeaders([
+                'User-Agent' => 'UIPE-Webhooks/1.0', 'Content-Type' => 'application/json', 'X-UIPE-Event' => $d->event, 'X-UIPE-Event-Id' => $d->event_id,
+                'X-UIPE-Delivery' => (string) $d->id, 'X-UIPE-Signature' => 't=' . $ts . ',v1=' . $this->sign($secret, $ts, $body),
+            ])->withBody($body, 'application/json')->post($safe['url']);
+            $ms = (int) round((microtime(true) - $t0) * 1000);
+            $code = $res->status();
+            $excerpt = Str::limit(preg_replace('/[^\P{C}\n]+/u', '', (string) $res->body()) ?? '', (int) config('developer.webhooks.excerpt_bytes', 500), '');
+            $ok = $code >= 200 && $code < 300;
+            if (!$ok) {
+                $err = $code >= 300 && $code < 400 ? 'Redirects are not followed.' : 'The endpoint answered HTTP ' . $code . '.';
+            }
+        } catch (\DomainException $e) {
+            $err = $e->getMessage();
+        } catch (\Throwable $e) {
+            $err = Str::limit('Delivery failed: ' . preg_replace('/\s+/', ' ', $e->getMessage()), 190, '');
+        }
+
+        if ($ok) {
+            DB::table('dev_webhook_deliveries')->where('id', $d->id)->update(['status' => 'success', 'attempts' => $attempt, 'response_code' => $code, 'response_ms' => $ms, 'response_excerpt' => $excerpt, 'error' => null, 'next_attempt_at' => null, 'delivered_at' => now()]);
+            if (!$manual) {
+                DB::table('dev_webhooks')->where('id', $h->id)->update(['failure_count' => 0, 'last_status' => 'success', 'last_delivery_at' => now()]);
+            }
+            return;
+        }
+
+        $max = (int) config('developer.webhooks.max_attempts', 6);
+        $backoff = (array) config('developer.webhooks.backoff', [60, 300, 1800, 7200, 21600]);
+        $final = $manual || $attempt >= $max;
+        DB::table('dev_webhook_deliveries')->where('id', $d->id)->update([
+            'status' => $final ? 'failed' : 'retrying', 'attempts' => $attempt, 'response_code' => $code, 'response_ms' => $ms, 'response_excerpt' => $excerpt, 'error' => Str::limit((string) $err, 190, ''),
+            'next_attempt_at' => $final ? null : now()->addSeconds((int) ($backoff[min($attempt - 1, count($backoff) - 1)] ?? 3600)),
+        ]);
+        $this->logs->record(['user_id' => $h->user_id, 'app_id' => $h->app_id, 'kind' => 'webhook', 'method' => 'POST', 'path' => 'webhook#' . $h->id, 'status' => $code, 'duration_ms' => $ms, 'note' => Str::limit($d->event . ' · attempt ' . $attempt . ' · ' . $err, 190, '')]);
+        if ($manual) {
+            return;
+        }
+        $fails = (int) $h->failure_count + ($final ? 1 : 0);
+        DB::table('dev_webhooks')->where('id', $h->id)->update(['failure_count' => $fails, 'last_status' => 'failed', 'last_delivery_at' => now()]);
+        if ($final && $fails >= (int) config('developer.webhooks.disable_after', 20)) {
+            $this->autoDisable($h);
+        }
+    }
+
+    private function autoDisable(object $h): void
+    {
+        $n = DB::table('dev_webhooks')->where('id', $h->id)->where('is_active', 1)->update(['is_active' => 0, 'disabled_at' => now(), 'disabled_reason' => 'Too many consecutive failures', 'updated_at' => now()]);
+        if ($n) {
+            try {
+                app(\App\Services\NotificationService::class)->notify((int) $h->user_id, 'developer_webhook_disabled', 'تم إيقاف Webhook تلقائيًا',
+                    'الـ Webhook ' . ($h->name ?: $h->url) . ' فشل مرات كتير ورا بعض فاتوقف. صلّح الـ endpoint وفعّله تاني من مركز المطورين.', null, 'high');
+            } catch (\Throwable $e) {
+                Log::warning('Webhook disable notice failed', ['error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    /** المحاولات المستحقة (scheduler كل دقيقة). */
+    public function retryDue(int $limit = 100): int
+    {
+        $ids = DB::table('dev_webhook_deliveries')->where('status', 'retrying')->where('next_attempt_at', '<=', now())->orderBy('next_attempt_at')->limit($limit)->pluck('id')->all();
+        foreach ($ids as $id) {
+            $claimed = DB::table('dev_webhook_deliveries')->where('id', $id)->where('status', 'retrying')->update(['next_attempt_at' => now()->addMinutes(5)]); // حجز: عامل تاني مياخدهاش
+            if ($claimed) {
+                $this->deliver((int) $id);
+            }
+        }
+        return count($ids);
+    }
+
+    /** pending اتعلّقت (الـ queue وقف) أكتر من 5 دقايق → نبعتها. */
+    public function sweepStuck(int $limit = 100): int
+    {
+        $ids = DB::table('dev_webhook_deliveries')->where('status', 'pending')->where('created_at', '<', now()->subMinutes(5))->limit($limit)->pluck('id')->all();
+        foreach ($ids as $id) {
+            $this->deliver((int) $id);
+        }
+        return count($ids);
+    }
+}

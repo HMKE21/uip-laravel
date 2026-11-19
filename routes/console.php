@@ -90,3 +90,7 @@ Schedule::command('mail:identity-sync --provision')->everyTenMinutes()->withoutO
 // تعليق صناديق الأعضاء المنتهية عضويتهم (تخرّج/إيقاف/انتهاء تاريخ) واستئناف اللي رجعوا — كل ساعة.
 Schedule::command('mail:identity-sync --membership')->hourly()->withoutOverlapping();
 Schedule::command('mail:identity-sync --prune')->dailyAt('04:20')->withoutOverlapping();
+
+// Developer Center (المرحلة 6): إعادة محاولات الـ Webhooks كل دقيقة + تنضيف يومي. محتاج schedule:run كل دقيقة.
+Schedule::command('dev:maintenance --webhooks')->everyMinute()->withoutOverlapping();
+Schedule::command('dev:maintenance --prune')->dailyAt('05:00')->withoutOverlapping();

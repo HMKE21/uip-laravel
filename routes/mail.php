@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\MailAdvancedController;
 use App\Http\Controllers\Api\MailApiController;
+use App\Http\Controllers\Api\MailIntegrationController;
 use App\Http\Controllers\Api\MailTenantApiController;
 use Illuminate\Support\Facades\Route;
 
@@ -85,4 +86,16 @@ Route::prefix('v1/mail-admin')->middleware('uip.auth')->group(function () {
     Route::post('/tenants/{universityId}/resume', [MailTenantApiController::class, 'resumeTenant'])->whereNumber('universityId')->middleware('throttle:30,1');
     Route::post('/platform-domains/{id}/activate', [MailTenantApiController::class, 'activateDomain'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/platform-domains/{id}/disable', [MailTenantApiController::class, 'disableDomain'])->whereNumber('id')->middleware('throttle:30,1');
+});
+
+/** المرحلة 6: ربط البريد بالشات / الاجتماعات / Drive / AI + إشعارات البريد. (الرسائل السرّية ممنوعة من الربط جوه الخدمة.) */
+Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
+    Route::get('/messages/{id}/links', [MailIntegrationController::class, 'links'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::post('/messages/{id}/share-chat', [MailIntegrationController::class, 'shareChat'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/messages/{id}/meeting', [MailIntegrationController::class, 'meeting'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::post('/messages/{id}/save-drive', [MailIntegrationController::class, 'saveDrive'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::get('/ai/status', [MailIntegrationController::class, 'aiStatus'])->middleware('throttle:60,1');
+    Route::post('/ai/{action}', [MailIntegrationController::class, 'ai'])->middleware('throttle:30,1');
+    Route::get('/notification-prefs', [MailIntegrationController::class, 'notificationPrefs'])->middleware('throttle:120,1');
+    Route::put('/notification-prefs', [MailIntegrationController::class, 'saveNotificationPrefs'])->middleware('throttle:30,1');
 });
