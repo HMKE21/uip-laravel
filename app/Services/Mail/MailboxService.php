@@ -340,9 +340,26 @@ class MailboxService
             $this->fail('Too many recipients.');
         }
         $accounts = $out ? MailAccount::whereIn('address', array_column($out, 'address'))->get()->keyBy('address') : collect();
+        if ($forSend && $out) {
+            // العنوان مش صندوق موجود: ممكن يكون إيميل تسجيل دخول مستخدم على المنصة (مثلاً admin@uip.demo) أو مستخدم لسه ما فتحش البريد.
+            // نربطه بصندوقه (ونعمله لو لسه مش موجود) بدل ما يتعامل كإيميل خارجي ويضيع.
+            $missing = array_values(array_diff(array_column($out, 'address'), $accounts->keys()->all()));
+            if ($missing) {
+                foreach (DB::table('users')->whereIn(DB::raw('LOWER(email)'), $missing)->get(['id', 'email']) as $u) {
+                    try {
+                        $accounts->put(strtolower((string) $u->email), $this->accountFor((int) $u->id));
+                    } catch (\Throwable $e) {
+                        Log::warning('UIPE Mail: could not provision mailbox for recipient', ['user_id' => $u->id, 'error' => $e->getMessage()]);
+                    }
+                }
+            }
+        }
         foreach ($out as &$r) {
             $acc = $accounts->get($r['address']);
             $r['account_id'] = $acc?->id;
+            if ($forSend && !$acc && $this->isPlatformDomain($r['address'])) {
+                $this->fail("لا يوجد صندوق بريد بالعنوان {$r['address']}. / No UIPE mailbox exists for {$r['address']}.", 422);
+            }
             if ($forSend && !$acc && !$this->external->enabled()) {
                 $this->fail("لا يمكن الإرسال إلى {$r['address']}: البريد الخارجي غير مفعّل بعد، والإرسال متاح داخل المنصة فقط. / External email is not enabled yet; you can only send to UIPE addresses.", 422);
             }
@@ -370,6 +387,20 @@ class MailboxService
             $this->fail('Add at least one recipient.');
         }
         return $out;
+    }
+
+    /** العنوان على نطاق تابع للمنصة (الافتراضي أو نطاق جامعة مفعّل)؟ لو أيوه ومفيش صندوق بيه → مينفعش يتبعت كإيميل خارجي. */
+    private function isPlatformDomain(string $address): bool
+    {
+        $d = strtolower((string) Str::after($address, '@'));
+        if ($d === strtolower((string) config('mailbox.domain', 'uipe.local'))) {
+            return true;
+        }
+        try {
+            return DB::table('mail_domains')->where('domain', $d)->where('status', 'active')->exists();
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     public function normSubject(string $s): string
@@ -541,6 +572,7 @@ class MailboxService
         $hasAtt = DB::table('mail_attachments')->where('message_id', $mid)->exists();
         $visibleTo = $recips->where('kind', '!=', 'bcc')->pluck('address')->all();
 
+        $userOf = MailAccount::whereIn('id', $accIds->all())->pluck('user_id', 'id');
         foreach ($accIds as $accId) {
             if (!in_array($accId, $active, true)) {
                 continue;
@@ -553,6 +585,9 @@ class MailboxService
             foreach ($fx['labels'] as $lid) {
                 DB::table('mail_item_labels')->insertOrIgnore(['item_id' => $itemId, 'label_id' => $lid]);
             }
+            if ($fx['folder'] === 'inbox' && $accId !== $senderId && !$msg->is_auto && !$msg->confidential) {
+                $this->notifyNewMail((int) ($userOf[$accId] ?? 0), $itemId, (string) ($sender?->display_name ?: $sender?->address ?: ''), (string) $msg->subject, (string) $msg->snippet);
+            }
         }
 
         if (!$msg->is_auto && $sender) {
@@ -562,6 +597,27 @@ class MailboxService
                 }
             }
         }
+    }
+
+    /** إشعار داخل المنصة (جرس + لحظي) لما تجي رسالة جديدة في الوارد. أي فشل مبيكسرش التسليم. */
+    private function notifyNewMail(int $userId, int $itemId, string $from, string $subject, string $snippet): void
+    {
+        if ($userId <= 0) {
+            return;
+        }
+        DB::afterCommit(function () use ($userId, $itemId, $from, $subject, $snippet) {
+            try {
+                $role = app(\App\Services\RoleService::class)->primaryRoleFor($userId);
+                $prefix = ['data_analyst' => 'data-analysis', 'security_admin' => 'security', 'security_officer' => 'security', 'academic_staff' => 'academic-staff'][$role] ?? $role;
+                $link = $prefix ? "/{$prefix}/mail/inbox/{$itemId}" : '/mail';
+                app(\App\Services\NotificationService::class)->notify(
+                    $userId, 'mail_message_received', 'رسالة بريد جديدة من ' . ($from ?: 'UIPE Mail'),
+                    $subject !== '' ? $subject : Str::limit($snippet, 100, ''), $link
+                );
+            } catch (\Throwable $e) {
+                Log::warning('UIPE Mail: new-mail notification failed', ['error' => $e->getMessage()]);
+            }
+        });
     }
 
     /** يبعت نسخة الرسالة للمستلمين الخارجيين عبر البوابة. الفشل مبيلغيش الإرسال الداخلي: بيتسجل في اللوج وفي schedule_error. */
