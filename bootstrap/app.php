@@ -62,6 +62,8 @@ return Application::configure(basePath: dirname(__DIR__))
         );
 
         $middleware->alias([
+            // يستبدل throttle الافتراضي: عدّاد مستقل لكل روت/شخص + بيحترم إيقاف الـ Rate Limit من داشبورد الأدمن.
+            'throttle'  => \App\Http\Middleware\UipThrottleRequests::class,
             'uip.auth'  => \App\Http\Middleware\UipAuthMiddleware::class,
             // بند 3 — يطابق app/Middleware/AdminMiddleware.php القديمة.
             // لازم يتحط بعد uip.auth في نفس المجموعة (محتاج uip_role
