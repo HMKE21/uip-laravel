@@ -10,6 +10,6 @@ interface ExternalMailGateway
 {
     public function enabled(): bool;
 
-    /** @param array{from:string,from_name:?string,to:array,cc:array,bcc:array,subject:string,html:string,text:string} $mail */
+    /** @param array{from:string,from_name:?string,to:array,cc:array,bcc:array,subject:string,html:string,text:string,attachments?:array} $mail */
     public function send(array $mail): void;
 }

@@ -10,6 +10,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -524,6 +525,10 @@ class MailboxService
         }
 
         $recips = DB::table('mail_recipients')->where('message_id', $mid)->get();
+        // مستلمين خارجيين (مفيش حساب UIPE ليهم): الإرسال الفعلي بعد ما الـ transaction يتأكد.
+        if (!$msg->is_auto && $this->external->enabled() && $recips->whereNull('account_id')->isNotEmpty()) {
+            DB::afterCommit(fn () => $this->sendExternal($mid));
+        }
         $accIds = $recips->whereNotNull('account_id')->pluck('account_id')->map(fn ($x) => (int) $x)->unique()->values();
         if ($accIds->isEmpty()) {
             return;
@@ -556,6 +561,36 @@ class MailboxService
                     $this->vacationReply($accId, $msg, (string) $sender->address);
                 }
             }
+        }
+    }
+
+    /** يبعت نسخة الرسالة للمستلمين الخارجيين عبر البوابة. الفشل مبيلغيش الإرسال الداخلي: بيتسجل في اللوج وفي schedule_error. */
+    private function sendExternal(int $mid): void
+    {
+        try {
+            $msg = DB::table('mail_messages')->where('id', $mid)->first();
+            if (!$msg) {
+                return;
+            }
+            $sender = DB::table('mail_accounts')->where('id', $msg->sender_account_id)->first(['address', 'display_name']);
+            $rc = DB::table('mail_recipients')->where('message_id', $mid)->whereNull('account_id')->get();
+            $pick = fn (string $k) => $rc->where('kind', $k)->map(fn ($r) => ['address' => $r->address, 'name' => $r->name])->values()->all();
+            $to = $pick('to'); $cc = $pick('cc'); $bcc = $pick('bcc');
+            if (!$to) { // Brevo محتاج To: لو الخارجيين cc/bcc بس نرقّي أول مجموعة
+                if ($cc) { $to = $cc; $cc = []; } elseif ($bcc) { $to = $bcc; $bcc = []; }
+            }
+            if (!$to) {
+                return;
+            }
+            $atts = DB::table('mail_attachments')->where('message_id', $mid)->get(['name', 'mime', 'disk', 'path'])->map(fn ($a) => (array) $a)->all();
+            $this->external->send([
+                'from' => (string) ($sender->address ?? ''), 'from_name' => $sender->display_name ?? null,
+                'to' => $to, 'cc' => $cc, 'bcc' => $bcc, 'subject' => (string) $msg->subject,
+                'html' => (string) $msg->body_html, 'text' => (string) $msg->body_text, 'attachments' => $atts,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('UIPE Mail: external delivery failed', ['message_id' => $mid, 'error' => $e->getMessage()]);
+            DB::table('mail_messages')->where('id', $mid)->update(['schedule_error' => 'External delivery failed. Check the Brevo settings.']);
         }
     }
 

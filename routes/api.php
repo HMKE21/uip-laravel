@@ -202,6 +202,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/microsoft/config', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'config']);
         Route::post('/microsoft', [\App\Http\Controllers\Api\Auth\MicrosoftAuthController::class, 'submit'])->middleware('throttle:20,1');
 
+        // Sign in with UIPE Identity (Keycloak realm uipe). بعد التحقق نفس مسار جوجل (/google/complete و /google/restore).
+        Route::get('/keycloak/config', [\App\Http\Controllers\Api\Auth\KeycloakAuthController::class, 'config']);
+        Route::post('/keycloak', [\App\Http\Controllers\Api\Auth\KeycloakAuthController::class, 'submit'])->middleware('throttle:20,1');
+
         // Sign in / sign up with GitHub (ويب بس). نافذة OAuth + polling بـ nonce؛ بعد التحقق نفس مسار جوجل (/google/complete و /google/restore).
         Route::get('/github/config', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'config']);
         Route::post('/github/start', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'start'])->middleware('throttle:20,1');

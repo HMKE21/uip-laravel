@@ -45,6 +45,15 @@ return [
         'authority' => env('MS_AUTHORITY', 'https://login.microsoftonline.com/common'),
     ],
 
+    // UIPE Identity (Keycloak). Client عام (من غير secret). متستخدمش client الإدارة uipe-console-master-admin لدخول المستخدمين.
+    'keycloak' => [
+        'base_url'  => env('KEYCLOAK_BASE_URL', ''),      // https://uipe-identity.duckdns.org
+        'realm'     => env('KEYCLOAK_REALM', 'uipe'),
+        'client_id' => env('KEYCLOAK_CLIENT_ID', ''),     // uipe-web (فاضي = مقفول)
+        'issuer'    => env('KEYCLOAK_ISSUER', ''),
+        'jwks_url'  => env('KEYCLOAK_JWKS_URL', ''),
+    ],
+
     // Connect GitHub (OAuth App). أنشئ OAuth App من GitHub → Settings → Developer settings،
     // وخلي Authorization callback URL = GITHUB_OAUTH_REDIRECT بالظبط.
     'github' => [

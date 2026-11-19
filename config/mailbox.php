@@ -11,6 +11,10 @@ return [
     'domain'          => env('UIPE_MAIL_DOMAIN', 'uipe.local'),
     'external_driver' => env('UIPE_MAIL_EXTERNAL_DRIVER', 'none'),
 
+    // إرسال خارجي عن طريق Brevo (UIPE_MAIL_EXTERNAL_DRIVER=brevo). FROM لازم يكون Sender/Domain متأكَّد في Brevo.
+    'external_from'     => env('UIPE_MAIL_EXTERNAL_FROM', ''),
+    'external_reply_to' => env('UIPE_MAIL_EXTERNAL_REPLY_TO', ''),
+
     'max_recipients'      => 50,
     'max_subject'         => 250,
     'max_body_kb'         => 512,
