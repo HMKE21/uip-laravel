@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\Mail\MailboxService;
+use App\Services\Mail\MailSettingsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -13,18 +14,18 @@ use Illuminate\Support\Facades\Storage;
  */
 class MailApiController extends Controller
 {
-    public function __construct(private MailboxService $mail)
+    public function __construct(protected MailboxService $mail, protected MailSettingsService $settings)
     {
     }
 
     /** الصندوق المطلوب: ?account_id= أو الهيدر X-Mail-Account (لازم يكون بتاع نفس المستخدم، وإلا 404). من غيرهم → الصندوق الافتراضي. */
-    private function accountOf(Request $r)
+    protected function accountOf(Request $r)
     {
         $want = (int) ($r->query('account_id') ?: $r->header('X-Mail-Account'));
         return $this->mail->accountFor((int) $r->attributes->get('uip_user_id'), $want ?: null);
     }
 
-    private function run(Request $request, callable $fn, int $okStatus = 200)
+    protected function run(Request $request, callable $fn, int $okStatus = 200)
     {
         try {
             $acc = $this->accountOf($request);
@@ -39,17 +40,24 @@ class MailApiController extends Controller
 
     public function account(Request $r)
     {
-        return $this->run($r, fn ($a) => ['account' => $this->mail->accountPayload($a), 'accounts' => $this->mail->accountsFor((int) $a->user_id),
-            'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a)]);
+        return $this->run($r, function ($a) {
+            $this->mail->processDue((int) $a->id);   // رسائل صندوقك اللي وقتها جه (مجدولة / Undo) تتسلّم حتى لو الـ scheduler واقف
+            $this->mail->wakeSnoozed((int) $a->id);  // المؤجّلات اللي وقتها جه ترجع للوارد
+            return ['account' => $this->mail->accountPayload($a), 'accounts' => $this->mail->accountsFor((int) $a->user_id),
+                'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a), 'settings' => $this->settings->settingsPayload($a)];
+        });
     }
 
     public function index(Request $r)
     {
-        return $this->run($r, fn ($a) => $this->mail->list($a, [
-            'folder' => (string) $r->query('folder', 'inbox'), 'label_id' => $r->query('label_id'), 'q' => (string) $r->query('q', ''),
-            'starred' => $r->boolean('starred'), 'unread' => $r->boolean('unread'), 'view' => (string) $r->query('view', 'messages'),
-            'page' => $r->query('page', 1), 'per_page' => $r->query('per_page'),
-        ]));
+        return $this->run($r, function ($a) use ($r) {
+            $this->mail->wakeSnoozed((int) $a->id);
+            return $this->mail->list($a, [
+                'folder' => (string) $r->query('folder', 'inbox'), 'label_id' => $r->query('label_id'), 'q' => (string) $r->query('q', ''),
+                'starred' => $r->boolean('starred'), 'unread' => $r->boolean('unread'), 'view' => (string) $r->query('view', 'messages'),
+                'page' => $r->query('page', 1), 'per_page' => $r->query('per_page'),
+            ]);
+        });
     }
 
     public function show(Request $r, int $id)
@@ -69,7 +77,10 @@ class MailApiController extends Controller
             'to' => 'nullable|array', 'cc' => 'nullable|array', 'bcc' => 'nullable|array',
             'to.*' => 'nullable', 'cc.*' => 'nullable', 'bcc.*' => 'nullable',
             'attachment_ids' => 'nullable|array', 'attachment_ids.*' => 'integer',
-            'in_reply_to_item_id' => 'nullable|integer', 'draft_id' => 'nullable|integer',
+            'in_reply_to_item_id' => 'nullable|integer', 'forward_of_item_id' => 'nullable|integer', 'draft_id' => 'nullable|integer',
+            'schedule_at' => 'nullable|date',
+            'confidential' => 'nullable|array', 'confidential.expires_days' => 'nullable|integer|min:1|max:365',
+            'confidential.passcode' => 'nullable|string|max:40', 'confidential.keep_passcode' => 'nullable|boolean',
         ];
     }
 
@@ -113,14 +124,40 @@ class MailApiController extends Controller
     public function bulk(Request $r)
     {
         $in = $r->validate(['ids' => 'nullable|array|max:200', 'ids.*' => 'integer', 'thread_ids' => 'nullable|array|max:200', 'thread_ids.*' => 'integer',
-            'action' => 'required|string|max:20', 'label_id' => 'nullable|integer']);
+            'action' => 'required|string|max:20', 'label_id' => 'nullable|integer', 'until' => 'nullable|date']);
         if (empty($in['ids']) && empty($in['thread_ids'])) {
             return $this->apiError('Select at least one message.', null, 422);
         }
         return $this->run($r, function ($a) use ($in) {
             $ids = array_merge($in['ids'] ?? [], $this->mail->itemIdsForThreads($a, $in['thread_ids'] ?? []));
-            return ['affected' => $this->mail->bulk($a, $ids, $in['action'], $in['label_id'] ?? null), 'folders' => $this->mail->folderCounts($a)];
+            return ['affected' => $this->mail->bulk($a, $ids, $in['action'], $in['label_id'] ?? null, $in['until'] ?? null), 'folders' => $this->mail->folderCounts($a)];
         });
+    }
+
+    /** POST /messages/{id}/release — فترة Undo خلصت: سلّم الرسالة دلوقتي (idempotent). */
+    public function release(Request $r, int $id)
+    {
+        return $this->run($r, fn ($a) => $this->mail->release($a, $id));
+    }
+
+    /** POST /messages/{id}/cancel-send — تراجع عن إرسال محجوز أو إلغاء رسالة مجدولة → بترجع مسودة. */
+    public function cancelSend(Request $r, int $id)
+    {
+        return $this->run($r, fn ($a) => $this->mail->cancelSend($a, $id));
+    }
+
+    /** POST /messages/{id}/unlock { passcode } — فتح رسالة سرية محمية بكلمة سر (30 دقيقة). */
+    public function unlock(Request $r, int $id)
+    {
+        $in = $r->validate(['passcode' => 'required|string|max:40']);
+        return $this->run($r, fn ($a) => $this->mail->unlock($a, $id, $in['passcode']));
+    }
+
+    /** POST /messages/{id}/revoke { revoke?: bool } — صاحب الرسالة السرية يسحب (أو يرجّع) صلاحية القراءة. */
+    public function revoke(Request $r, int $id)
+    {
+        $in = $r->validate(['revoke' => 'sometimes|boolean']);
+        return $this->run($r, fn ($a) => $this->mail->revoke($a, $id, $in['revoke'] ?? true));
     }
 
     public function destroy(Request $r, int $id)

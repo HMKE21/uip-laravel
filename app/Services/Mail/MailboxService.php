@@ -6,16 +6,20 @@ use App\Models\Mail\MailAccount;
 use App\Models\User;
 use App\Support\MailHtmlSanitizer;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
-/** UIPE Mail — المرحلة 1: حسابات، إرسال داخلي، مسودات، صناديق، تصنيفات، مرفقات. */
+/** UIPE Mail — المرحلة 1: حسابات، إرسال داخلي، مسودات، صناديق، تصنيفات، مرفقات. المرحلة 3: Snooze، جدولة، Undo Send، سرّي، فلاتر، رد تلقائي. */
 class MailboxService
 {
-    public const FOLDERS = ['inbox', 'sent', 'drafts', 'archive', 'spam', 'trash'];
+    public const FOLDERS = ['inbox', 'sent', 'drafts', 'scheduled', 'archive', 'spam', 'trash'];
 
-    public function __construct(private ExternalMailGateway $external)
+    public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters)
     {
     }
 
@@ -74,7 +78,7 @@ class MailboxService
     {
         $this->accountFor($userId); // يتأكد إن فيه صندوق واحد على الأقل (بيتنشأ أول مرة)
         $accs = MailAccount::where('user_id', $userId)->orderByDesc('is_default')->orderBy('id')->get();
-        $unread = DB::table('mail_items')->whereIn('account_id', $accs->pluck('id')->all())->where('folder', 'inbox')->where('is_read', 0)
+        $unread = DB::table('mail_items')->whereIn('account_id', $accs->pluck('id')->all())->where('folder', 'inbox')->where('is_read', 0)->whereNull('snoozed_until')
             ->groupBy('account_id')->selectRaw('account_id, COUNT(*) as c')->pluck('c', 'account_id');
         return $accs->map(fn ($a) => $this->accountPayload($a) + ['inbox_unread' => (int) ($unread[$a->id] ?? 0)])->values()->all();
     }
@@ -83,7 +87,7 @@ class MailboxService
 
     public function folderCounts(MailAccount $a): array
     {
-        $rows = DB::table('mail_items')->where('account_id', $a->id)
+        $rows = DB::table('mail_items')->where('account_id', $a->id)->whereNull('snoozed_until')
             ->selectRaw('folder, COUNT(*) as total, SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread')->groupBy('folder')->get()->keyBy('folder');
         $out = [];
         foreach (self::FOLDERS as $f) {
@@ -91,6 +95,7 @@ class MailboxService
             $out[$f] = ['total' => (int) ($r->total ?? 0), 'unread' => (int) ($r->unread ?? 0)];
         }
         $out['starred'] = ['total' => (int) DB::table('mail_items')->where('account_id', $a->id)->where('is_starred', 1)->whereNotIn('folder', ['trash', 'spam'])->count(), 'unread' => 0];
+        $out['snoozed'] = ['total' => (int) DB::table('mail_items')->where('account_id', $a->id)->where('folder', 'inbox')->whereNotNull('snoozed_until')->count(), 'unread' => 0];
         return $out;
     }
 
@@ -103,18 +108,24 @@ class MailboxService
         $page = max(1, (int) ($f['page'] ?? 1));
         $folder = $f['folder'] ?? 'inbox';
         $starredView = $folder === 'starred' || !empty($f['starred']);
+        $snoozedView = !$starredView && $folder === 'snoozed';
         // 'all' = كل البريد ما عدا السلة والمزعج — مسموح بس مع label_id أو بحث (q)، عشان تصنيف/بحث يعدّي على كل الصناديق.
         $allView = !$starredView && $folder === 'all' && (!empty($f['label_id']) || trim((string) ($f['q'] ?? '')) !== '');
-        if (!$starredView && !$allView && !in_array($folder, self::FOLDERS, true)) {
+        if (!$starredView && !$allView && !$snoozedView && !in_array($folder, self::FOLDERS, true)) {
             $this->fail('Unknown folder.');
         }
-        $scope = function ($qq, string $p) use ($starredView, $allView, $folder) {
+        $scope = function ($qq, string $p) use ($starredView, $allView, $snoozedView, $folder) {
             if ($starredView) {
-                $qq->where("{$p}.is_starred", 1)->whereNotIn("{$p}.folder", ['trash', 'spam']);
+                $qq->where("{$p}.is_starred", 1)->whereNotIn("{$p}.folder", ['trash', 'spam', 'outbox']);
             } elseif ($allView) {
-                $qq->whereNotIn("{$p}.folder", ['trash', 'spam']);
+                $qq->whereNotIn("{$p}.folder", ['trash', 'spam', 'outbox']);
+            } elseif ($snoozedView) {
+                $qq->where("{$p}.folder", 'inbox')->whereNotNull("{$p}.snoozed_until");
             } else {
                 $qq->where("{$p}.folder", $folder);
+                if ($folder === 'inbox') { // المؤجّل مش بيظهر في الوارد لحد ما يصحى
+                    $qq->whereNull("{$p}.snoozed_until");
+                }
             }
         };
 
@@ -131,7 +142,11 @@ class MailboxService
         if ($term !== '') {
             $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
             $q->where(function ($w) use ($like) {
-                $w->where('m.subject', 'like', $like)->orWhere('m.body_text', 'like', $like)->orWhere('s.address', 'like', $like)->orWhere('s.display_name', 'like', $like)
+                // نص الرسائل السرية اللي وصلتك مش بيتبحث فيه
+                $w->where('m.subject', 'like', $like)
+                    ->orWhere(fn ($x) => $x->where('m.body_text', 'like', $like)->where(fn ($y) => $y->where('m.confidential', 0)->orWhereColumn('m.sender_account_id', 'i.account_id')))
+                    ->orWhere('s.address', 'like', $like)->orWhere('s.display_name', 'like', $like)
+                    ->orWhere('m.ext_from_address', 'like', $like)->orWhere('m.ext_from_name', 'like', $like)
                     ->orWhereExists(fn ($s) => $s->select(DB::raw(1))->from('mail_recipients as r')->whereColumn('r.message_id', 'm.id')->where('r.kind', '!=', 'bcc')->where(fn ($x) => $x->where('r.address', 'like', $like)->orWhere('r.name', 'like', $like)));
             });
         }
@@ -144,8 +159,10 @@ class MailboxService
         }
 
         $total = (clone $q)->count();
-        $rows = $q->orderByDesc('i.sort_at')->orderByDesc('i.id')->forPage($page, $per)
-            ->get(['i.id', 'i.folder', 'i.is_read', 'i.is_starred', 'i.sort_at', 'm.id as message_id', 'm.thread_id', 'm.subject', 'm.snippet', 'm.is_draft',
+        $q = $snoozedView ? $q->orderBy('i.snoozed_until')->orderBy('i.id') : $q->orderByDesc('i.sort_at')->orderByDesc('i.id');
+        $rows = $q->forPage($page, $per)
+            ->get(['i.id', 'i.folder', 'i.is_read', 'i.is_starred', 'i.sort_at', 'i.snoozed_until', 'm.id as message_id', 'm.thread_id', 'm.subject', 'm.snippet', 'm.is_draft',
+                'm.send_state', 'm.scheduled_at', 'm.schedule_error', 'm.confidential', 'm.sender_account_id', 'm.ext_from_address', 'm.ext_from_name',
                 's.address as from_address', 's.display_name as from_name']);
 
         $ids = $rows->pluck('id')->all();
@@ -159,16 +176,28 @@ class MailboxService
         $recipients = DB::table('mail_recipients')->whereIn('message_id', $rows->pluck('message_id')->all() ?: [0])->where('kind', 'to')->get(['message_id', 'address', 'name'])->groupBy('message_id');
 
         return [
-            'items' => $rows->map(fn ($r) => [
-                'id' => (int) $r->id, 'message_id' => (int) $r->message_id, 'thread_id' => (int) $r->thread_id, 'folder' => $r->folder,
-                'subject' => $r->subject, 'snippet' => $r->snippet, 'is_read' => (bool) $r->is_read, 'is_starred' => (bool) $r->is_starred, 'is_draft' => (bool) $r->is_draft,
-                'date' => $r->sort_at, 'from' => ['address' => $r->from_address, 'name' => $r->from_name],
-                'to' => ($recipients[$r->message_id] ?? collect())->map(fn ($x) => ['address' => $x->address, 'name' => $x->name])->values(),
-                'has_attachments' => ($atts[$r->message_id] ?? 0) > 0, 'thread_count' => $threads ? (int) ($counts[$r->thread_id] ?? 1) : null,
-                'labels' => $labels[$r->id] ?? [],
-            ])->values(),
+            'items' => $rows->map(function ($r) use ($a, $recipients, $atts, $threads, $counts, $labels) {
+                $hide = $r->confidential && (int) $r->sender_account_id !== (int) $a->id; // السرية: مفيش snippet في القائمة
+                $ext = (string) $r->ext_from_address;
+                return [
+                    'id' => (int) $r->id, 'message_id' => (int) $r->message_id, 'thread_id' => (int) $r->thread_id, 'folder' => $r->folder,
+                    'subject' => $r->subject, 'snippet' => $hide ? null : $r->snippet, 'is_read' => (bool) $r->is_read, 'is_starred' => (bool) $r->is_starred, 'is_draft' => (bool) $r->is_draft,
+                    'send_state' => $r->send_state, 'scheduled_at' => self::iso($r->scheduled_at), 'schedule_error' => $r->schedule_error,
+                    'snoozed_until' => self::iso($r->snoozed_until), 'confidential' => (bool) $r->confidential,
+                    'date' => self::iso($r->sort_at), 'from' => ['address' => $ext !== '' ? $ext : $r->from_address, 'name' => $ext !== '' ? $r->ext_from_name : $r->from_name],
+                    'to' => ($recipients[$r->message_id] ?? collect())->map(fn ($x) => ['address' => $x->address, 'name' => $x->name])->values(),
+                    'has_attachments' => ($atts[$r->message_id] ?? 0) > 0, 'thread_count' => $threads ? (int) ($counts[$r->thread_id] ?? 1) : null,
+                    'labels' => $labels[$r->id] ?? [],
+                ];
+            })->values(),
             'meta' => ['total' => $total, 'page' => $page, 'per_page' => $per, 'pages' => (int) ceil($total / $per)],
         ];
+    }
+
+    /** تاريخ UTC من الداتابيز → ISO-8601 بالـ offset (الفرونت بيحوّله لتوقيت جهاز المستخدم صح). */
+    private static function iso($v): ?string
+    {
+        return $v ? Carbon::parse($v, 'UTC')->toIso8601String() : null;
     }
 
     private function labelsForItems(array $itemIds): array
@@ -215,6 +244,29 @@ class MailboxService
         return $items->map(fn ($it) => $this->payload($a, $it))->values()->all();
     }
 
+    /** حالة قفل الرسالة السرية عند المستلم: null (مفتوحة) | revoked | expired | passcode. صاحب الرسالة دايمًا مفتوحة. */
+    private function confLock(object $m, object $it, MailAccount $a): ?string
+    {
+        if (!$m->confidential || (int) $m->sender_account_id === (int) $a->id) {
+            return null;
+        }
+        if ($m->conf_revoked_at) {
+            return 'revoked';
+        }
+        if ($m->conf_expires_at && now()->gte(Carbon::parse($m->conf_expires_at, 'UTC'))) {
+            return 'expired';
+        }
+        if ($m->conf_passcode && !Cache::has($this->unlockKey((int) $it->id))) {
+            return 'passcode';
+        }
+        return null;
+    }
+
+    private function unlockKey(int $itemId): string
+    {
+        return 'mailconf:unlock:' . $itemId;
+    }
+
     private function payload(MailAccount $a, object $it): array
     {
         $m = DB::table('mail_messages')->where('id', $it->message_id)->first();
@@ -223,14 +275,23 @@ class MailboxService
         $rc = DB::table('mail_recipients')->where('message_id', $m->id)->orderBy('id')->get()
             ->filter(fn ($r) => $r->kind !== 'bcc' || $isSender || (int) $r->account_id === (int) $a->id); // Bcc بيظهر للمرسل وصاحب الـ Bcc بس
         $labels = $this->labelsForItems([$it->id])[$it->id] ?? [];
-        $atts = DB::table('mail_attachments')->where('message_id', $m->id)->get(['id', 'name', 'mime', 'size'])
+        $lock = $this->confLock($m, $it, $a);
+        $atts = $lock ? collect() : DB::table('mail_attachments')->where('message_id', $m->id)->get(['id', 'name', 'mime', 'size'])
             ->map(fn ($x) => ['id' => (int) $x->id, 'name' => $x->name, 'mime' => $x->mime, 'size' => (int) $x->size])->values();
+        $ext = (string) $m->ext_from_address;
+        $conf = null;
+        if ($m->confidential) {
+            $conf = ['on' => true, 'mine' => $isSender, 'locked' => $lock, 'passcode' => (bool) $m->conf_passcode, 'expires_days' => $m->conf_days ? (int) $m->conf_days : null,
+                'expires_at' => self::iso($m->conf_expires_at), 'revoked' => (bool) $m->conf_revoked_at];
+        }
         return [
             'id' => (int) $it->id, 'message_id' => (int) $m->id, 'thread_id' => (int) $m->thread_id, 'folder' => $it->folder,
-            'subject' => $m->subject, 'body_html' => $m->body_html, 'body_text' => $m->body_text, 'is_draft' => (bool) $m->is_draft,
-            'is_read' => (bool) $it->is_read, 'is_starred' => (bool) $it->is_starred, 'date' => $it->sort_at,
+            'subject' => $m->subject, 'body_html' => $lock ? null : $m->body_html, 'body_text' => $lock ? null : $m->body_text, 'is_draft' => (bool) $m->is_draft,
+            'send_state' => $m->send_state, 'scheduled_at' => self::iso($m->scheduled_at), 'schedule_error' => $m->schedule_error,
+            'snoozed_until' => self::iso($it->snoozed_until ?? null), 'is_auto' => (bool) $m->is_auto, 'is_imported' => (bool) $m->is_imported, 'confidential' => $conf,
+            'is_read' => (bool) $it->is_read, 'is_starred' => (bool) $it->is_starred, 'date' => self::iso($it->sort_at),
             'in_reply_to_message_id' => $m->in_reply_to_message_id ? (int) $m->in_reply_to_message_id : null,
-            'from' => ['address' => $sender->address ?? '', 'name' => $sender->display_name ?? null],
+            'from' => $ext !== '' ? ['address' => $ext, 'name' => $m->ext_from_name] : ['address' => $sender->address ?? '', 'name' => $sender->display_name ?? null],
             'to' => $rc->where('kind', 'to')->map(fn ($r) => ['address' => $r->address, 'name' => $r->name])->values(),
             'cc' => $rc->where('kind', 'cc')->map(fn ($r) => ['address' => $r->address, 'name' => $r->name])->values(),
             'bcc' => $rc->where('kind', 'bcc')->map(fn ($r) => ['address' => $r->address, 'name' => $r->name])->values(),
@@ -281,7 +342,7 @@ class MailboxService
         return $out;
     }
 
-    private function normSubject(string $s): string
+    public function normSubject(string $s): string
     {
         $s = trim($s);
         while (preg_match('/^(re|fw|fwd|رد|إعادة توجيه|اعادة توجيه)\s*:\s*/iu', $s)) {
@@ -290,9 +351,40 @@ class MailboxService
         return Str::limit(mb_strtolower($s), 240, '');
     }
 
-    /** @param array $in subject, body, to/cc/bcc, attachment_ids, in_reply_to_item_id */
-    private function writeMessage(MailAccount $a, array $in, bool $send, ?int $draftMessageId): int
+    /** حقول الرسالة السرية للتخزين. [] = المفتاح مش مبعوت (سيب القديم زي ما هو). */
+    private function confidentialFields(array $in, bool $send, array $recipients): array
     {
+        if (!array_key_exists('confidential', $in)) {
+            return [];
+        }
+        $c = $in['confidential'];
+        if (!is_array($c)) {
+            return ['confidential' => 0, 'conf_days' => null, 'conf_passcode' => null, 'conf_expires_at' => null, 'conf_revoked_at' => null];
+        }
+        if ($send && array_filter($recipients, fn ($r) => empty($r['account_id']))) {
+            $this->fail('Confidential mode works only for UIPE addresses.');
+        }
+        $days = (int) ($c['expires_days'] ?? 0);
+        $out = ['confidential' => 1, 'conf_days' => $days > 0 ? min(365, $days) : null, 'conf_expires_at' => null, 'conf_revoked_at' => null];
+        $pass = trim((string) ($c['passcode'] ?? ''));
+        if ($pass !== '') {
+            if (mb_strlen($pass) < 4) {
+                $this->fail('The passcode must be at least 4 characters.');
+            }
+            $out['conf_passcode'] = Hash::make($pass);
+        } elseif (empty($c['keep_passcode'])) {
+            $out['conf_passcode'] = null;
+        }
+        return $out;
+    }
+
+    /**
+     * @param array $in subject, body, to/cc/bcc, attachment_ids, in_reply_to_item_id, forward_of_item_id, confidential
+     * @param string $mode draft | send | scheduled | undo   ($holdAt = وقت التسليم لـ scheduled / undo — المسودة بتفضل مسودة لحد وقتها)
+     */
+    private function writeMessage(MailAccount $a, array $in, string $mode, ?int $draftMessageId, ?Carbon $holdAt = null): int
+    {
+        $send = $mode !== 'draft';
         $subject = Str::limit(trim((string) ($in['subject'] ?? '')), (int) config('mailbox.max_subject', 250), '');
         $rawBody = (string) ($in['body'] ?? '');
         if (strlen($rawBody) > (int) config('mailbox.max_body_kb', 512) * 1024) {
@@ -304,6 +396,7 @@ class MailboxService
             $this->fail('Write a subject or a message first.');
         }
         $recipients = $this->resolveRecipients($in, $send);
+        $conf = $this->confidentialFields($in, $send, $recipients);
 
         $replyTo = null; $threadId = null;
         if (!empty($in['in_reply_to_item_id'])) {
@@ -311,8 +404,15 @@ class MailboxService
             $replyTo = (int) $orig->message_id;
             $threadId = (int) DB::table('mail_messages')->where('id', $replyTo)->value('thread_id');
         }
+        if (!empty($in['forward_of_item_id'])) { // الرسالة السرية اللي وصلتك مينفعش تتحوّل
+            $fw = $this->ownItem($a, (int) $in['forward_of_item_id']);
+            $fm = DB::table('mail_messages')->where('id', $fw->message_id)->first(['confidential', 'sender_account_id']);
+            if ($fm && $fm->confidential && (int) $fm->sender_account_id !== (int) $a->id) {
+                $this->fail('Confidential messages cannot be forwarded.', 403);
+            }
+        }
 
-        return DB::transaction(function () use ($a, $in, $send, $draftMessageId, $subject, $html, $text, $recipients, $replyTo, $threadId) {
+        return DB::transaction(function () use ($a, $in, $mode, $holdAt, $draftMessageId, $subject, $html, $text, $recipients, $replyTo, $threadId, $conf) {
             $now = now();
             $fields = ['subject' => $subject, 'body_html' => $html, 'body_text' => $text, 'snippet' => Str::limit($text, 180, ''), 'updated_at' => $now];
             if ($draftMessageId) {
@@ -321,14 +421,14 @@ class MailboxService
                     $this->fail('Draft not found.', 404);
                 }
                 $mid = (int) $msg->id;
-                DB::table('mail_messages')->where('id', $mid)->update($fields);
+                DB::table('mail_messages')->where('id', $mid)->update($fields + $conf);
                 DB::table('mail_recipients')->where('message_id', $mid)->delete();
                 $threadId = (int) $msg->thread_id;
             } else {
                 if (!$threadId) {
                     $threadId = DB::table('mail_threads')->insertGetId(['subject_norm' => $this->normSubject($subject), 'created_at' => $now, 'updated_at' => $now]);
                 }
-                $mid = DB::table('mail_messages')->insertGetId($fields + ['thread_id' => $threadId, 'sender_account_id' => $a->id, 'in_reply_to_message_id' => $replyTo, 'is_draft' => 1, 'created_at' => $now]);
+                $mid = DB::table('mail_messages')->insertGetId($fields + $conf + ['thread_id' => $threadId, 'sender_account_id' => $a->id, 'in_reply_to_message_id' => $replyTo, 'is_draft' => 1, 'created_at' => $now]);
             }
             if ($recipients) {
                 DB::table('mail_recipients')->insert(array_map(fn ($r) => $r + ['message_id' => $mid], $recipients));
@@ -348,7 +448,7 @@ class MailboxService
                 DB::table('mail_attachments')->whereIn('id', $ok)->update(['message_id' => $mid]);
             }
 
-            if (!$send) {
+            if ($mode === 'draft') {
                 $exists = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $mid)->exists();
                 if (!$exists) {
                     DB::table('mail_items')->insert(['account_id' => $a->id, 'message_id' => $mid, 'folder' => 'drafts', 'is_read' => 1, 'sort_at' => $now, 'created_at' => $now, 'updated_at' => $now]);
@@ -358,20 +458,106 @@ class MailboxService
                 return $mid;
             }
 
-            // إرسال: المسودة تتحوّل لرسالة مرسلة + نسخة لكل مستلم داخلي.
-            DB::table('mail_messages')->where('id', $mid)->update(['is_draft' => 0, 'sent_at' => $now]);
-            DB::table('mail_threads')->where('id', $threadId)->update(['updated_at' => $now]);
-            DB::table('mail_items')->updateOrInsert(['account_id' => $a->id, 'message_id' => $mid],
-                ['folder' => 'sent', 'prev_folder' => null, 'is_read' => 1, 'sort_at' => $now, 'updated_at' => $now, 'created_at' => $now]);
-            foreach (collect($recipients)->whereNotNull('account_id')->pluck('account_id')->unique() as $accId) {
-                if ((int) $accId === (int) $a->id) { // بعت لنفسه: نسخة وارد كمان
-                    DB::table('mail_items')->insert(['account_id' => $accId, 'message_id' => $mid, 'folder' => 'inbox', 'is_read' => 0, 'sort_at' => $now, 'created_at' => $now, 'updated_at' => $now]);
-                    continue;
-                }
-                DB::table('mail_items')->insert(['account_id' => $accId, 'message_id' => $mid, 'folder' => 'inbox', 'is_read' => 0, 'sort_at' => $now, 'created_at' => $now, 'updated_at' => $now]);
+            if ($mode === 'send') {
+                $this->deliver($mid);
+                return $mid;
             }
+
+            // scheduled | undo: بنسيبها مسودة بحالة انتظار، والتسليم بيحصل لما الوقت يجي (release / schedule:run).
+            DB::table('mail_messages')->where('id', $mid)->update(['send_state' => $mode, 'scheduled_at' => $holdAt, 'schedule_error' => null, 'updated_at' => $now]);
+            DB::table('mail_items')->updateOrInsert(['account_id' => $a->id, 'message_id' => $mid],
+                ['folder' => $mode === 'scheduled' ? 'scheduled' : 'outbox', 'prev_folder' => null, 'is_read' => 1, 'sort_at' => $holdAt, 'updated_at' => $now, 'created_at' => $now]);
             return $mid;
         });
+    }
+
+    /**
+     * التسليم الفعلي: المسودة تتحوّل لرسالة مرسلة + نسخة لكل مستلم داخلي (بعد تطبيق فلاتره) + الرد التلقائي لو مفعّل.
+     * لازم يتنادى جوه transaction. آمن لو اتنادى مرتين (التاني بيتجاهل).
+     */
+    private function deliver(int $mid): void
+    {
+        $msg = DB::table('mail_messages')->where('id', $mid)->lockForUpdate()->first();
+        if (!$msg || !$msg->is_draft) {
+            return;
+        }
+        $now = now();
+        $upd = ['is_draft' => 0, 'sent_at' => $now, 'send_state' => null, 'scheduled_at' => null, 'schedule_error' => null, 'updated_at' => $now];
+        if ($msg->confidential && $msg->conf_days) {
+            $upd['conf_expires_at'] = $now->copy()->addDays((int) $msg->conf_days);
+        }
+        DB::table('mail_messages')->where('id', $mid)->update($upd);
+        DB::table('mail_threads')->where('id', $msg->thread_id)->update(['updated_at' => $now]);
+        $senderId = (int) $msg->sender_account_id;
+        if (!$msg->is_auto) {
+            DB::table('mail_items')->updateOrInsert(['account_id' => $senderId, 'message_id' => $mid],
+                ['folder' => 'sent', 'prev_folder' => null, 'is_read' => 1, 'sort_at' => $now, 'snoozed_until' => null, 'updated_at' => $now, 'created_at' => $now]);
+        }
+
+        $recips = DB::table('mail_recipients')->where('message_id', $mid)->get();
+        $accIds = $recips->whereNotNull('account_id')->pluck('account_id')->map(fn ($x) => (int) $x)->unique()->values();
+        if ($accIds->isEmpty()) {
+            return;
+        }
+        $active = MailAccount::whereIn('id', $accIds->all())->where('status', 'active')->pluck('id')->map(fn ($x) => (int) $x)->all();
+        $sender = DB::table('mail_accounts')->where('id', $senderId)->first(['address', 'display_name']);
+        $hasAtt = DB::table('mail_attachments')->where('message_id', $mid)->exists();
+        $visibleTo = $recips->where('kind', '!=', 'bcc')->pluck('address')->all();
+
+        foreach ($accIds as $accId) {
+            if (!in_array($accId, $active, true)) {
+                continue;
+            }
+            $fx = $this->filters->evaluate($accId, ['from' => (string) ($sender->address ?? ''), 'from_name' => (string) ($sender->display_name ?? ''), 'to' => $visibleTo,
+                'subject' => (string) $msg->subject, 'text' => (string) $msg->body_text, 'has_attachment' => $hasAtt]);
+            $trash = $fx['folder'] === 'trash';
+            $itemId = DB::table('mail_items')->insertGetId(['account_id' => $accId, 'message_id' => $mid, 'folder' => $fx['folder'], 'prev_folder' => $trash ? 'inbox' : null,
+                'is_read' => $fx['read'] ? 1 : 0, 'is_starred' => $fx['star'] ? 1 : 0, 'sort_at' => $now, 'trashed_at' => $trash ? $now : null, 'created_at' => $now, 'updated_at' => $now]);
+            foreach ($fx['labels'] as $lid) {
+                DB::table('mail_item_labels')->insertOrIgnore(['item_id' => $itemId, 'label_id' => $lid]);
+            }
+        }
+
+        if (!$msg->is_auto && $sender) {
+            foreach ($recips->whereIn('kind', ['to', 'cc'])->whereNotNull('account_id')->pluck('account_id')->map(fn ($x) => (int) $x)->unique() as $accId) {
+                if ($accId !== $senderId && in_array($accId, $active, true)) {
+                    $this->vacationReply($accId, $msg, (string) $sender->address);
+                }
+            }
+        }
+    }
+
+    /** رد تلقائي واحد لكل مرسل كل 4 أيام (وما بيردش على رسائل تلقائية أو no-reply). */
+    private function vacationReply(int $accId, object $msg, string $senderAddress): void
+    {
+        $v = DB::table('mail_vacation')->where('account_id', $accId)->first();
+        if (!$v || !$v->enabled) {
+            return;
+        }
+        $now = now();
+        if (($v->starts_at && $now->lt(Carbon::parse($v->starts_at, 'UTC'))) || ($v->ends_at && $now->gt(Carbon::parse($v->ends_at, 'UTC')))) {
+            return;
+        }
+        if (preg_match('/^(no-?reply|do-?not-?reply|mailer-daemon|postmaster)@/i', $senderAddress)) {
+            return;
+        }
+        $addr = strtolower($senderAddress);
+        if (DB::table('mail_vacation_log')->where('account_id', $accId)->where('sender_address', $addr)->where('replied_at', '>', $now->copy()->subDays(4))->exists()) {
+            return;
+        }
+        $toAcc = MailAccount::find($msg->sender_account_id);
+        if (!$toAcc || $toAcc->status !== 'active') {
+            return;
+        }
+        $subject = trim((string) $v->subject) !== '' ? (string) $v->subject : 'Re: ' . $msg->subject;
+        $html = (string) $v->body_html;
+        $text = trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags(str_replace(['<br>', '</p>', '</div>'], ' ', $html)), ENT_QUOTES, 'UTF-8')));
+        $mid = DB::table('mail_messages')->insertGetId(['thread_id' => $msg->thread_id, 'sender_account_id' => $accId, 'subject' => Str::limit($subject, 250, ''),
+            'body_html' => $html, 'body_text' => $text, 'snippet' => Str::limit($text, 180, ''), 'in_reply_to_message_id' => $msg->id, 'is_draft' => 1, 'is_auto' => 1,
+            'created_at' => $now, 'updated_at' => $now]);
+        DB::table('mail_recipients')->insert(['message_id' => $mid, 'kind' => 'to', 'address' => $toAcc->address, 'name' => $toAcc->display_name, 'account_id' => $toAcc->id]);
+        DB::table('mail_vacation_log')->insert(['account_id' => $accId, 'sender_address' => $addr, 'replied_at' => $now]);
+        $this->deliver($mid);
     }
 
     public function saveDraft(MailAccount $a, array $in, ?int $itemId = null): array
@@ -384,11 +570,37 @@ class MailboxService
             }
             $mid = (int) $it->message_id;
         }
-        $mid = $this->writeMessage($a, $in, false, $mid);
+        $mid = $this->writeMessage($a, $in, 'draft', $mid);
         $item = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $mid)->first();
         return $this->payload($a, $item);
     }
 
+    private function undoSeconds(MailAccount $a): int
+    {
+        $v = DB::table('mail_settings')->where('account_id', $a->id)->value('undo_seconds');
+        return $v === null ? 10 : max(0, min(30, (int) $v));
+    }
+
+    private function parseFuture(?string $v): Carbon
+    {
+        try {
+            $d = Carbon::parse((string) $v)->setTimezone('UTC');
+        } catch (\Throwable $e) {
+            $this->fail('Pick a valid time.');
+        }
+        if ($d->lt(now()->addSeconds(30))) {
+            $this->fail('Pick a time in the future.');
+        }
+        if ($d->gt(now()->addYear())) {
+            $this->fail('You can pick a date up to one year ahead.');
+        }
+        return $d;
+    }
+
+    /**
+     * إرسال. من غير schedule_at: لو إعداد Undo Send > 0 الرسالة بتتحجز (send_state=undo) لحد ما الفرونت يعمل release أو الوقت يعدّي،
+     * وفي الفترة دي تقدر تتراجع (cancelSend). مع schedule_at: بتتجدول (send_state=scheduled) وبتتسلّم من schedule:run.
+     */
     public function send(MailAccount $a, array $in, ?int $draftItemId = null): array
     {
         if ($a->status !== 'active') {
@@ -402,9 +614,147 @@ class MailboxService
             }
             $mid = (int) $it->message_id;
         }
-        $mid = $this->writeMessage($a, $in, true, $mid);
-        $item = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $mid)->where('folder', 'sent')->first();
+        $mode = 'send'; $holdAt = null;
+        if (!empty($in['schedule_at'])) {
+            $holdAt = $this->parseFuture((string) $in['schedule_at']);
+            $mode = 'scheduled';
+        } elseif (($undo = $this->undoSeconds($a)) > 0) {
+            $mode = 'undo';
+            $holdAt = now()->addSeconds($undo);
+        }
+        $mid = $this->writeMessage($a, $in, $mode, $mid, $holdAt);
+        $q = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $mid);
+        $item = $mode === 'send' ? $q->where('folder', 'sent')->first() : $q->whereIn('folder', ['scheduled', 'outbox'])->first();
         return $this->payload($a, $item);
+    }
+
+    /** إلغاء إرسال مجدول أو التراجع عن إرسال لسه محجوز → بترجع مسودة. 409 لو الرسالة اتسلّمت خلاص. */
+    public function cancelSend(MailAccount $a, int $itemId): array
+    {
+        $it = $this->ownItem($a, $itemId);
+        DB::transaction(function () use ($a, $it) {
+            $m = DB::table('mail_messages')->where('id', $it->message_id)->where('sender_account_id', $a->id)->lockForUpdate()->first();
+            if (!$m) {
+                $this->fail('Message not found.', 404);
+            }
+            if (!$m->is_draft || !$m->send_state) {
+                $this->fail('Too late — the message was already sent.', 409);
+            }
+            $now = now();
+            DB::table('mail_messages')->where('id', $m->id)->update(['send_state' => null, 'scheduled_at' => null, 'schedule_error' => null, 'updated_at' => $now]);
+            DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $m->id)->whereIn('folder', ['scheduled', 'outbox'])
+                ->update(['folder' => 'drafts', 'sort_at' => $now, 'updated_at' => $now]);
+        });
+        $item = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $it->message_id)->where('folder', 'drafts')->first();
+        return $this->payload($a, $item);
+    }
+
+    /** الفرونت بينادي عليها لما فترة Undo تخلص (idempotent: لو اتسلّمت أو اتلغت مفيش حاجة بتحصل). */
+    public function release(MailAccount $a, int $itemId): array
+    {
+        $it = $this->ownItem($a, $itemId);
+        DB::transaction(function () use ($a, $it) {
+            $m = DB::table('mail_messages')->where('id', $it->message_id)->where('sender_account_id', $a->id)->lockForUpdate()->first();
+            if (!$m || !$m->is_draft || $m->send_state !== 'undo') {
+                return;
+            }
+            if ($m->scheduled_at && Carbon::parse($m->scheduled_at, 'UTC')->gt(now()->addSeconds(3))) {
+                $this->fail('Not yet.', 409);
+            }
+            $this->recheck($m);
+            $this->deliver((int) $m->id);
+        });
+        $item = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $it->message_id)->orderBy('id')->first();
+        return $this->payload($a, $item);
+    }
+
+    private function recheck(object $m): void
+    {
+        $sender = MailAccount::find($m->sender_account_id);
+        if (!$sender || $sender->status !== 'active') {
+            $this->fail('Your mailbox is suspended.', 403);
+        }
+        $bad = DB::table('mail_recipients as r')->join('mail_accounts as x', 'x.id', '=', 'r.account_id')->where('r.message_id', $m->id)->where('x.status', '!=', 'active')->value('r.address');
+        if ($bad) {
+            $this->fail("{$bad} is suspended.");
+        }
+    }
+
+    /** بيسلّم كل اللي وقته جه (مجدول أو Undo خلصت مدته). $accountId = تسليم رسائل صندوق واحد بس (استدعاء كسول من الـ API). */
+    public function processDue(?int $accountId = null, int $limit = 200): array
+    {
+        $q = DB::table('mail_messages')->where('is_draft', 1)->whereIn('send_state', ['scheduled', 'undo'])->where('scheduled_at', '<=', now());
+        if ($accountId) {
+            $q->where('sender_account_id', $accountId);
+        }
+        $sent = 0; $failed = 0;
+        foreach ($q->orderBy('scheduled_at')->limit($limit)->pluck('id') as $id) {
+            try {
+                DB::transaction(function () use ($id) {
+                    $m = DB::table('mail_messages')->where('id', $id)->lockForUpdate()->first();
+                    if (!$m || !$m->is_draft || !$m->send_state) {
+                        return;
+                    }
+                    $this->recheck($m);
+                    $this->deliver((int) $id);
+                });
+                $sent++;
+            } catch (\Throwable $e) { // فشل التسليم → ترجع مسودة ومعاها سبب الفشل
+                $failed++;
+                $now = now();
+                $err = $e instanceof \DomainException ? $e->getMessage() : 'Delivery failed.';
+                DB::table('mail_messages')->where('id', $id)->where('is_draft', 1)->update(['send_state' => null, 'scheduled_at' => null, 'schedule_error' => Str::limit($err, 190, ''), 'updated_at' => $now]);
+                DB::table('mail_items')->where('message_id', $id)->whereIn('folder', ['scheduled', 'outbox'])->update(['folder' => 'drafts', 'sort_at' => $now, 'updated_at' => $now]);
+                if (!$e instanceof \DomainException) {
+                    report($e);
+                }
+            }
+        }
+        return ['sent' => $sent, 'failed' => $failed];
+    }
+
+    /** المؤجّلات اللي وقتها جه ترجع للوارد كغير مقروءة. */
+    public function wakeSnoozed(?int $accountId = null): int
+    {
+        $q = DB::table('mail_items')->whereNotNull('snoozed_until')->where('snoozed_until', '<=', now());
+        if ($accountId) {
+            $q->where('account_id', $accountId);
+        }
+        return $q->update(['snoozed_until' => null, 'is_read' => 0, 'sort_at' => now(), 'updated_at' => now()]);
+    }
+
+    /* ------------------------------------------------------------------ confidential mode */
+
+    public function unlock(MailAccount $a, int $itemId, string $pass): array
+    {
+        $it = $this->ownItem($a, $itemId);
+        $m = DB::table('mail_messages')->where('id', $it->message_id)->first();
+        if (!$m || !$m->confidential || !$m->conf_passcode) {
+            return $this->payload($a, $it);
+        }
+        $key = "mailconf:{$a->id}:{$itemId}";
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            $this->fail('Too many attempts. Try again in a few minutes.', 429);
+        }
+        if (!Hash::check($pass, (string) $m->conf_passcode)) {
+            RateLimiter::hit($key, 300);
+            $this->fail('Wrong passcode.');
+        }
+        RateLimiter::clear($key);
+        Cache::put($this->unlockKey($itemId), 1, now()->addMinutes(30));
+        return $this->payload($a, $it);
+    }
+
+    /** صاحب الرسالة السرية يسحب صلاحية القراءة (أو يرجّعها). */
+    public function revoke(MailAccount $a, int $itemId, bool $revoke = true): array
+    {
+        $it = $this->ownItem($a, $itemId);
+        $mine = DB::table('mail_messages')->where('id', $it->message_id)->where('sender_account_id', $a->id)->where('confidential', 1)->exists();
+        if (!$mine) {
+            $this->fail('This is not a confidential message you sent.', 404);
+        }
+        DB::table('mail_messages')->where('id', $it->message_id)->update(['conf_revoked_at' => $revoke ? now() : null, 'updated_at' => now()]);
+        return $this->payload($a, $it);
     }
 
     /* ------------------------------------------------------------------ actions */
@@ -422,9 +772,9 @@ class MailboxService
 
     /**
      * @param int[] $itemIds
-     * @param string $action read|unread|star|unstar|archive|inbox|spam|not_spam|trash|restore|delete_forever|label_add|label_remove
+     * @param string $action read|unread|star|unstar|archive|inbox|spam|not_spam|trash|restore|delete_forever|label_add|label_remove|snooze|unsnooze|cancel_send
      */
-    public function bulk(MailAccount $a, array $itemIds, string $action, ?int $labelId = null): int
+    public function bulk(MailAccount $a, array $itemIds, string $action, ?int $labelId = null, ?string $until = null): int
     {
         $ids = DB::table('mail_items')->where('account_id', $a->id)->whereIn('id', array_map('intval', $itemIds) ?: [0])->pluck('id')->all();
         if (!$ids) {
@@ -441,13 +791,27 @@ class MailboxService
             case 'inbox': case 'not_spam':
                 $q()->whereIn('folder', ['archive', 'spam'])->update(['folder' => 'inbox', 'updated_at' => $now]); break;
             case 'spam': $q()->where('folder', 'inbox')->update(['folder' => 'spam', 'updated_at' => $now]); break;
-            case 'trash':
-                $q()->where('folder', '!=', 'trash')->update(['prev_folder' => DB::raw('folder'), 'folder' => 'trash', 'trashed_at' => $now, 'updated_at' => $now]); break;
+            case 'trash': // المجدولة/المحجوزة لازم تتلغي الأول (cancel_send) عشان ما تتسلّمش وهي في السلة
+                $q()->whereNotIn('folder', ['trash', 'scheduled', 'outbox'])->update(['prev_folder' => DB::raw('folder'), 'folder' => 'trash', 'trashed_at' => $now, 'updated_at' => $now]); break;
             case 'restore':
                 $q()->where('folder', 'trash')->update(['folder' => DB::raw("COALESCE(prev_folder, 'inbox')"), 'prev_folder' => null, 'trashed_at' => null, 'updated_at' => $now]); break;
             case 'delete_forever':
                 $q()->where('folder', 'trash')->delete();
                 $this->purgeOrphans();
+                break;
+            case 'snooze':
+                $at = $this->parseFuture($until);
+                $q()->where('folder', 'inbox')->update(['snoozed_until' => $at, 'updated_at' => $now]);
+                break;
+            case 'unsnooze':
+                $q()->whereNotNull('snoozed_until')->update(['snoozed_until' => null, 'updated_at' => $now]);
+                break;
+            case 'cancel_send':
+                foreach (DB::table('mail_items')->whereIn('id', $ids)->whereIn('folder', ['scheduled', 'outbox'])->pluck('id') as $iid) {
+                    try {
+                        $this->cancelSend($a, (int) $iid);
+                    } catch (\DomainException $e) { /* اتسلّمت خلاص */ }
+                }
                 break;
             case 'label_add': case 'label_remove':
                 $label = $labelId ? DB::table('mail_labels')->where('id', $labelId)->where('account_id', $a->id)->first() : null;
@@ -463,6 +827,9 @@ class MailboxService
                 }
                 break;
             default: $this->fail('Unknown action.');
+        }
+        if (in_array($action, ['archive', 'spam', 'trash', 'inbox', 'not_spam'], true)) { // أي نقل بيلغي التأجيل
+            DB::table('mail_items')->whereIn('id', $ids)->whereNotNull('snoozed_until')->update(['snoozed_until' => null]);
         }
         return count($ids);
     }
@@ -568,6 +935,13 @@ class MailboxService
             || ($att->message_id && DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $att->message_id)->exists()));
         if (!$ok) {
             $this->fail('Attachment not found.', 404);
+        }
+        if ($att->message_id && (int) $att->account_id !== (int) $a->id) { // مرفقات رسالة سرية مقفولة (باسورد / انتهت / اتسحبت)
+            $m = DB::table('mail_messages')->where('id', $att->message_id)->first();
+            $it = DB::table('mail_items')->where('account_id', $a->id)->where('message_id', $att->message_id)->first();
+            if ($m && $it && $this->confLock($m, $it, $a)) {
+                $this->fail('This message is locked.', 403);
+            }
         }
         return $att;
     }
