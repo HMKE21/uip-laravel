@@ -78,3 +78,9 @@ Schedule::command('activity:prune')->dailyAt('04:30')->withoutOverlapping();
 // Smart Forms — auto-submit expired exam attempts + prune orphan uploads. Run from crontab every 5 minutes:
 //   php artisan forms:maintenance
 // or via Laravel's scheduler: Schedule::command('forms:maintenance')->everyFiveMinutes();
+
+// UIPE Mail (المرحلة 3): تسليم الرسائل المجدولة / اللي فترة Undo بتاعتها خلصت، وإيقاظ المؤجّلات — كل دقيقة (محتاج cron schedule:run).
+// حتى لو الـ scheduler واقف، GET /api/v1/mail/account بيسلّم رسائل صندوق المستخدم الحالي لوحده (تسليم كسول).
+Schedule::command('mail:process')->everyMinute()->withoutOverlapping();
+// مسح سلة البريد النهائي بعد mailbox.trash_days (30 يوم).
+Schedule::command('mail:process --purge')->dailyAt('04:10')->withoutOverlapping();

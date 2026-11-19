@@ -407,12 +407,12 @@ class MailPortabilityService
         $disp = $this->params($h['content-disposition'] ?? '');
         $name = $disp['filename'] ?? ($ct['name'] ?? '');
         $isAtt = ($disp['_'] ?? '') === 'attachment' || $name !== '' || ($type !== 'text/plain' && $type !== 'text/html' && !str_starts_with($type, 'multipart/'));
-        $data = $this->decodeBody($body, $h['content-transfer-encoding'] ?? '', $ct['charset'] ?? 'utf-8');
         if ($isAtt) {
             if ($type === 'message/rfc822' && $name === '') { $name = 'message.eml'; }
             $out['attachments'][] = ['name' => $this->decodeHeader($name) ?: 'file', 'mime' => $type, 'data' => ($type === 'message/rfc822') ? $body : $this->decodeBinary($body, $h['content-transfer-encoding'] ?? '')];
             return;
         }
+        $data = $this->decodeBody($body, $h['content-transfer-encoding'] ?? '', $ct['charset'] ?? 'utf-8');
         if ($type === 'text/html') {
             $out['html'] .= $data;
         } else {

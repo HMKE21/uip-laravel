@@ -232,6 +232,17 @@ class MailSettingsService
         return $this->filterPayload(DB::table('mail_filters')->where('id', $id)->first());
     }
 
+    /** تفعيل/إيقاف فلتر من غير ما نعيد إرسال شروطه. */
+    public function setFilterActive(MailAccount $a, int $id, bool $active): array
+    {
+        $q = DB::table('mail_filters')->where('id', $id)->where('account_id', $a->id);
+        if (!(clone $q)->exists()) {
+            $this->fail('Filter not found.', 404);
+        }
+        $q->update(['is_active' => (int) $active, 'updated_at' => now()]);
+        return $this->filterPayload(DB::table('mail_filters')->where('id', $id)->first());
+    }
+
     public function deleteFilter(MailAccount $a, int $id): void
     {
         if (!DB::table('mail_filters')->where('id', $id)->where('account_id', $a->id)->delete()) {
