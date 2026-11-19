@@ -27,8 +27,16 @@ class MailboxService
 
     /* ------------------------------------------------------------------ accounts */
 
-    public function accountFor(int $userId): MailAccount
+    /** $accountId (اختياري): نختار صندوق معيّن من صناديق نفس المستخدم (شخصي/مؤسسي). لو مش بتاعه → 404. */
+    public function accountFor(int $userId, ?int $accountId = null): MailAccount
     {
+        if ($accountId) {
+            $own = MailAccount::where('user_id', $userId)->where('id', $accountId)->first();
+            if (!$own) {
+                $this->fail('Mailbox not found.', 404);
+            }
+            return $own;
+        }
         $acc = MailAccount::where('user_id', $userId)->orderByDesc('is_default')->orderBy('id')->first();
         if ($acc) {
             return $acc;
@@ -57,7 +65,18 @@ class MailboxService
     public function accountPayload(MailAccount $a): array
     {
         return ['id' => (int) $a->id, 'address' => $a->address, 'kind' => $a->kind, 'display_name' => $a->display_name, 'status' => $a->status,
+            'university_id' => $a->university_id ? (int) $a->university_id : null, 'is_default' => (bool) $a->is_default,
             'external_enabled' => $this->external->enabled()];
+    }
+
+    /** كل صناديق المستخدم (الافتراضي أولًا) + عدد غير المقروء في الوارد لكل صندوق — لمبدّل الحسابات في الواجهة. */
+    public function accountsFor(int $userId): array
+    {
+        $this->accountFor($userId); // يتأكد إن فيه صندوق واحد على الأقل (بيتنشأ أول مرة)
+        $accs = MailAccount::where('user_id', $userId)->orderByDesc('is_default')->orderBy('id')->get();
+        $unread = DB::table('mail_items')->whereIn('account_id', $accs->pluck('id')->all())->where('folder', 'inbox')->where('is_read', 0)
+            ->groupBy('account_id')->selectRaw('account_id, COUNT(*) as c')->pluck('c', 'account_id');
+        return $accs->map(fn ($a) => $this->accountPayload($a) + ['inbox_unread' => (int) ($unread[$a->id] ?? 0)])->values()->all();
     }
 
     /* ------------------------------------------------------------------ folders & lists */
@@ -84,17 +103,24 @@ class MailboxService
         $page = max(1, (int) ($f['page'] ?? 1));
         $folder = $f['folder'] ?? 'inbox';
         $starredView = $folder === 'starred' || !empty($f['starred']);
-        if (!$starredView && !in_array($folder, self::FOLDERS, true)) {
+        // 'all' = كل البريد ما عدا السلة والمزعج — مسموح بس مع label_id أو بحث (q)، عشان تصنيف/بحث يعدّي على كل الصناديق.
+        $allView = !$starredView && $folder === 'all' && (!empty($f['label_id']) || trim((string) ($f['q'] ?? '')) !== '');
+        if (!$starredView && !$allView && !in_array($folder, self::FOLDERS, true)) {
             $this->fail('Unknown folder.');
         }
+        $scope = function ($qq, string $p) use ($starredView, $allView, $folder) {
+            if ($starredView) {
+                $qq->where("{$p}.is_starred", 1)->whereNotIn("{$p}.folder", ['trash', 'spam']);
+            } elseif ($allView) {
+                $qq->whereNotIn("{$p}.folder", ['trash', 'spam']);
+            } else {
+                $qq->where("{$p}.folder", $folder);
+            }
+        };
 
         $q = DB::table('mail_items as i')->join('mail_messages as m', 'm.id', '=', 'i.message_id')->join('mail_accounts as s', 's.id', '=', 'm.sender_account_id')
             ->where('i.account_id', $a->id);
-        if ($starredView) {
-            $q->where('i.is_starred', 1)->whereNotIn('i.folder', ['trash', 'spam']);
-        } else {
-            $q->where('i.folder', $folder);
-        }
+        $scope($q, 'i');
         if (!empty($f['unread'])) {
             $q->where('i.is_read', 0);
         }
@@ -111,9 +137,9 @@ class MailboxService
         }
         $threads = ($f['view'] ?? 'messages') === 'threads';
         if ($threads) {
-            $latest = DB::table('mail_items as i2')->join('mail_messages as m2', 'm2.id', '=', 'i2.message_id')->where('i2.account_id', $a->id)
-                ->when($starredView, fn ($x) => $x->where('i2.is_starred', 1)->whereNotIn('i2.folder', ['trash', 'spam']), fn ($x) => $x->where('i2.folder', $folder))
-                ->groupBy('m2.thread_id')->selectRaw('MAX(i2.id)');
+            $latest = DB::table('mail_items as i2')->join('mail_messages as m2', 'm2.id', '=', 'i2.message_id')->where('i2.account_id', $a->id);
+            $scope($latest, 'i2');
+            $latest->groupBy('m2.thread_id')->selectRaw('MAX(i2.id)');
             $q->whereIn('i.id', $latest);
         }
 
@@ -382,6 +408,17 @@ class MailboxService
     }
 
     /* ------------------------------------------------------------------ actions */
+
+    /** كل نسخ صندوقك في المحادثات دي (للإجراءات على المحادثة كاملة: أرشفة/حذف/تصنيف…). */
+    public function itemIdsForThreads(MailAccount $a, array $threadIds): array
+    {
+        $threadIds = array_values(array_unique(array_filter(array_map('intval', $threadIds))));
+        if (!$threadIds) {
+            return [];
+        }
+        return DB::table('mail_items as i')->join('mail_messages as m', 'm.id', '=', 'i.message_id')->where('i.account_id', $a->id)
+            ->whereIn('m.thread_id', $threadIds)->pluck('i.id')->map(fn ($x) => (int) $x)->all();
+    }
 
     /**
      * @param int[] $itemIds

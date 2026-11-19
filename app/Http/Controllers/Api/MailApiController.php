@@ -17,10 +17,17 @@ class MailApiController extends Controller
     {
     }
 
+    /** الصندوق المطلوب: ?account_id= أو الهيدر X-Mail-Account (لازم يكون بتاع نفس المستخدم، وإلا 404). من غيرهم → الصندوق الافتراضي. */
+    private function accountOf(Request $r)
+    {
+        $want = (int) ($r->query('account_id') ?: $r->header('X-Mail-Account'));
+        return $this->mail->accountFor((int) $r->attributes->get('uip_user_id'), $want ?: null);
+    }
+
     private function run(Request $request, callable $fn, int $okStatus = 200)
     {
         try {
-            $acc = $this->mail->accountFor((int) $request->attributes->get('uip_user_id'));
+            $acc = $this->accountOf($request);
             if ($acc->status !== 'active' && !$request->isMethod('GET')) {
                 return $this->apiError('Your mailbox is suspended.', null, 403);
             }
@@ -32,7 +39,8 @@ class MailApiController extends Controller
 
     public function account(Request $r)
     {
-        return $this->run($r, fn ($a) => ['account' => $this->mail->accountPayload($a), 'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a)]);
+        return $this->run($r, fn ($a) => ['account' => $this->mail->accountPayload($a), 'accounts' => $this->mail->accountsFor((int) $a->user_id),
+            'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a)]);
     }
 
     public function index(Request $r)
@@ -101,11 +109,18 @@ class MailApiController extends Controller
         });
     }
 
-    /** POST /messages/bulk — { ids[], action, label_id? } */
+    /** POST /messages/bulk — { ids[]? , thread_ids[]? , action, label_id? } (thread_ids = المحادثة كاملة) */
     public function bulk(Request $r)
     {
-        $in = $r->validate(['ids' => 'required|array|min:1|max:200', 'ids.*' => 'integer', 'action' => 'required|string|max:20', 'label_id' => 'nullable|integer']);
-        return $this->run($r, fn ($a) => ['affected' => $this->mail->bulk($a, $in['ids'], $in['action'], $in['label_id'] ?? null), 'folders' => $this->mail->folderCounts($a)]);
+        $in = $r->validate(['ids' => 'nullable|array|max:200', 'ids.*' => 'integer', 'thread_ids' => 'nullable|array|max:200', 'thread_ids.*' => 'integer',
+            'action' => 'required|string|max:20', 'label_id' => 'nullable|integer']);
+        if (empty($in['ids']) && empty($in['thread_ids'])) {
+            return $this->apiError('Select at least one message.', null, 422);
+        }
+        return $this->run($r, function ($a) use ($in) {
+            $ids = array_merge($in['ids'] ?? [], $this->mail->itemIdsForThreads($a, $in['thread_ids'] ?? []));
+            return ['affected' => $this->mail->bulk($a, $ids, $in['action'], $in['label_id'] ?? null), 'folders' => $this->mail->folderCounts($a)];
+        });
     }
 
     public function destroy(Request $r, int $id)
@@ -156,7 +171,7 @@ class MailApiController extends Controller
     public function download(Request $r, int $id)
     {
         try {
-            $a = $this->mail->accountFor((int) $r->attributes->get('uip_user_id'));
+            $a = $this->accountOf($r);
             $att = $this->mail->attachmentForDownload($a, $id);
             $disk = Storage::disk($att->disk);
             if (!$disk->exists($att->path)) {
