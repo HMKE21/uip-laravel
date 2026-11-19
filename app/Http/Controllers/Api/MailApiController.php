@@ -29,8 +29,8 @@ class MailApiController extends Controller
     {
         try {
             $acc = $this->accountOf($request);
-            if ($acc->status !== 'active' && !$request->isMethod('GET')) {
-                return $this->apiError('Your mailbox is suspended.', null, 403);
+            if (!$request->isMethod('GET') && ($reason = $this->mail->blockReason($acc))) {
+                return $this->apiError($reason, null, 403);
             }
             return $this->apiSuccess($fn($acc), 'OK', $okStatus);
         } catch (\DomainException $e) {
@@ -44,7 +44,7 @@ class MailApiController extends Controller
             $this->mail->processDue((int) $a->id);   // رسائل صندوقك اللي وقتها جه (مجدولة / Undo) تتسلّم حتى لو الـ scheduler واقف
             $this->mail->wakeSnoozed((int) $a->id);  // المؤجّلات اللي وقتها جه ترجع للوارد
             return ['account' => $this->mail->accountPayload($a), 'accounts' => $this->mail->accountsFor((int) $a->user_id),
-                'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a), 'settings' => $this->settings->settingsPayload($a)];
+                'quota' => $this->mail->quotaPayload($a), 'folders' => $this->mail->folderCounts($a), 'labels' => $this->mail->labels($a), 'settings' => $this->settings->settingsPayload($a)];
         });
     }
 

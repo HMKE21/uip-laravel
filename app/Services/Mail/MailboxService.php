@@ -19,7 +19,7 @@ class MailboxService
 {
     public const FOLDERS = ['inbox', 'sent', 'drafts', 'scheduled', 'archive', 'spam', 'trash'];
 
-    public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters)
+    public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters, private MailTenantService $tenants)
     {
     }
 
@@ -70,10 +70,24 @@ class MailboxService
     {
         return ['id' => (int) $a->id, 'address' => $a->address, 'kind' => $a->kind, 'display_name' => $a->display_name, 'status' => $a->status,
             'university_id' => $a->university_id ? (int) $a->university_id : null, 'is_default' => (bool) $a->is_default,
-            'external_enabled' => $this->external->enabled()];
+            'tenant_id' => $a->tenant_id ? (int) $a->tenant_id : null, 'member_type' => $a->member_type, 'suspended_reason' => $a->suspended_reason,
+            'tenant_status' => $this->tenants->statusOf($a->tenant_id ? (int) $a->tenant_id : null),
+            'external_enabled' => $this->external->enabled() && (!$a->tenant_id || (bool) ($this->tenants->policyFor($a)->allow_external ?? true))];
     }
 
     /** كل صناديق المستخدم (الافتراضي أولًا) + عدد غير المقروء في الوارد لكل صندوق — لمبدّل الحسابات في الواجهة. */
+    /** سبب منع الكتابة (صندوق موقوف أو الجامعة موقوفة) أو null. */
+    public function blockReason(MailAccount $a): ?string
+    {
+        return $this->tenants->blockReason($a);
+    }
+
+    /** الحصة والمستخدم للصندوق المؤسسي (null للشخصي). */
+    public function quotaPayload(MailAccount $a): ?array
+    {
+        return $this->tenants->quotaPayload($a);
+    }
+
     public function accountsFor(int $userId): array
     {
         $this->accountFor($userId); // يتأكد إن فيه صندوق واحد على الأقل (بيتنشأ أول مرة)
@@ -302,7 +316,7 @@ class MailboxService
     /* ------------------------------------------------------------------ compose: drafts & send */
 
     /** يحوّل مدخلات المستلمين لقائمة موحّدة [{kind,address,name,account_id}] بعد التحقق. */
-    private function resolveRecipients(array $input, bool $forSend): array
+    private function resolveRecipients(array $input, bool $forSend, ?MailAccount $sender = null): array
     {
         $out = []; $seen = [];
         foreach (['to', 'cc', 'bcc'] as $kind) {
@@ -321,7 +335,7 @@ class MailboxService
                 $out[] = ['kind' => $kind, 'address' => $addr, 'name' => is_array($r) ? Str::limit((string) ($r['name'] ?? ''), 150, '') : null];
             }
         }
-        if (count($out) > (int) config('mailbox.max_recipients', 50)) {
+        if (count($out) > ($sender ? $this->tenants->maxRecipients($sender) : (int) config('mailbox.max_recipients', 50))) {
             $this->fail('Too many recipients.');
         }
         $accounts = $out ? MailAccount::whereIn('address', array_column($out, 'address'))->get()->keyBy('address') : collect();
@@ -336,6 +350,21 @@ class MailboxService
             }
         }
         unset($r);
+        if ($forSend && $out) {
+            $suspendedTenants = $this->tenants->suspendedTenantIds();
+            foreach ($out as $r) {
+                $acc = $accounts->get($r['address']);
+                if ($acc && $acc->tenant_id && in_array((int) $acc->tenant_id, $suspendedTenants, true)) {
+                    $this->fail("{$r['address']} is suspended.", 422);
+                }
+                if ($acc && $acc->tenant_id && (int) $acc->id !== (int) ($sender?->id) && $this->tenants->isFull($acc)) {
+                    $this->fail("{$r['address']} mailbox is full.", 422);
+                }
+            }
+            if ($sender) {
+                $this->tenants->assertMayEmail($sender, array_column($out, 'address'), $accounts);
+            }
+        }
         if ($forSend && !array_filter($out, fn ($r) => $r['kind'] === 'to')) {
             $this->fail('Add at least one recipient.');
         }
@@ -395,7 +424,7 @@ class MailboxService
         if ($send && $subject === '' && $text === '') {
             $this->fail('Write a subject or a message first.');
         }
-        $recipients = $this->resolveRecipients($in, $send);
+        $recipients = $this->resolveRecipients($in, $send, $a);
         $conf = $this->confidentialFields($in, $send, $recipients);
 
         $replyTo = null; $threadId = null;
@@ -499,7 +528,10 @@ class MailboxService
         if ($accIds->isEmpty()) {
             return;
         }
-        $active = MailAccount::whereIn('id', $accIds->all())->where('status', 'active')->pluck('id')->map(fn ($x) => (int) $x)->all();
+        $suspendedTenants = $this->tenants->suspendedTenantIds();
+        $active = MailAccount::whereIn('id', $accIds->all())->where('status', 'active')
+            ->when($suspendedTenants, fn ($q) => $q->where(fn ($w) => $w->whereNull('tenant_id')->orWhereNotIn('tenant_id', $suspendedTenants)))
+            ->pluck('id')->map(fn ($x) => (int) $x)->all();
         $sender = DB::table('mail_accounts')->where('id', $senderId)->first(['address', 'display_name']);
         $hasAtt = DB::table('mail_attachments')->where('message_id', $mid)->exists();
         $visibleTo = $recips->where('kind', '!=', 'bcc')->pluck('address')->all();
@@ -603,8 +635,8 @@ class MailboxService
      */
     public function send(MailAccount $a, array $in, ?int $draftItemId = null): array
     {
-        if ($a->status !== 'active') {
-            $this->fail('Your mailbox is suspended.', 403);
+        if ($reason = $this->tenants->blockReason($a)) {
+            $this->fail($reason, 403);
         }
         $mid = null;
         if ($draftItemId) {
@@ -671,8 +703,8 @@ class MailboxService
     private function recheck(object $m): void
     {
         $sender = MailAccount::find($m->sender_account_id);
-        if (!$sender || $sender->status !== 'active') {
-            $this->fail('Your mailbox is suspended.', 403);
+        if (!$sender || $this->tenants->blockReason($sender)) {
+            $this->fail($sender ? (string) $this->tenants->blockReason($sender) : 'Your mailbox is suspended.', 403);
         }
         $bad = DB::table('mail_recipients as r')->join('mail_accounts as x', 'x.id', '=', 'r.account_id')->where('r.message_id', $m->id)->where('x.status', '!=', 'active')->value('r.address');
         if ($bad) {
@@ -913,9 +945,13 @@ class MailboxService
 
     public function uploadAttachment(MailAccount $a, UploadedFile $file): array
     {
-        $max = (int) config('mailbox.max_attachment_mb', 20) * 1048576;
+        $max = $this->tenants->maxAttachmentMb($a) * 1048576;
         if (!$file->isValid() || $file->getSize() > $max) {
             $this->fail('File is too large or invalid.', 413);
+        }
+        $quota = $this->tenants->quotaPayload($a);
+        if ($quota && ($quota['used_bytes'] + (int) $file->getSize()) > $quota['limit_mb'] * 1048576) {
+            $this->fail('Your mailbox is full.', 413);
         }
         if (DB::table('mail_attachments')->where('account_id', $a->id)->whereNull('message_id')->count() >= 30) {
             $this->fail('Too many unsent attachments.');

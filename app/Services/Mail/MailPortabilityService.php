@@ -154,6 +154,9 @@ class MailPortabilityService
         if (!in_array($folder, ['inbox', 'archive'], true)) {
             $this->fail('Choose Inbox or Archive.');
         }
+        if (($quota = $this->mail->quotaPayload($a)) && $quota['full']) {
+            $this->fail('Your mailbox is full.', 413);
+        }
         $path = $file->getRealPath();
         $fp = $path ? fopen($path, 'rb') : false;
         if (!$fp) {

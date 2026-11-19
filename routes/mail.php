@@ -2,9 +2,10 @@
 
 use App\Http\Controllers\Api\MailAdvancedController;
 use App\Http\Controllers\Api\MailApiController;
+use App\Http\Controllers\Api\MailTenantApiController;
 use Illuminate\Support\Facades\Route;
 
-/** UIPE Mail — المرحلة 1 + 3. بيتحمّل من آخر routes/api.php (فبيورث prefix /api). */
+/** UIPE Mail — المرحلة 1 + 3 + 4 (mail-admin). بيتحمّل من آخر routes/api.php (فبيورث prefix /api). */
 Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
     Route::get('/account', [MailApiController::class, 'account'])->middleware('throttle:240,1');
     Route::get('/messages', [MailApiController::class, 'index'])->middleware('throttle:240,1');
@@ -62,4 +63,26 @@ Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
 
     Route::post('/import', [MailAdvancedController::class, 'import'])->middleware('throttle:5,1');
     Route::get('/export', [MailAdvancedController::class, 'export'])->middleware('throttle:5,1');
+});
+
+/** المرحلة 4: Multi-Tenant — لوحة أدمن الجامعة (جامعة/كلية/أدمن المنصة؛ الكونترولر بيفحص الدور). */
+Route::prefix('v1/mail-admin')->middleware('uip.auth')->group(function () {
+    Route::get('/tenant', [MailTenantApiController::class, 'overview'])->middleware('throttle:120,1');
+    Route::put('/tenant/policies', [MailTenantApiController::class, 'updatePolicies'])->middleware('throttle:30,1');
+
+    Route::get('/domains', [MailTenantApiController::class, 'domains'])->middleware('throttle:120,1');
+    Route::post('/domains', [MailTenantApiController::class, 'addDomain'])->middleware('throttle:20,1');
+    Route::post('/domains/{id}/primary', [MailTenantApiController::class, 'setPrimary'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::delete('/domains/{id}', [MailTenantApiController::class, 'removeDomain'])->whereNumber('id')->middleware('throttle:20,1');
+
+    Route::get('/members', [MailTenantApiController::class, 'members'])->middleware('throttle:120,1');
+    Route::patch('/accounts/{id}', [MailTenantApiController::class, 'updateAccount'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::post('/provision', [MailTenantApiController::class, 'provision'])->middleware('throttle:5,1');
+
+    // أدمن المنصة فقط
+    Route::get('/tenants', [MailTenantApiController::class, 'allTenants'])->middleware('throttle:120,1');
+    Route::post('/tenants/{universityId}/suspend', [MailTenantApiController::class, 'suspendTenant'])->whereNumber('universityId')->middleware('throttle:30,1');
+    Route::post('/tenants/{universityId}/resume', [MailTenantApiController::class, 'resumeTenant'])->whereNumber('universityId')->middleware('throttle:30,1');
+    Route::post('/platform-domains/{id}/activate', [MailTenantApiController::class, 'activateDomain'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/platform-domains/{id}/disable', [MailTenantApiController::class, 'disableDomain'])->whereNumber('id')->middleware('throttle:30,1');
 });
