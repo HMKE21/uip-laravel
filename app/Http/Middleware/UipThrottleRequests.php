@@ -33,7 +33,10 @@ class UipThrottleRequests extends ThrottleRequests
             return $next($request);
         }
 
-        return parent::handle($request, $next, $maxAttempts, $decayMinutes, $prefix);
+        // مهم: لارافيل بيفرّق بين throttle:60,1 (رقم) و throttle:auth-login (limiter مسمّى) بـ func_num_args() === 3.
+        // لو مرّرنا الـ 5 arguments دايمًا الـ limiter المسمّى بيتعامل كرقم ← "Rate limiter [x] is not defined" (500).
+        // فبنمرّر بالظبط الـ arguments اللي اتبعتت لنا.
+        return parent::handle(...func_get_args());
     }
 
     /** Per route + method + (user | device) instead of one IP-wide counter shared by every route. */
