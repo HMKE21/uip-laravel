@@ -89,7 +89,7 @@ class UniversityEmailApiController extends Controller
 
     public function saveSettings(Request $request)
     {
-        $v = Validator::make($request->all(), ['domain' => 'required|string|max:120', 'pattern' => 'nullable|in:number,name']);
+        $v = Validator::make($request->all(), ['domain' => 'nullable|string|max:120', 'pattern' => 'nullable|in:number,name']);
         if ($v->fails()) {
             return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
         }

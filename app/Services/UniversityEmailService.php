@@ -108,10 +108,20 @@ class UniversityEmailService
         }
         $rows = $q->orderBy('u.full_name')->limit(300)->get(['s.id', 's.student_number', 's.university_email', 'u.full_name', 'u.email']);
         return ['success' => true, 'message' => 'OK', 'data' => [
-            'settings' => ['domain' => $uni->email_domain ?? null, 'pattern' => $uni->email_pattern ?? 'number', 'can_edit' => $scope['role'] === 'university'],
+            'settings' => ['domain' => $uni->email_domain ?? null, 'pattern' => $uni->email_pattern ?? 'number', 'can_edit' => $scope['role'] === 'university',
+                'mail_managed' => DB::table('mail_tenants as t')->join('mail_domains as md', 'md.tenant_id', '=', 't.id')->where('t.university_id', $scope['universityId'])->exists()],
             'stats' => ['total' => $total, 'with_email' => $with, 'missing' => $total - $with],
             'students' => $rows->map(fn ($r) => ['id' => (int) $r->id, 'name' => $r->full_name, 'number' => $r->student_number, 'address' => $r->university_email, 'personal_email' => $r->email])->values()->all(),
         ]];
+    }
+
+    /** يحدّث دومين عناوين الطلاب المولَّدة لنفس الجزء المحلي. */
+    public function repoint(int $universityId, string $domain): void
+    {
+        DB::table('students')->where('university_id', $universityId)->whereNotNull('university_email')->orderBy('id')
+            ->each(function ($st) use ($domain) {
+                DB::table('students')->where('id', $st->id)->update(['university_email' => strstr($st->university_email, '@', true) . '@' . $domain]);
+            });
     }
 
     public function saveSettings(array $scope, array $d, string $l): array
@@ -119,20 +129,26 @@ class UniversityEmailService
         if (($scope['role'] ?? null) !== 'university') {
             return $this->fail($l, 'للجامعة بس.', 'University only.', 403);
         }
-        $domain = $this->cleanDomain($d['domain'] ?? null);
-        if (!$domain || !$this->validDomain($domain)) {
-            return $this->fail($l, 'الدومين غير صالح (مثال: uni.edu.eg).', 'Invalid domain (e.g. uni.edu.eg).');
-        }
         $pattern = ($d['pattern'] ?? 'number') === 'name' ? 'name' : 'number';
         $old = DB::table('universities')->where('id', $scope['universityId'])->value('email_domain');
+        // لو الجامعة عندها نطاقات بريد (UIPE Mail) فالدومين بيتدار من تبويب النطاقات بس — هنا النمط بس.
+        $managed = DB::table('mail_tenants as t')->join('mail_domains as md', 'md.tenant_id', '=', 't.id')->where('t.university_id', $scope['universityId'])->exists();
+        $domain = $this->cleanDomain($d['domain'] ?? null);
+        if ($managed) {
+            $domain = $old;
+        }
+        if ($domain && !$this->validDomain($domain)) {
+            return $this->fail($l, 'الدومين غير صالح (مثال: uni.edu.eg).', 'Invalid domain (e.g. uni.edu.eg).');
+        }
+        if (!$domain) {
+            DB::table('universities')->where('id', $scope['universityId'])->update(['email_pattern' => $pattern, 'updated_at' => now()]);
+            return ['success' => true, 'message' => $this->ar($l) ? 'تم حفظ الإعدادات.' : 'Settings saved.'];
+        }
         DB::transaction(function () use ($scope, $domain, $pattern, $old) {
             DB::table('universities')->where('id', $scope['universityId'])->update(['email_domain' => $domain, 'email_pattern' => $pattern, 'updated_at' => now()]);
             // تغيير الدومين: العناوين المولَّدة بتتحدّث لنفس الجزء المحلي بالدومين الجديد.
             if ($old && $old !== $domain) {
-                DB::table('students')->where('university_id', $scope['universityId'])->whereNotNull('university_email')->orderBy('id')
-                    ->each(function ($st) use ($domain) {
-                        DB::table('students')->where('id', $st->id)->update(['university_email' => strstr($st->university_email, '@', true) . '@' . $domain]);
-                    });
+                $this->repoint($scope['universityId'], $domain);
             }
         });
         return ['success' => true, 'message' => $this->ar($l) ? 'تم حفظ الإعدادات.' : 'Settings saved.'];

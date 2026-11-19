@@ -208,10 +208,15 @@ class MailTenantService
         if ($d->status !== 'active') {
             $this->fail('The domain must be activated first.', 409);
         }
-        DB::transaction(function () use ($t, $d) {
+        $oldDomain = DB::table('universities')->where('id', $t->university_id)->value('email_domain');
+        DB::transaction(function () use ($t, $d, $oldDomain) {
             DB::table('mail_domains')->where('tenant_id', $t->id)->update(['is_primary' => 0]);
             DB::table('mail_domains')->where('id', $d->id)->update(['is_primary' => 1, 'updated_at' => now()]);
             DB::table('universities')->where('id', $t->university_id)->update(['email_domain' => $d->domain]);
+            // عناوين التحويل القديمة للطلاب (university_email) تتبع النطاق الأساسي الجديد.
+            if ($oldDomain && $oldDomain !== $d->domain) {
+                app(\App\Services\UniversityEmailService::class)->repoint((int) $t->university_id, $d->domain);
+            }
         });
         return $this->domains($t);
     }
