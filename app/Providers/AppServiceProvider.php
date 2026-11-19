@@ -17,6 +17,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        // UIPE Mail: البريد الخارجي مقفول في المرحلة 1 (داخلي فقط). نبدّل الـ binding ده لما نركّب Brevo/Stalwart.
+        $this->app->bind(\App\Services\Mail\ExternalMailGateway::class, \App\Services\Mail\NullExternalMailGateway::class);
         //
     }
 

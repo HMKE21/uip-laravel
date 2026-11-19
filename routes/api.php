@@ -2862,3 +2862,6 @@ Route::prefix('v1')->group(function () {
         Route::get('/{id}/files/{fileId}/preview', [$manage, 'filePreview'])->where(['id' => '[0-9]+', 'fileId' => '[0-9]+']);
     });
 });
+
+// UIPE Mail (المرحلة 1)
+require __DIR__ . '/mail.php';
