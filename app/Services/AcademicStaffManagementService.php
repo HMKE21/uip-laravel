@@ -182,6 +182,9 @@ class AcademicStaffManagementService
             'password_source' => $password !== null && trim($password) !== '' ? 'custom' : 'generated',
         ]);
 
+        // UIPE Mail (المرحلة 5): صندوق مؤسسي تلقائي للعضو الجديد.
+        \App\Services\Mail\MailProvisioningService::forUser((int) $staff->user_id);
+
         return ['success' => true, 'message' => $locale === 'ar'
             ? 'تمت دعوة عضو هيئة التدريس وإرسال بيانات الدخول له بالبريد الإلكتروني.'
             : 'Academic staff member invited — login details were emailed to them.',

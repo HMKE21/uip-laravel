@@ -86,6 +86,7 @@ class TwoFactorChallengeController extends Controller
         if (!$this->twoFactor->verifyLoginCode($user, (string) $request->input('code'))) {
             RateLimiter::hit($limiterKey, 15 * 60);
             SecurityLog::write('2FA wrong code', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            app(\App\Services\Identity\LoginHistoryService::class)->record($request, (int) $user->id, false, '2fa', 'wrong_2fa_code', $user->email);
 
             return $this->apiError('Invalid or expired code. Please try again.', ['code' => ['Invalid or expired code.']], 422);
         }
@@ -107,6 +108,7 @@ class TwoFactorChallengeController extends Controller
         $tokens = UipJwtService::issueTokenPair($user->id, $role);
 
         SecurityLog::write('Successful login (2FA)', ['user_id' => $user->id, 'ip' => $request->ip()]);
+        app(\App\Services\Identity\LoginHistoryService::class)->record($request, (int) $user->id, true, '2fa', null, $user->email);
 
         $response = AuthCookies::attach($this->apiSuccess(
             array_merge(['redirect' => $this->roles->homeRouteFor($role)], $tokens),

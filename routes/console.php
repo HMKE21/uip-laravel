@@ -84,3 +84,9 @@ Schedule::command('activity:prune')->dailyAt('04:30')->withoutOverlapping();
 Schedule::command('mail:process')->everyMinute()->withoutOverlapping();
 // مسح سلة البريد النهائي بعد mailbox.trash_days (30 يوم).
 Schedule::command('mail:process --purge')->dailyAt('04:10')->withoutOverlapping();
+
+// UIPE Mail (المرحلة 5): إنشاء الصناديق الناقصة تلقائيًا + تنظيف سجل الدخول القديم — كل 10 دقايق / يوميًا.
+Schedule::command('mail:identity-sync --provision')->everyTenMinutes()->withoutOverlapping();
+// تعليق صناديق الأعضاء المنتهية عضويتهم (تخرّج/إيقاف/انتهاء تاريخ) واستئناف اللي رجعوا — كل ساعة.
+Schedule::command('mail:identity-sync --membership')->hourly()->withoutOverlapping();
+Schedule::command('mail:identity-sync --prune')->dailyAt('04:20')->withoutOverlapping();

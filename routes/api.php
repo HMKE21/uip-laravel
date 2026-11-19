@@ -2869,3 +2869,6 @@ Route::prefix('v1')->group(function () {
 
 // UIPE Mail (المرحلة 1)
 require __DIR__ . '/mail.php';
+
+// UIPE Mail (المرحلة 5)
+require __DIR__ . '/identity.php';

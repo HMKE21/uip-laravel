@@ -90,6 +90,8 @@ class StudentJoinRequestService
                 'department'    => $department ? $department->name('en') : $student->department,
             ]);
             $student->save();
+            // UIPE Mail (المرحلة 5): الطالب اتربط بالجامعة → صندوقه المؤسسي يتعمل تلقائيًا.
+            \App\Services\Mail\MailProvisioningService::forUser((int) $student->user_id);
         }
 
         $university = $this->universities->find($universityId);

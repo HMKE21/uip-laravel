@@ -80,6 +80,7 @@ class MailTenantApiController extends Controller
             'quota_student_mb' => 'sometimes|integer|min:1|max:102400', 'quota_staff_mb' => 'sometimes|integer|min:1|max:102400', 'quota_admin_mb' => 'sometimes|integer|min:1|max:102400',
             'max_attachment_mb' => 'sometimes|integer|min:1|max:50', 'max_recipients' => 'sometimes|integer|min:1|max:200',
             'student_send_scope' => 'sometimes|in:platform,university', 'allow_external' => 'sometimes|boolean',
+            'auto_provision' => 'sometimes|boolean', 'suspend_on_expiry' => 'sometimes|boolean', 'graduate_grace_days' => 'sometimes|integer|min:0|max:3650',
         ]);
         return $this->run($r, fn ($s) => $this->tenants->updatePolicies($s['universityId'], $in), true);
     }

@@ -54,6 +54,9 @@ class MailTenantService
                 'quota_student_mb' => (int) $t->quota_student_mb, 'quota_staff_mb' => (int) $t->quota_staff_mb, 'quota_admin_mb' => (int) $t->quota_admin_mb,
                 'max_attachment_mb' => (int) $t->max_attachment_mb, 'max_recipients' => (int) $t->max_recipients,
                 'student_send_scope' => $t->student_send_scope, 'allow_external' => (bool) $t->allow_external,
+                // المرحلة 5
+                'auto_provision' => (bool) ($t->auto_provision ?? true), 'suspend_on_expiry' => (bool) ($t->suspend_on_expiry ?? true),
+                'graduate_grace_days' => (int) ($t->graduate_grace_days ?? 180),
             ],
         ];
     }
@@ -101,6 +104,21 @@ class MailTenantService
         }
         if (array_key_exists('allow_external', $in)) {
             $upd['allow_external'] = filter_var($in['allow_external'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+        }
+        // المرحلة 5: الـ Provisioning التلقائي وسياسة انتهاء العضوية (من غير الـ migration بتاعتها الأعمدة مش موجودة → بنتجاهلها).
+        if (\Illuminate\Support\Facades\Schema::hasColumn('mail_tenants', 'auto_provision')) {
+            foreach (['auto_provision', 'suspend_on_expiry'] as $k) {
+                if (array_key_exists($k, $in)) {
+                    $upd[$k] = filter_var($in[$k], FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+                }
+            }
+            if (array_key_exists('graduate_grace_days', $in)) {
+                $v = (int) $in['graduate_grace_days'];
+                if ($v < 0 || $v > 3650) {
+                    $this->fail('graduate_grace_days must be between 0 and 3650.');
+                }
+                $upd['graduate_grace_days'] = $v;
+            }
         }
         if ($upd) {
             DB::table('mail_tenants')->where('id', $t->id)->update($upd + ['updated_at' => now()]);
@@ -390,7 +408,7 @@ class MailTenantService
             $acc = (new MailAccount())->forceFill((array) $r);
             $mb = $this->quotaMb($acc, $t);
             return ['id' => (int) $r->id, 'address' => $r->address, 'display_name' => $r->display_name, 'full_name' => $r->full_name, 'personal_email' => $r->personal_email,
-                'member_type' => $r->member_type, 'member_id' => $r->member_id ? (int) $r->member_id : null, 'status' => $r->status, 'suspended_reason' => $r->suspended_reason,
+                'member_type' => $r->member_type, 'member_id' => $r->member_id ? (int) $r->member_id : null, 'status' => $r->status, 'suspended_reason' => $r->suspended_reason, 'suspended_by' => $r->suspended_by ?? null, 'membership_expires_at' => !empty($r->membership_expires_at) ? \Illuminate\Support\Carbon::parse($r->membership_expires_at, 'UTC')->toIso8601String() : null,
                 'quota_mb' => $r->quota_mb ? (int) $r->quota_mb : null, 'effective_quota_mb' => $mb, 'used_bytes' => (int) ($usage[(int) $r->id] ?? 0)];
         })->values()->all();
         return ['total' => $total, 'page' => $page, 'per_page' => $per, 'items' => $items];
@@ -411,6 +429,9 @@ class MailTenantService
             }
             $upd['status'] = $in['status'];
             $upd['suspended_reason'] = $in['status'] === 'suspended' ? Str::limit((string) ($in['suspended_reason'] ?? ''), 190, '') ?: null : null;
+            if (\Illuminate\Support\Facades\Schema::hasColumn('mail_accounts', 'suspended_by')) {
+                $upd['suspended_by'] = null;   // قرار الأدمن اليدوي: المزامنة التلقائية متلمسوش
+            }
         }
         if (array_key_exists('quota_mb', $in)) {
             if ($in['quota_mb'] === null || $in['quota_mb'] === '') {
@@ -525,7 +546,7 @@ class MailTenantService
      * @param string[] $types  student|staff|faculty|university
      * @return array{created:int,skipped:int,failed:int,remaining:int,by_type:array}
      */
-    public function provisionMembers(int $universityId, array $types, ?int $facultyId = null): array
+    public function provisionMembers(int $universityId, array $types, ?int $facultyId = null, ?int $onlyUserId = null): array
     {
         $types = array_values(array_intersect(self::MEMBER_TYPES, $types));
         if (!$types) {
@@ -550,7 +571,11 @@ class MailTenantService
             $done = DB::table('mail_accounts')->where('tenant_id', $t->id)->where('member_type', $type)->pluck('member_id')->all();
             $existing = array_flip(array_map('intval', $done));
             $pk = ['student' => 's.id', 'staff' => 'a.id', 'faculty' => 'f.id', 'university' => 'un.id'][$type];
-            $rows = $this->memberQuery($type, $universityId, $facultyId)->orderBy($pk)->get();
+            $mq = $this->memberQuery($type, $universityId, $facultyId);
+            if ($onlyUserId) {   // المرحلة 5: إنشاء صندوق عضو واحد (تسجيل/دعوة/SCIM)
+                $mq->where(['student' => 's.user_id', 'staff' => 'a.user_id', 'faculty' => 'f.user_id', 'university' => 'un.user_id'][$type], $onlyUserId);
+            }
+            $rows = $mq->orderBy($pk)->get();
             foreach ($rows as $m) {
                 if (isset($existing[(int) $m->id])) {
                     $res['skipped']++;

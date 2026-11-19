@@ -62,6 +62,15 @@ class LoginController extends Controller
     ) {
     }
 
+    /** سجل الدخول (المرحلة 5) — مبيكسرش الدخول أبدًا. */
+    private function logLogin(Request $request, ?User $user, bool $ok, ?string $reason = null, ?string $identifier = null): void
+    {
+        try {
+            app(\App\Services\Identity\LoginHistoryService::class)->record($request, $user?->id, $ok, null, $reason, $identifier ?? $user?->email);
+        } catch (\Throwable) {
+        }
+    }
+
     public function submit(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -128,6 +137,7 @@ class LoginController extends Controller
             $lockStatus = $this->lockout->checkStatus($user, $locale);
             if ($lockStatus['locked']) {
                 SecurityLog::write('Login blocked - account locked', ['user_id' => $user->id, 'ip' => $request->ip()]);
+                $this->logLogin($request, $user, false, 'locked');
                 return response()->json(['success' => false, 'message' => $lockStatus['message']], 422);
             }
         }
@@ -144,6 +154,7 @@ class LoginController extends Controller
                 }
             }
             SecurityLog::write('Failed login attempt', ['email' => $data['email'], 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'bad_credentials', $data['email']);
             $this->alerts->failedLogin($data['email'], $request->ip(), $user?->id);
             return response()->json([
                 'success' => false,
@@ -153,6 +164,7 @@ class LoginController extends Controller
 
         if (in_array($user->status, ['suspended', 'banned'], true)) {
             SecurityLog::write('Blocked login for ' . $user->status . ' account', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'suspended');
             return response()->json([
                 'success' => false,
                 'message' => 'This account has been ' . $user->status . '. Contact support.',
@@ -163,6 +175,7 @@ class LoginController extends Controller
         // عشان مفيش حد يعرف إن الإيميل ده مسجّل من غير ما يعرف باسورده.)
         if (\App\Services\EmailVerificationService::blocksLogin($user)) {
             SecurityLog::write('Login blocked - email not verified', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'email_not_verified');
             return response()->json([
                 'success' => false,
                 'message' => $locale === 'ar'
@@ -213,6 +226,7 @@ class LoginController extends Controller
             }
         }
         if (!$isJoker && in_array($role, self::STAFF_ROLES, true) !== $viaStaffPortal) {
+            $this->logLogin($request, $user, false, 'wrong_portal');
             SecurityLog::write('Login refused - wrong entry portal', [
                 'user_id' => $user->id, 'role' => $role, 'portal' => $viaStaffPortal ? 'staff' : 'public', 'ip' => $request->ip(),
             ]);
@@ -231,6 +245,7 @@ class LoginController extends Controller
                 ], 422);
             }
             if ($loginAs !== $role) {
+                $this->logLogin($request, $user, false, 'wrong_account_type');
                 SecurityLog::write('Login refused - wrong account type chosen', [
                     'user_id' => $user->id, 'role' => $role, 'chosen' => $loginAs, 'ip' => $request->ip(),
                 ]);
@@ -248,6 +263,7 @@ class LoginController extends Controller
         $expiry = app(\App\Services\PasswordPolicyService::class)->expiryStatus($user->id);
         if ($expiry['expired']) {
             SecurityLog::write('Login blocked - password expired', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'password_expired');
             return response()->json([
                 'success' => false,
                 'message' => $locale === 'ar'
@@ -268,11 +284,12 @@ class LoginController extends Controller
      * محاولات الفشل، وضع الصيانة، الجلسة الواحدة، الـ 2FA، وإصدار التوكنز. اتفصل عن submit()
      * عشان GoogleAuthController يعدّي من نفس الحراسات بالظبط بدل ما نكرر الكود.
      */
-    public function finishLogin(Request $request, User $user, string $role, string $locale)
+    public function finishLogin(Request $request, User $user, string $role, string $locale, bool $mfaSatisfied = false)
     {
         // Device Restrictions Policy (وضع by_role) — الدور اتعرف دلوقتي والحساب اتأكد منه،
         // فنطبّق قاعدة الدور ده على نوع الجهاز (مثلًا الطالب ممنوع موبايل والأدمن لأ).
         if (!$this->deviceRestriction->isAllowed($request->userAgent(), $role)) {
+            $this->logLogin($request, $user, false, 'device_blocked');
             SecurityLog::write('Login blocked - device type restricted for role', [
                 'user_id' => $user->id, 'role' => $role,
                 'device' => $this->deviceRestriction->classify($request->userAgent()), 'ip' => $request->ip(),
@@ -294,6 +311,7 @@ class LoginController extends Controller
 
         if ($role !== 'admin' && $this->settings->get('maintenance_mode', 'global', null, '0') === '1') {
             SecurityLog::write('Login blocked - maintenance mode', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'maintenance');
             return response()->json([
                 'success' => false,
                 'message' => $locale === 'ar' ? 'المنصة تحت الصيانة حالياً' : 'The platform is under maintenance',
@@ -306,6 +324,7 @@ class LoginController extends Controller
         // جلسة واحدة نشطة لكل حساب: لو الحساب مفتوح على جهاز/متصفح تاني الدخول بيترفض.
         if ($block = app(\App\Services\UserSessionService::class)->loginBlock((int) $user->id, $locale, $role)) {
             SecurityLog::write('Login blocked - account already open elsewhere', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'session_limit');
             return response()->json([
                 'success' => false,
                 'message' => $block[0],
@@ -315,7 +334,8 @@ class LoginController extends Controller
             ], 409);
         }
 
-        if ($user->two_factor_enabled) {
+        // $mfaSatisfied: الـ passkey (مع التحقق من المستخدم) هو عامل تاني بذاته، فمنطلبش كود الـ 2FA.
+        if ($user->two_factor_enabled && !$mfaSatisfied) {
             $trustedHit = $this->trustedDevice->isCurrentDeviceTrusted(
                 $user->id,
                 $request->ip(),
@@ -362,6 +382,7 @@ class LoginController extends Controller
         }
 
         SecurityLog::write('Successful login', ['user_id' => $user->id, 'ip' => $request->ip()]);
+        $this->logLogin($request, $user, true);
 
         // MFA Requirements Policy: لو الدور ملزم بـ 2FA ومفعّلهوش، بنبدأ عدّاد المهلة (لو لسه)،
         // ولو المهلة خلصت (أو 0 = فورًا) بنوديه مباشرة لصفحة التفعيل. التوكن بيتصدر عادي

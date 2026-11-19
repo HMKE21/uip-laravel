@@ -184,6 +184,9 @@ class StudentManagementService
             default => $locale === 'ar' ? 'تمت إضافة الطالب.' : 'Student added.',
         };
 
+        // UIPE Mail (المرحلة 5): صندوق مؤسسي تلقائي للطالب الجديد (لو الجامعة مفعّلة auto_provision ولها نطاق).
+        \App\Services\Mail\MailProvisioningService::forUser((int) $student->user_id);
+
         // The password is returned to the (university/faculty) admin so they can hand it over
         // when email delivery is off or fails.
         return ['success' => true, 'message' => $message, 'password' => $tempPassword,

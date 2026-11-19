@@ -40,6 +40,9 @@ class MailApiController extends Controller
 
     public function account(Request $r)
     {
+        // المرحلة 5: لو العضو لسه معندوش صندوق مؤسسي (مسجّل قبل ما الجامعة تفعّل النطاق مثلًا) بيتعمل له هنا، مرة كل 5 دقايق.
+        \App\Services\Mail\MailProvisioningService::forUser((int) $r->attributes->get('uip_user_id'), false);
+
         return $this->run($r, function ($a) {
             $this->mail->processDue((int) $a->id);   // رسائل صندوقك اللي وقتها جه (مجدولة / Undo) تتسلّم حتى لو الـ scheduler واقف
             $this->mail->wakeSnoozed((int) $a->id);  // المؤجّلات اللي وقتها جه ترجع للوارد

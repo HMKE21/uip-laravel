@@ -94,12 +94,24 @@ class UipAuthMiddleware
         $uid = (int) $claims['sub'];
         try {
             $acc = \Illuminate\Support\Facades\Cache::remember('acct:status:' . $uid, 10, function () use ($uid) {
-                $r = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first(['status', 'deleted_at']);
-                return $r ? (array) $r : false;
+                // first() من غير قايمة أعمدة: tokens_valid_after (المرحلة 5) تتجاب لو العمود موجود، ومن غير ما الكود يقع قبل الـ migration.
+                $r = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first();
+                return $r ? ['status' => $r->status, 'deleted_at' => $r->deleted_at, 'tokens_valid_after' => $r->tokens_valid_after ?? null] : false;
             });
             $account = $acc ? (object) $acc : null;
         } catch (\Throwable $e) {
             $account = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first(['status', 'deleted_at']);
+        }
+        // "خروج من كل الأجهزة": أي access token صدر قبل tokens_valid_after بيبطل (حتى لو من غير sid).
+        $cutoff = $account->tokens_valid_after ?? null;
+        if ($account && $cutoff && (int) ($claims['iat'] ?? 0) < strtotime((string) $cutoff . ' UTC')) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This session was ended. Please log in again.',
+                'data'    => null,
+                'errors'  => null,
+                'meta'    => (object) [],
+            ], 401);
         }
         if (!$account || $account->deleted_at !== null || in_array($account->status, ['suspended', 'banned'], true)) {
             return response()->json([
