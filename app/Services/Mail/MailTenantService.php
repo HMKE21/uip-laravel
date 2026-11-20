@@ -544,7 +544,7 @@ class MailTenantService
     /**
      * ينشئ صناديق مؤسسية للأعضاء اللي ماعندهمش (idempotent). لازم يكون فيه نطاق primary مفعّل وtenant شغال.
      * @param string[] $types  student|staff|faculty|university
-     * @return array{created:int,skipped:int,failed:int,remaining:int,by_type:array}
+     * @return array{created:int,skipped:int,failed:int,remaining:int,blocked:int,by_type:array}
      */
     public function provisionMembers(int $universityId, array $types, ?int $facultyId = null, ?int $onlyUserId = null): array
     {
@@ -562,7 +562,8 @@ class MailTenantService
         }
         $pattern = (string) (DB::table('universities')->where('id', $universityId)->value('email_pattern') ?: 'number');
         $taken = array_flip(DB::table('mail_accounts')->where('address', 'like', '%@' . $dom->domain)->pluck('address')->all());
-        $res = ['created' => 0, 'skipped' => 0, 'failed' => 0, 'remaining' => 0, 'by_type' => []];
+        $res = ['created' => 0, 'skipped' => 0, 'failed' => 0, 'remaining' => 0, 'blocked' => 0, 'by_type' => []];
+        $access = app(MailAccessService::class);   // إدارة الوصول: أدوار ممنوع يتعملها صندوق
         $budget = self::MAX_PROVISION;
         $now = now();
 
@@ -579,6 +580,10 @@ class MailTenantService
             foreach ($rows as $m) {
                 if (isset($existing[(int) $m->id])) {
                     $res['skipped']++;
+                    continue;
+                }
+                if ($access->createBlockReason((int) $m->user_id, $universityId) !== null) {
+                    $res['blocked']++;
                     continue;
                 }
                 if ($budget <= 0) {

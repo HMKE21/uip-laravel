@@ -24,7 +24,7 @@ class MailboxService
     public const FOLDERS = ['inbox', 'sent', 'drafts', 'scheduled', 'archive', 'spam', 'trash'];
 
     public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters, private MailTenantService $tenants,
-        private MailAuditService $audit, private MailSecurityService $security)
+        private MailAuditService $audit, private MailSecurityService $security, private MailAccessService $access)
     {
     }
 
@@ -53,6 +53,9 @@ class MailboxService
         $user = User::find($userId);
         if (!$user) {
             $this->fail('User not found.', 404);
+        }
+        if ($reason = $this->access->createBlockReason($userId, null, true)) { // إدارة الوصول: مين يتعمله صندوق شخصي
+            $this->fail($reason, 403);
         }
         $domain = strtolower((string) config('mailbox.domain', 'uipe.local'));
         $local = Str::slug(Str::before((string) $user->email, '@'), '.') ?: 'user';
@@ -385,6 +388,7 @@ class MailboxService
             }
             if ($sender) {
                 $this->tenants->assertMayEmail($sender, array_column($out, 'address'), $accounts);
+                $this->access->assertMayEmail($sender, array_column($out, 'address'), $accounts); // إدارة الوصول: أدوار/دومينات/استثناءات
             }
         }
         if ($forSend && !array_filter($out, fn ($r) => $r['kind'] === 'to')) {
@@ -882,6 +886,11 @@ class MailboxService
         }
         $rc = DB::table('mail_recipients')->where('message_id', $m->id)->selectRaw('COUNT(*) total, SUM(CASE WHEN account_id IS NULL THEN 1 ELSE 0 END) ext')->first();
         $this->security->assertMaySend($sender, (int) ($rc->total ?? 0), (int) ($rc->ext ?? 0));
+        // القواعد ممكن تتغيّر بين الجدولة والتسليم → نفحصها تاني
+        $rows = DB::table('mail_recipients')->where('message_id', $m->id)->get(['address', 'account_id']);
+        $byId = $rows->pluck('account_id')->filter()->all() ? MailAccount::whereIn('id', $rows->pluck('account_id')->filter()->all())->get()->keyBy('id') : collect();
+        $accounts = $rows->filter(fn ($r) => $r->account_id && $byId->has($r->account_id))->mapWithKeys(fn ($r) => [strtolower((string) $r->address) => $byId->get($r->account_id)]);
+        $this->access->assertMayEmail($sender, $rows->pluck('address')->map(fn ($x) => strtolower((string) $x))->all(), $accounts);
     }
 
     /** بيسلّم كل اللي وقته جه (مجدول أو Undo خلصت مدته). $accountId = تسليم رسائل صندوق واحد بس (استدعاء كسول من الـ API). */

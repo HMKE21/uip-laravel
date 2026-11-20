@@ -96,6 +96,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'dev.auth' => \App\Http\Middleware\DevAuthMiddleware::class,
             // UIPE Mail (المرحلة 7): قواعد IP (block/allow) على /api/v1/mail/*. بعد uip.auth.
             'mail.ip' => \App\Http\Middleware\UipMailIpMiddleware::class,
+            'mail.access' => \App\Http\Middleware\UipMailAccessMiddleware::class,
         ]);
 
         // المكالمات: الـ SDP لازم ينتهي بـ \r\n. TrimStrings الافتراضي كان بيشيله فالمستلم يرفض الـ offer

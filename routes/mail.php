@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\MailAccessApiController;
 use App\Http\Controllers\Api\MailAdvancedController;
 use App\Http\Controllers\Api\MailApiController;
 use App\Http\Controllers\Api\MailIntegrationController;
@@ -9,7 +10,7 @@ use App\Http\Controllers\Api\MailWebhookController;
 use Illuminate\Support\Facades\Route;
 
 /** UIPE Mail — المرحلة 1 + 3 + 4 (mail-admin) + 7 (mail.ip = قواعد IP على الصندوق). بيتحمّل من آخر routes/api.php (فبيورث prefix /api). */
-Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip'])->group(function () {
+Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip', 'mail.access'])->group(function () {
     Route::get('/account', [MailApiController::class, 'account'])->middleware('throttle:240,1');
     Route::get('/messages', [MailApiController::class, 'index'])->middleware('throttle:240,1');
     Route::get('/messages/{id}', [MailApiController::class, 'show'])->whereNumber('id')->middleware('throttle:240,1');
@@ -91,7 +92,7 @@ Route::prefix('v1/mail-admin')->middleware('uip.auth')->group(function () {
 });
 
 /** المرحلة 6: ربط البريد بالشات / الاجتماعات / Drive / AI + إشعارات البريد. (الرسائل السرّية ممنوعة من الربط جوه الخدمة.) */
-Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip'])->group(function () {
+Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip', 'mail.access'])->group(function () {
     Route::get('/messages/{id}/links', [MailIntegrationController::class, 'links'])->whereNumber('id')->middleware('throttle:120,1');
     Route::post('/messages/{id}/share-chat', [MailIntegrationController::class, 'shareChat'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/messages/{id}/meeting', [MailIntegrationController::class, 'meeting'])->whereNumber('id')->middleware('throttle:20,1');
@@ -135,3 +136,19 @@ Route::prefix('v1/mail-admin/security')->middleware('uip.auth')->group(function 
 
 /** المرحلة 7: Webhook بتاع Brevo (bounce / delivered / spam). عام بس محمي بتوكن سري (UIPE_MAIL_WEBHOOK_SECRET). */
 Route::post('v1/mail/webhooks/brevo', [MailWebhookController::class, 'brevo'])->middleware('throttle:600,1');
+
+// UIPE Mail — إدارة الوصول (أدمن المنصة + أدمن الجامعة)
+Route::prefix('v1/mail-admin/access')->middleware('uip.auth')->group(function () {
+    Route::get('/overview', [MailAccessApiController::class, 'overview'])->middleware('throttle:120,1');
+    Route::put('/settings', [MailAccessApiController::class, 'saveSettings'])->middleware('throttle:30,1');
+    Route::put('/roles/{slug}', [MailAccessApiController::class, 'saveRole'])->where('slug', '[a-z0-9_-]+')->middleware('throttle:60,1');
+    Route::get('/matrix', [MailAccessApiController::class, 'matrix'])->middleware('throttle:120,1');
+    Route::put('/matrix', [MailAccessApiController::class, 'saveMatrix'])->middleware('throttle:30,1');
+    Route::get('/domains', [MailAccessApiController::class, 'domains'])->middleware('throttle:120,1');
+    Route::post('/domains', [MailAccessApiController::class, 'addDomain'])->middleware('throttle:30,1');
+    Route::delete('/domains/{id}', [MailAccessApiController::class, 'removeDomain'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::get('/users', [MailAccessApiController::class, 'users'])->middleware('throttle:120,1');
+    Route::post('/users', [MailAccessApiController::class, 'saveUser'])->middleware('throttle:30,1');
+    Route::delete('/users/{id}', [MailAccessApiController::class, 'removeUser'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/check', [MailAccessApiController::class, 'check'])->middleware('throttle:60,1');
+});
