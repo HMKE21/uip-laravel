@@ -36,6 +36,7 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::get('/keys', [DeveloperCenterController::class, 'keys'])->middleware('throttle:120,1');
     Route::post('/keys', [DeveloperCenterController::class, 'createKey'])->middleware('throttle:20,1');
     Route::put('/keys/{id}', [DeveloperCenterController::class, 'updateKey'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/keys/{id}/rotate', [DeveloperCenterController::class, 'rotateKey'])->whereNumber('id')->middleware('throttle:10,1');
     Route::delete('/keys/{id}', [DeveloperCenterController::class, 'revokeKey'])->whereNumber('id')->middleware('throttle:30,1');
 
     Route::get('/grants', [DeveloperCenterController::class, 'grants'])->middleware('throttle:120,1');

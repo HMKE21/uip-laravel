@@ -82,9 +82,9 @@ final class DevOpenApi
         $idParam = ['name' => 'id', 'in' => 'path', 'required' => true, 'schema' => self::int()];
 
         return [
-            'GET /me' => ['id' => 'getMe', 'tag' => 'Account', 'summary' => 'Who am I',
+            'GET /me' => ['id' => 'getMe', 'tag' => 'Account', 'summary' => 'Who am I', 'modes' => 'both',
                 'description' => 'The user behind the credential, its mode (`live` or `sandbox`), granted scopes and the remaining rate limit.', 'data' => self::ref('Me')],
-            'GET /scopes' => ['id' => 'listScopes', 'tag' => 'Account', 'summary' => 'List available scopes',
+            'GET /scopes' => ['id' => 'listScopes', 'tag' => 'Account', 'summary' => 'List available scopes', 'modes' => 'both',
                 'description' => 'Every scope the platform defines. Needs a valid credential but no particular scope.', 'data' => self::obj(['scopes' => self::arr(self::ref('Scope'))], ['scopes'])],
 
             'GET /mail/folders' => ['id' => 'listFolders', 'tag' => 'Mail', 'summary' => 'Folder counts', 'modes' => 'both',
@@ -137,18 +137,21 @@ final class DevOpenApi
                 'path' => [['name' => 'action', 'in' => 'path', 'required' => true, 'schema' => self::str(null, ['enum' => ['summarize', 'reply', 'translate', 'improve']])]],
                 'body' => self::obj(['item_id' => self::int(), 'text' => self::str(null, ['maxLength' => 20000]), 'tone' => self::str(null, ['maxLength' => 20]), 'language' => self::str(null, ['maxLength' => 5]), 'instruction' => self::str(null, ['maxLength' => 500])]),
                 'data' => self::obj(['action' => self::str(), 'text' => self::str()], [], true)],
-            'POST /notifications' => ['id' => 'sendNotification', 'tag' => 'Integrations', 'summary' => 'Notify the credential owner',
+            'POST /notifications' => ['id' => 'sendNotification', 'tag' => 'Integrations', 'summary' => 'Notify the credential owner', 'modes' => 'both',
                 'description' => 'At most 30 per hour per credential. Sandbox credentials get `{delivered:false, sandbox:true}`.',
                 'body' => self::obj(['title' => self::str(null, ['maxLength' => 120]), 'body' => self::str(null, ['maxLength' => 500])], ['title']), 'bodyRequired' => true,
                 'data' => self::obj(['delivered' => self::bool(), 'sandbox' => self::bool()], ['delivered'])],
 
-            'GET /webhooks' => ['id' => 'listWebhooks', 'tag' => 'Webhooks', 'summary' => 'List webhooks', 'data' => self::obj(['webhooks' => self::arr(self::ref('Webhook'))], ['webhooks'])],
-            'POST /webhooks' => ['id' => 'createWebhook', 'tag' => 'Webhooks', 'summary' => 'Create a webhook', 'ok' => 201,
+            'GET /webhooks' => ['id' => 'listWebhooks', 'tag' => 'Webhooks', 'summary' => 'List webhooks', 'modes' => 'both',
+                'description' => 'Only the webhooks of the credential\'s own mode: a live credential never sees sandbox webhooks, and the other way round.',
+                'data' => self::obj(['webhooks' => self::arr(self::ref('Webhook'))], ['webhooks'])],
+            'POST /webhooks' => ['id' => 'createWebhook', 'tag' => 'Webhooks', 'summary' => 'Create a webhook', 'modes' => 'both', 'ok' => 201,
                 'description' => 'The webhook takes the mode of the credential that creates it. The signing `secret` is returned once, here. See the `webhooks` section for the events and how to verify a delivery.',
                 'body' => self::obj(['name' => self::str(null, ['maxLength' => 80]), 'url' => self::str('Public HTTPS URL.', ['maxLength' => 500, 'format' => 'uri']),
                     'events' => self::arr(self::str(null, ['enum' => array_keys((array) config('developer.events', []))]), null, ['minItems' => 1])], ['url', 'events']), 'bodyRequired' => true,
                 'data' => self::ref('WebhookWithSecret')],
-            'DELETE /webhooks/{id}' => ['id' => 'deleteWebhook', 'tag' => 'Webhooks', 'summary' => 'Delete a webhook', 'path' => [$idParam], 'data' => null],
+            'DELETE /webhooks/{id}' => ['id' => 'deleteWebhook', 'tag' => 'Webhooks', 'summary' => 'Delete a webhook', 'modes' => 'both', 'path' => [$idParam],
+                'description' => 'Only webhooks of the credential\'s own mode can be deleted (`404` otherwise).', 'data' => null],
 
             'POST /sandbox/simulate-incoming' => ['id' => 'sandboxSimulateIncoming', 'tag' => 'Sandbox', 'summary' => 'Simulate an incoming message', 'modes' => 'sandbox', 'ok' => 201,
                 'description' => 'Drops a message in the sandbox inbox and fires `mail.message.received` to your sandbox webhooks. Sandbox credentials only.',
@@ -198,6 +201,25 @@ final class DevOpenApi
         }
         usort($out, fn ($a, $b) => [$a['path'], $a['method']] <=> [$b['path'], $b['method']]);
         return $out;
+    }
+
+    /**
+     * الـ mode المسموح للـ endpoint: both | live | sandbox | unknown (مش في الكتالوج).
+     * @param string $path زي '/mail/messages/{id}' (من غير /api/dev/v1)
+     */
+    public static function modeOf(string $method, string $path): string
+    {
+        static $index = null;
+        if ($index === null) {
+            $index = [];
+            foreach (self::catalog() as $key => $e) {
+                if (empty($e['oauth'])) {
+                    $index[$key] = (string) ($e['modes'] ?? 'unknown');
+                }
+            }
+        }
+        $m = $index[strtoupper($method) . ' ' . $path] ?? 'unknown';
+        return in_array($m, ['both', 'live', 'sandbox'], true) ? $m : 'unknown';
     }
 
     /** مفاتيح "METHOD /path" للـ routes اللي ملهاش مدخل في الكتالوج. */

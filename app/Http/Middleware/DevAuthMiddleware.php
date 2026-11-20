@@ -4,6 +4,8 @@ namespace App\Http\Middleware;
 
 use App\Services\Developer\DevAuthException;
 use App\Services\Developer\DevLogService;
+use App\Services\Developer\DevModeGate;
+use App\Services\Developer\DevOpenApi;
 use App\Services\Developer\DeveloperAuthService;
 use Closure;
 use Illuminate\Http\Request;
@@ -40,6 +42,16 @@ class DevAuthMiddleware
         } catch (DevAuthException $e) {
             $this->logs->fromRequest($request, $e->getCode() ?: 403, $ctx, (int) round((microtime(true) - $t0) * 1000), $e->errorCode, $scope);
             return $this->error($e)->withHeaders(['X-RateLimit-Limit' => (string) $ctx['limit'], 'X-RateLimit-Remaining' => (string) $ctx['remaining']]);
+        }
+
+        // فصل sandbox/live: بوابة مركزية من الكتالوج (مفتاح sandbox مبيوصلش لـ endpoint live-only، ومفتاح live مبيوصلش لـ sandbox-only).
+        $uri = $request->route() ? '/' . ltrim($request->route()->uri(), '/') : '';
+        $path = str_starts_with($uri, '/api/dev/v1/') ? substr($uri, strlen('/api/dev/v1')) : '';
+        if ($path !== '' && ($block = DevModeGate::check((string) $ctx['mode'], DevOpenApi::modeOf($request->method(), $path)))) {
+            $this->logs->fromRequest($request, 422, $ctx, (int) round((microtime(true) - $t0) * 1000), $block['code'], $scope);
+            $e = new DevAuthException($block['message'], 422);
+            $e->errorCode = $block['code'];
+            return $this->error($e)->withHeaders(['X-RateLimit-Limit' => (string) $ctx['limit'], 'X-RateLimit-Remaining' => (string) $ctx['remaining'], 'X-UIPE-Mode' => (string) $ctx['mode']]);
         }
 
         $request->attributes->set('dev_ctx', $ctx);

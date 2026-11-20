@@ -160,6 +160,12 @@ class DeveloperCenterController extends Controller
         return $this->dom(fn () => $this->apps->updateKey($this->uid($r), $id, $in));
     }
 
+    public function rotateKey(Request $r, int $id)
+    {
+        $in = $r->validate(['grace_hours' => 'nullable|integer|min:0|max:168', 'expires_in_days' => 'nullable|integer|min:1|max:730']);
+        return $this->dom(fn () => $this->apps->rotateKey($this->uid($r), $id, $in), 201);
+    }
+
     public function revokeKey(Request $r, int $id)
     {
         return $this->dom(function () use ($r, $id) { $this->apps->revokeKey($this->uid($r), $id); return null; });

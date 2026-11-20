@@ -2,6 +2,7 @@
 
 namespace App\Services\Developer;
 
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -519,11 +520,25 @@ class DeveloperAppService
             'ip_allowlist' => (array) json_decode((string) ($k->ip_allowlist ?? '[]'), true), 'expires_at' => DevTokens::iso($k->expires_at),
             'last_used_at' => DevTokens::iso($k->last_used_at), 'last_used_ip' => $k->last_used_ip, 'revoked_at' => DevTokens::iso($k->revoked_at),
             'created_at' => DevTokens::iso($k->created_at),
+            'rotated_from_id' => ($k->rotated_from_id ?? null) ? (int) $k->rotated_from_id : null, 'rotated_at' => DevTokens::iso($k->rotated_at ?? null),
+            'status' => $this->keyStatus($k),
         ];
         if ($raw !== null) {
             $out['key'] = $raw; // بيظهر مرة واحدة بس
         }
         return $out;
+    }
+
+    /** active | rotating (اتبدّل وفي فترة السماح) | expired | revoked */
+    private function keyStatus(object $k): string
+    {
+        if ($k->revoked_at !== null) {
+            return 'revoked';
+        }
+        if ($k->expires_at && now()->gte(Carbon::parse($k->expires_at, 'UTC'))) {
+            return 'expired';
+        }
+        return ($k->rotated_at ?? null) ? 'rotating' : 'active';
     }
 
     public function listKeys(int $userId): array
@@ -563,6 +578,7 @@ class DeveloperAppService
         if ($mode === 'live' && $policy['sandbox_only']) {
             $this->fail('Your account can only create sandbox (test) keys.', 403);
         }
+        $this->revokeRotatedExpired($userId);
         if (DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
             $this->fail('You reached the maximum number of API keys.', 403);
         }
@@ -574,7 +590,7 @@ class DeveloperAppService
                 $this->fail('The app does not have these scopes: ' . implode(', ', $extra));
             }
         }
-        $accId = !empty($in['mail_account_id']) ? (int) $in['mail_account_id'] : null;
+        $accId = $mode === 'sandbox' || empty($in['mail_account_id']) ? null : (int) $in['mail_account_id']; // مفتاح sandbox مبيتربطش بصندوق حقيقي
         if ($accId && !DB::table('mail_accounts')->where('id', $accId)->where('user_id', $userId)->exists()) {
             $this->fail('Mailbox not found.', 404);
         }
@@ -626,6 +642,98 @@ class DeveloperAppService
     {
         $k = $this->ownKey($userId, $id);
         DB::table('dev_api_keys')->where('id', $k->id)->whereNull('revoked_at')->update(['revoked_at' => now(), 'updated_at' => now()]);
+    }
+
+    public const ROTATE_DEFAULT_GRACE_HOURS = 24;
+    public const ROTATE_MAX_GRACE_HOURS = 168;
+
+    /**
+     * متى بيبطل المفتاح القديم بعد الـ rotate؟ null = فورًا. لو المفتاح القديم كان ليه تاريخ انتهاء أقرب من فترة السماح بنحافظ عليه (السماح مبيطوّلش عمر المفتاح).
+     */
+    public static function rotationCutoff(?string $currentExpiresAt, int $graceHours, Carbon $now): ?Carbon
+    {
+        if ($graceHours <= 0) {
+            return null;
+        }
+        $cut = $now->copy()->addHours($graceHours);
+        if ($currentExpiresAt) {
+            $cur = Carbon::parse($currentExpiresAt, 'UTC');
+            if ($cur->lt($cut)) {
+                return $cur;
+            }
+        }
+        return $cut;
+    }
+
+    /**
+     * Rotate: بيطلّع مفتاح جديد بنفس الاسم والـ mode والـ scopes والتطبيق والـ IP allowlist، ويسيب القديم شغال لفترة سماح
+     * (grace_hours، افتراضي 24، الأقصى 168، 0 = يبطل فورًا) عشان تبدّل في الـ deployments من غير توقف.
+     * المفتاح الجديد بيظهر مرة واحدة. القديم بيبطل لوحده بعد الفترة (expires_at) ويتبطّل نهائيًا بعدها.
+     * @param array{grace_hours?:int,expires_in_days?:int} $in
+     */
+    public function rotateKey(int $userId, int $id, array $in = []): array
+    {
+        $policy = $this->assertDevAllowed($userId);
+        $this->revokeRotatedExpired($userId);
+        $old = $this->ownKey($userId, $id);
+        if ($old->revoked_at !== null) {
+            $this->fail('This key is already revoked. Create a new key instead.');
+        }
+        if ($old->expires_at && now()->gte(Carbon::parse($old->expires_at, 'UTC'))) {
+            $this->fail('This key has expired. Create a new key instead.');
+        }
+        if (($old->rotated_at ?? null) !== null) {
+            $this->fail('This key was already rotated. Rotate its replacement instead.');
+        }
+        $grace = array_key_exists('grace_hours', $in) && $in['grace_hours'] !== null ? (int) $in['grace_hours'] : self::ROTATE_DEFAULT_GRACE_HOURS;
+        if ($grace < 0 || $grace > self::ROTATE_MAX_GRACE_HOURS) {
+            $this->fail('grace_hours must be between 0 and ' . self::ROTATE_MAX_GRACE_HOURS . '.');
+        }
+        if ($grace > 0 && DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
+            $this->fail('Rotating with a grace period needs one free key slot. Revoke an unused key, or rotate with grace_hours = 0.', 403);
+        }
+
+        $oldScopes = (array) json_decode((string) $old->scopes, true);
+        $scopes = array_values(array_intersect($oldScopes, $this->allowedScopesFor($userId))); // اللي لسه مسموح
+        $dropped = array_values(array_diff($oldScopes, $scopes));
+        $accId = $old->mail_account_id && DB::table('mail_accounts')->where('id', $old->mail_account_id)->where('user_id', $userId)->exists() ? (int) $old->mail_account_id : null;
+
+        return DB::transaction(function () use ($userId, $old, $grace, $scopes, $dropped, $accId, $in) {
+            $now = now();
+            if ($grace === 0) { // نحرّر الخانة قبل ما ننشئ الجديد
+                DB::table('dev_api_keys')->where('id', $old->id)->update(['revoked_at' => $now, 'rotated_at' => $now, 'updated_at' => $now]);
+            }
+            $created = $this->createKey($userId, [
+                'name' => $old->name, 'mode' => $old->mode, 'scopes' => $scopes, 'app_id' => $old->app_id, 'mail_account_id' => $accId,
+                'ip_allowlist' => (array) json_decode((string) ($old->ip_allowlist ?? '[]'), true),
+                'expires_in_days' => $in['expires_in_days'] ?? null,
+            ]);
+            $upd = ['rotated_from_id' => $old->id, 'updated_at' => $now];
+            if (empty($in['expires_in_days']) && $old->expires_at) {
+                $upd['expires_at'] = $old->expires_at; // بدون تحديد: نفس تاريخ انتهاء القديم (صريح ومتوقّع)
+            }
+            DB::table('dev_api_keys')->where('id', $created['id'])->update($upd);
+            if ($grace > 0) {
+                $cut = self::rotationCutoff($old->expires_at, $grace, $now);
+                DB::table('dev_api_keys')->where('id', $old->id)->update(['rotated_at' => $now, 'expires_at' => $cut, 'updated_at' => $now]);
+            }
+            return [
+                'key' => $this->keyPayload(DB::table('dev_api_keys')->find($created['id']), $created['key']),
+                'old_key' => $this->keyPayload(DB::table('dev_api_keys')->find($old->id)),
+                'grace_hours' => $grace,
+                'dropped_scopes' => $dropped,
+            ];
+        });
+    }
+
+    /** مفاتيح اتبدّلت وانتهت فترة سماحها → تتبطّل نهائيًا (بتحرّر الخانة). بتتنده من dev:maintenance ومن إنشاء/rotate المفاتيح (للمستخدم ده بس). */
+    public function revokeRotatedExpired(?int $userId = null): int
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasColumn('dev_api_keys', 'rotated_at')) {
+            return 0;
+        }
+        return DB::table('dev_api_keys')->whereNotNull('rotated_at')->whereNull('revoked_at')->whereNotNull('expires_at')->where('expires_at', '<=', now())
+            ->when($userId, fn ($q) => $q->where('user_id', $userId))->update(['revoked_at' => now(), 'updated_at' => now()]);
     }
 
     /* ------------------------------------------------------------------ grants (التطبيقات اللي وافقت عليها) */

@@ -63,9 +63,14 @@ class DeveloperAuthService
         }
 
         // الصندوق: لازم لسه بتاع المستخدم ونشط، وإلا الافتراضي.
-        $accId = $ctx['mail_account_id'];
-        $ok = $accId && DB::table('mail_accounts')->where('id', $accId)->where('user_id', $ctx['user_id'])->exists();
-        $ctx['mail_account_id'] = $ok ? $accId : ((int) DB::table('mail_accounts')->where('user_id', $ctx['user_id'])->orderByDesc('is_default')->orderBy('id')->value('id') ?: null);
+        // اعتماد sandbox مبيشيلش أي صندوق حقيقي أبدًا (حتى لو المفتاح اتربط بصندوق قبل كده).
+        if ($ctx['mode'] === 'sandbox') {
+            $ctx['mail_account_id'] = null;
+        } else {
+            $accId = $ctx['mail_account_id'];
+            $ok = $accId && DB::table('mail_accounts')->where('id', $accId)->where('user_id', $ctx['user_id'])->exists();
+            $ctx['mail_account_id'] = $ok ? $accId : ((int) DB::table('mail_accounts')->where('user_id', $ctx['user_id'])->orderByDesc('is_default')->orderBy('id')->value('id') ?: null);
+        }
 
         // Rate limit لكل مفتاح/توكن.
         $rk = 'dev:rl:' . $ctx['rate_key'];

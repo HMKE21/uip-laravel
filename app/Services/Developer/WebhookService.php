@@ -154,14 +154,15 @@ class WebhookService
         return $p;
     }
 
-    public function list(int $userId): array
+    /** @param ?string $mode لو متحدد (live|sandbox) بيرجّع webhooks الـ mode ده بس — واجهة الـ API بتبعته دايمًا. */
+    public function list(int $userId, ?string $mode = null): array
     {
-        return DB::table('dev_webhooks')->where('user_id', $userId)->orderByDesc('id')->get()->map(fn ($h) => $this->payload($h))->values()->all();
+        return DB::table('dev_webhooks')->where('user_id', $userId)->when($mode, fn ($q) => $q->where('mode', $mode))->orderByDesc('id')->get()->map(fn ($h) => $this->payload($h))->values()->all();
     }
 
-    public function own(int $userId, int $id): object
+    public function own(int $userId, int $id, ?string $mode = null): object
     {
-        $h = DB::table('dev_webhooks')->where('id', $id)->where('user_id', $userId)->first();
+        $h = DB::table('dev_webhooks')->where('id', $id)->where('user_id', $userId)->when($mode, fn ($q) => $q->where('mode', $mode))->first();
         if (!$h) {
             $this->fail('Webhook not found.', 404);
         }
@@ -265,9 +266,9 @@ class WebhookService
         return $this->payload(DB::table('dev_webhooks')->find($h->id), $secret);
     }
 
-    public function delete(int $userId, int $id): void
+    public function delete(int $userId, int $id, ?string $mode = null): void
     {
-        $h = $this->own($userId, $id);
+        $h = $this->own($userId, $id, $mode);
         DB::transaction(function () use ($h) {
             DB::table('dev_webhook_deliveries')->where('webhook_id', $h->id)->delete();
             DB::table('dev_webhooks')->where('id', $h->id)->delete();

@@ -240,7 +240,8 @@ class DevApiController extends Controller
 
     public function webhooks(Request $r)
     {
-        return $this->dom(fn () => ['webhooks' => $this->hooks->list((int) $this->ctx($r)['user_id'])]);
+        $c = $this->ctx($r);
+        return $this->dom(fn () => ['webhooks' => $this->hooks->list((int) $c['user_id'], (string) $c['mode'])]); // بس webhooks نفس الـ mode
     }
 
     public function createWebhook(Request $r)
@@ -254,7 +255,8 @@ class DevApiController extends Controller
 
     public function deleteWebhook(Request $r, int $id)
     {
-        return $this->dom(function () use ($r, $id) { $this->hooks->delete((int) $this->ctx($r)['user_id'], $id); return null; });
+        $c = $this->ctx($r);
+        return $this->dom(function () use ($c, $id) { $this->hooks->delete((int) $c['user_id'], $id, (string) $c['mode']); return null; }); // webhook من mode تاني = 404
     }
 
     /* ------------------------------------------------------------ sandbox helpers */
