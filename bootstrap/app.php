@@ -94,6 +94,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'uip.auth.optional' => \App\Http\Middleware\UipAuthOptionalMiddleware::class,
             // Developer API (المرحلة 6): Bearer بمفتاح API (uipk_…) أو OAuth access token (uipo_…) + scope اختياري: dev.auth:mail.read
             'dev.auth' => \App\Http\Middleware\DevAuthMiddleware::class,
+            // UIPE Mail (المرحلة 7): قواعد IP (block/allow) على /api/v1/mail/*. بعد uip.auth.
+            'mail.ip' => \App\Http\Middleware\UipMailIpMiddleware::class,
         ]);
 
         // المكالمات: الـ SDP لازم ينتهي بـ \r\n. TrimStrings الافتراضي كان بيشيله فالمستلم يرفض الـ offer

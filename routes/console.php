@@ -94,3 +94,8 @@ Schedule::command('mail:identity-sync --prune')->dailyAt('04:20')->withoutOverla
 // Developer Center (المرحلة 6): إعادة محاولات الـ Webhooks كل دقيقة + تنضيف يومي. محتاج schedule:run كل دقيقة.
 Schedule::command('dev:maintenance --webhooks')->everyMinute()->withoutOverlapping();
 Schedule::command('dev:maintenance --prune')->dailyAt('05:00')->withoutOverlapping();
+
+// UIPE Mail (المرحلة 7): مراقبة النشاط المشبوه (brute-force / bounce spike / مسح قواعد IP المنتهية) كل 5 دقايق،
+// وسياسات الاحتفاظ لكل جامعة + تنضيف سجلات التشغيل يوميًا. (إعادة محاولة الإرسال الخارجي جوّه mail:process كل دقيقة.)
+Schedule::command('mail:security-scan')->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('mail:retention')->dailyAt('04:40')->withoutOverlapping();

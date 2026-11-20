@@ -58,6 +58,9 @@ class BrevoExternalMailGateway implements ExternalMailGateway
                 }
             }
             $m->subject((string) ($mail['subject'] ?? ''));
+            if (!empty($mail['message_id'])) { // Tag لربط أحداث الـ webhook (bounce/delivered) بالرسالة
+                $m->getSymfonyMessage()->getHeaders()->addTextHeader('X-Mailin-Tag', MailBounceService::tagFor((int) $mail['message_id']));
+            }
             if ($replyTo !== '') {
                 $m->replyTo($replyTo);
             }

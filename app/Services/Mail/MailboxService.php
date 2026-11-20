@@ -19,9 +19,12 @@ use Illuminate\Support\Str;
 /** UIPE Mail — المرحلة 1: حسابات، إرسال داخلي، مسودات، صناديق، تصنيفات، مرفقات. المرحلة 3: Snooze، جدولة، Undo Send، سرّي، فلاتر، رد تلقائي. */
 class MailboxService
 {
+    private const EXT_ERR = 'External delivery failed. Check the Brevo settings.';
+
     public const FOLDERS = ['inbox', 'sent', 'drafts', 'scheduled', 'archive', 'spam', 'trash'];
 
-    public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters, private MailTenantService $tenants)
+    public function __construct(private ExternalMailGateway $external, private MailFilterEngine $filters, private MailTenantService $tenants,
+        private MailAuditService $audit, private MailSecurityService $security)
     {
     }
 
@@ -458,6 +461,9 @@ class MailboxService
             $this->fail('Write a subject or a message first.');
         }
         $recipients = $this->resolveRecipients($in, $send, $a);
+        if ($send) { // المرحلة 7: حدود الإرسال الساعية + الكشف المشبوه
+            $this->security->assertMaySend($a, count($recipients), count(array_filter($recipients, fn ($r) => empty($r['account_id']))));
+        }
         $conf = $this->confidentialFields($in, $send, $recipients);
 
         $replyTo = null; $threadId = null;
@@ -649,34 +655,78 @@ class MailboxService
         });
     }
 
-    /** يبعت نسخة الرسالة للمستلمين الخارجيين عبر البوابة. الفشل مبيلغيش الإرسال الداخلي: بيتسجل في اللوج وفي schedule_error. */
-    private function sendExternal(int $mid): void
+    /** سجل حالة الإرسال الخارجي (طابور + إعادة محاولة). */
+    private function trackDelivery(int $mid, object $msg, array $set): void
     {
+        $now = now();
+        DB::table('mail_external_deliveries')->insertOrIgnore(['message_id' => $mid, 'sender_account_id' => (int) $msg->sender_account_id,
+            'university_id' => DB::table('mail_accounts')->where('id', $msg->sender_account_id)->value('university_id'), 'status' => 'queued', 'created_at' => $now, 'updated_at' => $now]);
+        DB::table('mail_external_deliveries')->where('message_id', $mid)->update($set + ['updated_at' => $now]);
+    }
+
+    /** يبعت نسخة الرسالة للمستلمين الخارجيين عبر البوابة. الفشل مبيلغيش الإرسال الداخلي: بيتسجل ويتعاد تلقائيًا (retryExternal). */
+    public function sendExternal(int $mid): void
+    {
+        $msg = null;
         try {
             $msg = DB::table('mail_messages')->where('id', $mid)->first();
             if (!$msg) {
                 return;
             }
+            $senderAcc = MailAccount::find($msg->sender_account_id);
             $sender = DB::table('mail_accounts')->where('id', $msg->sender_account_id)->first(['address', 'display_name']);
             $rc = DB::table('mail_recipients')->where('message_id', $mid)->whereNull('account_id')->get();
+            $skip = $senderAcc ? $this->security->suppressedAmong($senderAcc, $rc->pluck('address')->all()) : [];
+            if ($skip) { // عناوين فيها hard bounce/شكوى: منبعتش ليها
+                $rc = $rc->reject(fn ($r) => in_array(strtolower((string) $r->address), $skip, true))->values();
+                $this->security->event('suppressed_send', 'low', ['university_id' => $senderAcc?->university_id, 'tenant_id' => $senderAcc?->tenant_id, 'account_id' => $senderAcc?->id,
+                    'details' => ['skipped' => count($skip), 'message_id' => $mid]], false);
+            }
             $pick = fn (string $k) => $rc->where('kind', $k)->map(fn ($r) => ['address' => $r->address, 'name' => $r->name])->values()->all();
             $to = $pick('to'); $cc = $pick('cc'); $bcc = $pick('bcc');
             if (!$to) { // Brevo محتاج To: لو الخارجيين cc/bcc بس نرقّي أول مجموعة
                 if ($cc) { $to = $cc; $cc = []; } elseif ($bcc) { $to = $bcc; $bcc = []; }
             }
             if (!$to) {
+                $this->trackDelivery($mid, $msg, ['status' => $skip ? 'suppressed' : 'failed', 'recipients' => 0, 'next_retry_at' => null]);
                 return;
             }
             $atts = DB::table('mail_attachments')->where('message_id', $mid)->get(['name', 'mime', 'disk', 'path'])->map(fn ($a) => (array) $a)->all();
             $this->external->send([
                 'from' => (string) ($sender->address ?? ''), 'from_name' => $sender->display_name ?? null,
                 'to' => $to, 'cc' => $cc, 'bcc' => $bcc, 'subject' => (string) $msg->subject,
-                'html' => (string) $msg->body_html, 'text' => (string) $msg->body_text, 'attachments' => $atts,
+                'html' => (string) $msg->body_html, 'text' => (string) $msg->body_text, 'attachments' => $atts, 'message_id' => $mid,
             ]);
+            $n = $rc->count();
+            $prev = (int) DB::table('mail_external_deliveries')->where('message_id', $mid)->value('attempts');
+            $this->trackDelivery($mid, $msg, ['status' => 'sent', 'recipients' => $n, 'attempts' => $prev + 1, 'last_error' => null, 'last_attempt_at' => now(), 'next_retry_at' => null]);
+            DB::table('mail_messages')->where('id', $mid)->where('schedule_error', self::EXT_ERR)->update(['schedule_error' => null]);
+            $this->audit->record('mail.send_external', "External send: {$n} recipient(s)", ['university_id' => $senderAcc?->university_id, 'tenant_id' => $senderAcc?->tenant_id,
+                'account_id' => $senderAcc?->id, 'target_type' => 'message', 'target_id' => $mid, 'meta' => ['recipients' => $n]]);
         } catch (\Throwable $e) {
             Log::warning('UIPE Mail: external delivery failed', ['message_id' => $mid, 'error' => $e->getMessage()]);
-            DB::table('mail_messages')->where('id', $mid)->update(['schedule_error' => 'External delivery failed. Check the Brevo settings.']);
+            DB::table('mail_messages')->where('id', $mid)->update(['schedule_error' => self::EXT_ERR]);
+            if ($msg) {
+                try {
+                    $attempts = (int) DB::table('mail_external_deliveries')->where('message_id', $mid)->value('attempts') + 1;
+                    $max = (int) config('mailbox.external_max_attempts', 5);
+                    $retry = $attempts < $max ? now()->addMinutes([5, 15, 60, 240][min($attempts - 1, 3)]) : null;
+                    $this->trackDelivery($mid, $msg, ['status' => 'failed', 'attempts' => $attempts, 'last_error' => Str::limit($e->getMessage(), 240, ''), 'last_attempt_at' => now(), 'next_retry_at' => $retry]);
+                } catch (\Throwable $e2) { /* ignore */ }
+            }
         }
+    }
+
+    /** يعيد محاولة الإرسال الخارجي الفاشل (backoff 5د/15د/1س/4س، حد أقصى external_max_attempts). */
+    public function retryExternal(int $limit = 50): int
+    {
+        $ids = DB::table('mail_external_deliveries')->where('status', 'failed')->whereNotNull('next_retry_at')->where('next_retry_at', '<=', now())
+            ->where('attempts', '<', (int) config('mailbox.external_max_attempts', 5))->orderBy('next_retry_at')->limit($limit)->pluck('message_id');
+        foreach ($ids as $mid) {
+            DB::table('mail_external_deliveries')->where('message_id', $mid)->update(['next_retry_at' => null]); // يمنع تكرار التنفيذ لو الأمر اشتغل مرتين
+            $this->sendExternal((int) $mid);
+        }
+        return $ids->count();
     }
 
     /** رد تلقائي واحد لكل مرسل كل 4 أيام (وما بيردش على رسائل تلقائية أو no-reply). */
@@ -830,6 +880,8 @@ class MailboxService
         if ($bad) {
             $this->fail("{$bad} is suspended.");
         }
+        $rc = DB::table('mail_recipients')->where('message_id', $m->id)->selectRaw('COUNT(*) total, SUM(CASE WHEN account_id IS NULL THEN 1 ELSE 0 END) ext')->first();
+        $this->security->assertMaySend($sender, (int) ($rc->total ?? 0), (int) ($rc->ext ?? 0));
     }
 
     /** بيسلّم كل اللي وقته جه (مجدول أو Undo خلصت مدته). $accountId = تسليم رسائل صندوق واحد بس (استدعاء كسول من الـ API). */
@@ -948,8 +1000,12 @@ class MailboxService
             case 'restore':
                 $q()->where('folder', 'trash')->update(['folder' => DB::raw("COALESCE(prev_folder, 'inbox')"), 'prev_folder' => null, 'trashed_at' => null, 'updated_at' => $now]); break;
             case 'delete_forever':
-                $q()->where('folder', 'trash')->delete();
+                $this->assertNoLegalHold($a);
+                $n = $q()->where('folder', 'trash')->delete();
                 $this->purgeOrphans();
+                if ($n) {
+                    $this->audit->record('mail.delete_forever', "Permanently deleted {$n} message(s)", ['university_id' => $a->university_id, 'tenant_id' => $a->tenant_id, 'actor_user_id' => $a->user_id, 'account_id' => $a->id, 'meta' => ['count' => $n]]);
+                }
                 break;
             case 'snooze':
                 $at = $this->parseFuture($until);
@@ -988,13 +1044,25 @@ class MailboxService
 
     public function emptyTrash(MailAccount $a): int
     {
+        $this->assertNoLegalHold($a);
         $n = DB::table('mail_items')->where('account_id', $a->id)->where('folder', 'trash')->delete();
         $this->purgeOrphans();
+        if ($n) {
+            $this->audit->record('mail.empty_trash', "Emptied trash ({$n})", ['university_id' => $a->university_id, 'tenant_id' => $a->tenant_id, 'actor_user_id' => $a->user_id, 'account_id' => $a->id, 'meta' => ['count' => $n]]);
+        }
         return $n;
     }
 
+    /** Legal hold: ممنوع الحذف النهائي لحد ما الأدمن يرفعه (النقل للسلة مسموح). */
+    private function assertNoLegalHold(MailAccount $a): void
+    {
+        if (!empty($a->legal_hold)) {
+            $this->fail('This mailbox is under legal hold: permanent deletion is disabled. / الصندوق تحت التجميد القانوني: الحذف النهائي غير متاح.', 423);
+        }
+    }
+
     /** رسائل ملهاش أي نسخة صندوق (اتمسحت من كل الأطراف) تتمسح مع مرفقاتها من التخزين. */
-    private function purgeOrphans(): void
+    public function purgeOrphans(): void
     {
         $orphans = DB::table('mail_messages as m')->whereNotExists(fn ($s) => $s->select(DB::raw(1))->from('mail_items as i')->whereColumn('i.message_id', 'm.id'))->limit(200)->pluck('m.id')->all();
         if (!$orphans) {
@@ -1006,10 +1074,28 @@ class MailboxService
         DB::table('mail_messages')->whereIn('id', $orphans)->delete(); // المرفقات والمستلمين cascade
     }
 
-    /** مسح تلقائي للسلة بعد trash_days — بيتنادى من schedule لاحقًا أو يدويًا. */
+    /** مسح تلقائي للسلة بعد trash_days (أو retention_trash_days للجامعة). الصناديق تحت Legal hold بتتخطّى. */
     public function purgeOldTrash(): int
     {
-        $n = DB::table('mail_items')->where('folder', 'trash')->where('trashed_at', '<', now()->subDays((int) config('mailbox.trash_days', 30)))->delete();
+        $def = (int) config('mailbox.trash_days', 30);
+        $custom = DB::table('mail_tenants')->whereNotNull('retention_trash_days')->pluck('retention_trash_days', 'id');
+        $n = 0;
+        $run = function (?int $tenantId, int $days) use (&$n, $custom) {
+            do {
+                $q = DB::table('mail_items as i')->join('mail_accounts as a', 'a.id', '=', 'i.account_id')->where('i.folder', 'trash')->where('a.legal_hold', 0)->where('i.trashed_at', '<', now()->subDays(max(1, $days)));
+                $tenantId === null
+                    ? $q->where(fn ($w) => $w->whereNull('a.tenant_id')->orWhereNotIn('a.tenant_id', $custom->keys()->all() ?: [0]))
+                    : $q->where('a.tenant_id', $tenantId);
+                $ids = $q->limit(2000)->pluck('i.id')->all();
+                if ($ids) {
+                    $n += DB::table('mail_items')->whereIn('id', $ids)->delete();
+                }
+            } while (count($ids) === 2000);
+        };
+        $run(null, $def);
+        foreach ($custom as $tid => $days) {
+            $run((int) $tid, (int) $days);
+        }
         $this->purgeOrphans();
         return $n;
     }

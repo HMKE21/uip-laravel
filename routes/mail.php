@@ -3,11 +3,13 @@
 use App\Http\Controllers\Api\MailAdvancedController;
 use App\Http\Controllers\Api\MailApiController;
 use App\Http\Controllers\Api\MailIntegrationController;
+use App\Http\Controllers\Api\MailSecurityApiController;
 use App\Http\Controllers\Api\MailTenantApiController;
+use App\Http\Controllers\Api\MailWebhookController;
 use Illuminate\Support\Facades\Route;
 
-/** UIPE Mail — المرحلة 1 + 3 + 4 (mail-admin). بيتحمّل من آخر routes/api.php (فبيورث prefix /api). */
-Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
+/** UIPE Mail — المرحلة 1 + 3 + 4 (mail-admin) + 7 (mail.ip = قواعد IP على الصندوق). بيتحمّل من آخر routes/api.php (فبيورث prefix /api). */
+Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip'])->group(function () {
     Route::get('/account', [MailApiController::class, 'account'])->middleware('throttle:240,1');
     Route::get('/messages', [MailApiController::class, 'index'])->middleware('throttle:240,1');
     Route::get('/messages/{id}', [MailApiController::class, 'show'])->whereNumber('id')->middleware('throttle:240,1');
@@ -89,7 +91,7 @@ Route::prefix('v1/mail-admin')->middleware('uip.auth')->group(function () {
 });
 
 /** المرحلة 6: ربط البريد بالشات / الاجتماعات / Drive / AI + إشعارات البريد. (الرسائل السرّية ممنوعة من الربط جوه الخدمة.) */
-Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
+Route::prefix('v1/mail')->middleware(['uip.auth', 'mail.ip'])->group(function () {
     Route::get('/messages/{id}/links', [MailIntegrationController::class, 'links'])->whereNumber('id')->middleware('throttle:120,1');
     Route::post('/messages/{id}/share-chat', [MailIntegrationController::class, 'shareChat'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/messages/{id}/meeting', [MailIntegrationController::class, 'meeting'])->whereNumber('id')->middleware('throttle:20,1');
@@ -99,3 +101,37 @@ Route::prefix('v1/mail')->middleware('uip.auth')->group(function () {
     Route::get('/notification-prefs', [MailIntegrationController::class, 'notificationPrefs'])->middleware('throttle:120,1');
     Route::put('/notification-prefs', [MailIntegrationController::class, 'saveNotificationPrefs'])->middleware('throttle:30,1');
 });
+
+/** المرحلة 7: الإدارة والأمان — أدمن الجامعة / أدمن المنصة (الكونترولر بيفحص الدور وبيمنع الكلية). */
+Route::prefix('v1/mail-admin/security')->middleware('uip.auth')->group(function () {
+    Route::get('/overview', [MailSecurityApiController::class, 'overview'])->middleware('throttle:120,1');
+
+    Route::get('/events', [MailSecurityApiController::class, 'events'])->middleware('throttle:120,1');
+    Route::post('/events/{id}/resolve', [MailSecurityApiController::class, 'resolveEvent'])->whereNumber('id')->middleware('throttle:60,1');
+
+    Route::get('/audit', [MailSecurityApiController::class, 'auditLog'])->middleware('throttle:120,1');
+    Route::get('/audit/export', [MailSecurityApiController::class, 'auditExport'])->middleware('throttle:5,1');
+
+    Route::get('/ip-rules', [MailSecurityApiController::class, 'ipRules'])->middleware('throttle:120,1');
+    Route::post('/ip-rules', [MailSecurityApiController::class, 'addIpRule'])->middleware('throttle:20,1');
+    Route::delete('/ip-rules/{id}', [MailSecurityApiController::class, 'removeIpRule'])->whereNumber('id')->middleware('throttle:20,1');
+
+    Route::get('/suppressions', [MailSecurityApiController::class, 'suppressions'])->middleware('throttle:120,1');
+    Route::post('/suppressions', [MailSecurityApiController::class, 'addSuppression'])->middleware('throttle:30,1');
+    Route::delete('/suppressions/{id}', [MailSecurityApiController::class, 'removeSuppression'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::get('/bounces', [MailSecurityApiController::class, 'bounces'])->middleware('throttle:120,1');
+
+    Route::get('/queue', [MailSecurityApiController::class, 'queueStats'])->middleware('throttle:120,1');
+    Route::get('/queue/deliveries', [MailSecurityApiController::class, 'deliveries'])->middleware('throttle:120,1');
+    Route::post('/queue/deliveries/{id}/retry', [MailSecurityApiController::class, 'retryDelivery'])->whereNumber('id')->middleware('throttle:30,1');
+
+    Route::get('/policy', [MailSecurityApiController::class, 'policy'])->middleware('throttle:120,1');
+    Route::put('/policy', [MailSecurityApiController::class, 'updatePolicy'])->middleware('throttle:20,1');
+
+    Route::get('/flagged-accounts', [MailSecurityApiController::class, 'flagged'])->middleware('throttle:120,1');
+    Route::post('/accounts/{id}/legal-hold', [MailSecurityApiController::class, 'legalHold'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/accounts/{id}/reinstate', [MailSecurityApiController::class, 'reinstate'])->whereNumber('id')->middleware('throttle:30,1');
+});
+
+/** المرحلة 7: Webhook بتاع Brevo (bounce / delivered / spam). عام بس محمي بتوكن سري (UIPE_MAIL_WEBHOOK_SECRET). */
+Route::post('v1/mail/webhooks/brevo', [MailWebhookController::class, 'brevo'])->middleware('throttle:600,1');

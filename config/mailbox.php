@@ -23,4 +23,21 @@ return [
     'attachments_disk'    => env('UIPE_MAIL_ATTACHMENTS_DISK', null), // null = FILESYSTEM_DISK
     'trash_days'          => 30,
     'per_page'            => 25,
+
+    // المرحلة 7: الأمان والإدارة
+    'security' => [
+        'max_per_hour'            => 200,   // رسائل مرسَلة/ساعة لكل صندوق (تتغيّر لكل جامعة)
+        'max_recipients_per_hour' => 1000,  // مستلمين/ساعة
+        'max_external_per_hour'   => 100,   // مستلمين خارجيين/ساعة
+        'bounce_spike_24h'        => 10,    // bounces/24 ساعة لنفس الصندوق = نشاط مشبوه
+        'bruteforce_failures'     => 10,    // محاولات دخول فاشلة من نفس الـ IP
+        'bruteforce_window_min'   => 15,
+        'suspend_after_violations' => 5,    // مخالفات حد الإرسال خلال 24 ساعة قبل الإيقاف التلقائي (لو الجامعة مفعّلاه)
+    ],
+    'webhook_secret'        => env('UIPE_MAIL_WEBHOOK_SECRET', ''), // توكن webhook بتاع Brevo (Header: X-Webhook-Token أو ?token=)
+    'external_max_attempts' => 5,
+    'audit_retention_days'  => 365,
+    'events_retention_days'     => 180,  // الأحداث الأمنية المقفولة (resolved/ignored)
+    'deliveries_retention_days' => 90,   // سجل الإرسال الخارجي (غير الفاشل)
+    'bounces_retention_days'    => 365,
 ];

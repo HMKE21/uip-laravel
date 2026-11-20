@@ -29,7 +29,7 @@ class UipNetworkRestrictionMiddleware
 
     public function handle(Request $request, Closure $next): Response
     {
-        if ($request->isMethod('OPTIONS') || $request->is('api/v1/device-status')) {
+        if ($request->isMethod('OPTIONS') || $request->is('api/v1/device-status', 'api/v1/mail/webhooks/*')) { // webhooks (Brevo): سيرفر مش متصفح، ومحمي بتوكن
             return $next($request);
         }
 
