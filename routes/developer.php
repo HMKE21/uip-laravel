@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\DevAdminController;
 use App\Http\Controllers\Api\DevApiController;
+use App\Http\Controllers\Api\DevDocsController;
 use App\Http\Controllers\Api\DeveloperCenterController;
 use App\Http\Controllers\Api\OAuthTokenController;
 use Illuminate\Support\Facades\Route;
@@ -107,6 +108,9 @@ Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
 
 // 4) Developer API العام: Bearer uipk_… / uipo_… (+ scope). الـ middleware dev.auth بيتحط على كل route (مرة واحدة) والـ rate limit جواه لكل مفتاح/توكن.
 Route::prefix('dev/v1')->group(function () {
+    // التوثيق: OpenAPI 3.1 عام (من غير اعتماد) — مولّد من الـ routes الفعلية تحت. DevOpenApi بيتجاهل أي route من غير dev.auth فمش بيوثّق نفسه.
+    Route::get('/openapi.json', [DevDocsController::class, 'openapi'])->middleware('throttle:60,1');
+
     Route::get('/me', [DevApiController::class, 'me'])->middleware('dev.auth:profile.read');
     Route::get('/scopes', [DevApiController::class, 'scopes'])->middleware('dev.auth');
 
