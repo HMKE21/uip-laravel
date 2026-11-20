@@ -258,6 +258,7 @@ final class DevOpenApi
             $desc = $e['description'] ?? '';
             if (!$isOauth) {
                 $mode = $e['modes'] ?? 'both';
+                $op['x-uipe-mode'] = $mode; // الـ API Explorer بيعرضها وبيحذّر لو المفتاح من mode مش مسموح
                 if ($mode === 'live') {
                     $desc .= ($desc ? "\n\n" : '') . 'Live credentials only. With a sandbox key this returns `422 sandbox_unsupported`.';
                 } elseif ($mode === 'sandbox') {

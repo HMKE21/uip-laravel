@@ -76,6 +76,15 @@ class DevModeSeparationTest extends TestCase
     }
 
     #[Test]
+    public function the_spec_exposes_the_mode_of_every_endpoint(): void
+    {
+        $spec = DevOpenApi::build(DevOpenApi::routesFromLaravel(), 'https://uipe.test');
+        $this->assertSame('both', $spec['paths']['/webhooks']['get']['x-uipe-mode']);
+        $this->assertSame('live', $spec['paths']['/mail/labels']['get']['x-uipe-mode']);
+        $this->assertSame('sandbox', $spec['paths']['/sandbox/reset']['post']['x-uipe-mode']);
+    }
+
+    #[Test]
     public function rotation_without_grace_revokes_immediately(): void
     {
         $this->assertNull(DeveloperAppService::rotationCutoff(null, 0, Carbon::parse('2027-12-01 10:00:00', 'UTC')));

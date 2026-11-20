@@ -55,7 +55,7 @@ Body (كله اختياري):
 - `GET /webhooks` و`DELETE /webhooks/{id}` عبر الـ API بقوا بيشوفوا webhooks نفس الـ mode بس (webhook من mode تاني = 404). قبل كده مفتاح live كان يشوف ويمسح webhooks الـ sandbox والعكس. لوحة المطوّر (session) لسه بتعرض الاتنين.
 - اعتماد sandbox مبيشيلش `mail_account_id` حقيقي أبدًا، حتى لو المفتاح اتربط بصندوق قبل كده. وإنشاء مفتاح sandbox بيتجاهل `mail_account_id`.
 - تسليم الأحداث كان بيفلتر بالـ mode أصلًا (`DevEventBus`)، ومتغيّرش.
-- التوثيق (`openapi.json`) بيذكر القيد في وصف كل endpoint.
+- التوثيق (`openapi.json`) بيذكر القيد في وصف كل endpoint، وكل operation فيه `x-uipe-mode` (`both | live | sandbox`) عشان الـ API Explorer في الفرونت يعرضه.
 
 ## الملفات
 جديد: `DevModeGate.php`، migration الـ rotate، `tests/Feature/DevModeSeparationTest.php`.
