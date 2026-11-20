@@ -34,6 +34,7 @@ class MailSecurityTest extends TestCase
         parent::setUp();
         Schema::create('users', function (Blueprint $t) {
             $t->id(); $t->string('full_name'); $t->string('email')->nullable(); $t->string('status')->default('active');
+            $t->dateTime('deleted_at')->nullable(); // User يستخدم SoftDeletes
         });
         Schema::create('universities', function (Blueprint $t) {
             $t->id(); $t->unsignedBigInteger('user_id'); $t->string('official_name_ar'); $t->string('official_name_en');
