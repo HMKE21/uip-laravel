@@ -25,71 +25,53 @@ class DeveloperAppService
         return $u && $u->deleted_at === null && !in_array($u->status, ['suspended', 'banned'], true);
     }
 
+    public function __construct(private DevAccessService $access)
+    {
+    }
+
     public function universityOf(int $userId): ?int
     {
-        $id = DB::table('mail_accounts')->where('user_id', $userId)->whereNotNull('university_id')->orderByDesc('is_default')->orderBy('id')->value('university_id');
-        return $id ? (int) $id : null;
+        return $this->access->universityOf($userId);
     }
 
-    /** سياسة الجامعة للمطورين (أو الافتراضي لو الجامعة ماعملتش واحدة). */
+    /** سياسة جامعة واحدة (أو المنصة لو null/0) زي ما اتحفظت — للإدارة. */
     public function policyForUniversity(?int $universityId): array
     {
-        $row = $universityId ? DB::table('dev_tenant_policies')->where('university_id', $universityId)->first() : null;
-        $allowed = $row && $row->allowed_scopes !== null ? array_values(array_intersect(DevScopes::names(), (array) json_decode((string) $row->allowed_scopes, true))) : null;
-        return [
-            'university_id' => $universityId, 'apps_enabled' => $row ? (bool) $row->apps_enabled : true,
-            'webhooks_enabled' => $row ? (bool) $row->webhooks_enabled : true,
-            'max_apps_per_user' => $row && $row->max_apps_per_user !== null ? (int) $row->max_apps_per_user : null,
-            'allowed_scopes' => $allowed,
-        ];
+        return $this->access->rawPolicy((int) $universityId);
     }
 
+    /**
+     * السياسة الفعلية لمستخدم (المنصة + الجامعة + القواعد + استثناء المطوّر) بنفس الشكل القديم + حقول جديدة.
+     * apps_enabled هنا = "المستخدم ده مسموح له يستخدم أدوات المطورين دلوقتي"، فكل الأماكن القديمة اللي بتفحصه اتحمت أوتوماتيك.
+     */
     public function policyFor(int $userId): array
     {
-        return $this->policyForUniversity($this->universityOf($userId));
-    }
-
-    public function savePolicy(int $universityId, array $in): array
-    {
-        $allowed = null;
-        if (array_key_exists('allowed_scopes', $in) && $in['allowed_scopes'] !== null) {
-            $allowed = DevScopes::parse($in['allowed_scopes']);
-            if ($bad = DevScopes::unknown($allowed)) {
-                $this->fail('Unknown scope: ' . implode(', ', $bad));
-            }
-        }
-        $max = array_key_exists('max_apps_per_user', $in) && $in['max_apps_per_user'] !== null && $in['max_apps_per_user'] !== '' ? max(0, min(100, (int) $in['max_apps_per_user'])) : null;
-        $cur = DB::table('dev_tenant_policies')->where('university_id', $universityId)->first();
-        $row = [
-            'apps_enabled' => array_key_exists('apps_enabled', $in) ? (int) (bool) $in['apps_enabled'] : ($cur ? (int) $cur->apps_enabled : 1),
-            'webhooks_enabled' => array_key_exists('webhooks_enabled', $in) ? (int) (bool) $in['webhooks_enabled'] : ($cur ? (int) $cur->webhooks_enabled : 1),
-            'max_apps_per_user' => array_key_exists('max_apps_per_user', $in) ? $max : ($cur->max_apps_per_user ?? null),
-            'allowed_scopes' => array_key_exists('allowed_scopes', $in) ? ($allowed === null ? null : json_encode($allowed)) : ($cur->allowed_scopes ?? null),
-            'updated_at' => now(),
+        $e = $this->access->effective($userId);
+        return [
+            'university_id' => $e['university_id'], 'apps_enabled' => $e['allowed'], 'webhooks_enabled' => $e['allowed'] && $e['webhooks_enabled'],
+            'max_apps_per_user' => $e['limits']['apps'], 'max_keys_per_user' => $e['limits']['keys'], 'max_webhooks_per_user' => $e['limits']['webhooks'],
+            'rate_limit_per_min' => $e['limits']['rate_per_min'], 'allowed_scopes' => $e['scopes'], 'allowed_events' => $e['events'], 'sandbox_only' => $e['sandbox_only'],
+            'access' => $e,
         ];
-        if ($cur) {
-            DB::table('dev_tenant_policies')->where('university_id', $universityId)->update($row);
-        } else {
-            DB::table('dev_tenant_policies')->insert($row + ['university_id' => $universityId, 'created_at' => now()]);
-        }
-        return $this->policyForUniversity($universityId);
     }
 
-    /** scopes اللي مسموح للمستخدم يطلبها (سياسة جامعته). */
+    public function savePolicy(int $universityId, array $in, ?int $by = null): array
+    {
+        return $this->access->savePolicy($universityId, $in, $by);
+    }
+
+    /** scopes اللي مسموح للمستخدم يطلبها. */
     private function allowedScopesFor(int $userId): array
     {
-        $p = $this->policyFor($userId);
-        return $p['allowed_scopes'] ?? DevScopes::names();
+        return $this->policyFor($userId)['allowed_scopes'];
     }
 
     private function assertDevAllowed(int $userId): array
     {
         $p = $this->policyFor($userId);
-        if (!config('developer.enabled')) {
-            $this->fail('The Developer Center is disabled.', 503);
-        }
         if (!$p['apps_enabled']) {
-            $this->fail('Developer access is turned off by your university.', 403);
+            $a = $p['access'];
+            $this->fail($a['message'] ?? 'Developer access is not available for your account.', $a['reason'] === 'disabled' ? 503 : 403);
         }
         return $p;
     }
@@ -105,7 +87,7 @@ class DeveloperAppService
         }
         $denied = array_values(array_diff($scopes, $this->allowedScopesFor($userId)));
         if ($denied) {
-            $this->fail('Your university does not allow these scopes: ' . implode(', ', $denied), 403);
+            $this->fail('Your account is not allowed these scopes: ' . implode(', ', $denied), 403);
         }
         return $scopes;
     }
@@ -204,7 +186,7 @@ class DeveloperAppService
         if (!in_array($type, ['confidential', 'public'], true)) {
             $this->fail('Invalid client type.');
         }
-        $max = min((int) config('developer.limits.apps_per_user', 10), $policy['max_apps_per_user'] ?? PHP_INT_MAX);
+        $max = (int) $policy['max_apps_per_user'];
         if (DB::table('dev_apps')->where('owner_user_id', $userId)->count() >= $max) {
             $this->fail('You reached the maximum number of apps.', 403);
         }
@@ -336,16 +318,19 @@ class DeveloperAppService
 
     public function createKey(int $userId, array $in): array
     {
-        $this->assertDevAllowed($userId);
+        $policy = $this->assertDevAllowed($userId);
         $name = trim((string) ($in['name'] ?? ''));
         if ($name === '' || mb_strlen($name) > 80) {
             $this->fail('Give the key a name (up to 80 characters).');
         }
-        $mode = (string) ($in['mode'] ?? 'live');
+        $mode = (string) ($in['mode'] ?? ($policy['sandbox_only'] ? 'sandbox' : 'live'));
         if (!in_array($mode, ['live', 'sandbox'], true)) {
             $this->fail('Invalid mode.');
         }
-        if (DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) config('developer.limits.keys_per_user', 20)) {
+        if ($mode === 'live' && $policy['sandbox_only']) {
+            $this->fail('Your account can only create sandbox (test) keys.', 403);
+        }
+        if (DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
             $this->fail('You reached the maximum number of API keys.', 403);
         }
         $scopes = $this->cleanScopes($userId, $in['scopes'] ?? []);
@@ -479,6 +464,101 @@ class DeveloperAppService
             DB::table('dev_apps')->where('id', $a->id)->update(['status' => 'active', 'suspended_by' => null, 'suspended_reason' => null, 'updated_at' => now()]);
         }
         return $this->appPayload(DB::table('dev_apps')->find($a->id));
+    }
+
+    private function adminApp(int $appId, ?int $universityId): object
+    {
+        $a = DB::table('dev_apps')->where('id', $appId)->when($universityId, fn ($q) => $q->where('university_id', $universityId))->first();
+        if (!$a) {
+            $this->fail('App not found.', 404);
+        }
+        return $a;
+    }
+
+    /** تفاصيل تطبيق للإدارة: بياناته + مفاتيحه + Webhooks + عدد المستخدمين. */
+    public function adminAppDetail(int $appId, ?int $universityId): array
+    {
+        $a = $this->adminApp($appId, $universityId);
+        $owner = DB::table('users')->where('id', $a->owner_user_id)->first(['full_name', 'email']);
+        return ['app' => $this->appPayload($a) + ['owner_name' => $owner->full_name ?? null, 'owner_email' => $owner->email ?? null],
+            'keys' => DB::table('dev_api_keys')->where('app_id', $a->id)->orderByDesc('id')->get()->map(fn ($k) => $this->keyPayload($k))->values()->all(),
+            'webhooks' => DB::table('dev_webhooks')->where('app_id', $a->id)->orderByDesc('id')->get(['id', 'name', 'url', 'events', 'mode', 'is_active', 'last_status', 'last_delivery_at'])
+                ->map(fn ($h) => ['id' => (int) $h->id, 'name' => $h->name, 'url' => $h->url, 'events' => (array) json_decode((string) $h->events, true), 'mode' => $h->mode,
+                    'is_active' => (bool) $h->is_active, 'last_status' => $h->last_status, 'last_delivery_at' => DevTokens::iso($h->last_delivery_at)])->values()->all(),
+            'authorized_users' => (int) DB::table('dev_oauth_grants')->where('app_id', $a->id)->whereNull('revoked_at')->count()];
+    }
+
+    /** الإدارة تقيّد تطبيق: scopes (بتتقص من المفاتيح كمان) وحد الطلبات. */
+    public function adminUpdateApp(int $appId, ?int $universityId, array $in): array
+    {
+        $a = $this->adminApp($appId, $universityId);
+        $upd = ['updated_at' => now()];
+        if (array_key_exists('scopes', $in)) {
+            $scopes = DevScopes::parse($in['scopes']);
+            if (!$scopes) {
+                $this->fail('Choose at least one scope.');
+            }
+            if ($bad = DevScopes::unknown($scopes)) {
+                $this->fail('Unknown scope: ' . implode(', ', $bad));
+            }
+            $upd['scopes'] = json_encode($scopes);
+        }
+        if (array_key_exists('rate_limit_per_min', $in)) {
+            $upd['rate_limit_per_min'] = ($in['rate_limit_per_min'] === null || $in['rate_limit_per_min'] === '') ? null : max(1, min(100000, (int) $in['rate_limit_per_min']));
+        }
+        DB::table('dev_apps')->where('id', $a->id)->update($upd);
+        return $this->appPayload(DB::table('dev_apps')->find($a->id));
+    }
+
+    public function adminDeleteApp(int $appId, ?int $universityId): void
+    {
+        $a = $this->adminApp($appId, $universityId);
+        $this->deleteApp((int) $a->owner_user_id, (int) $a->id);
+    }
+
+    /** @param array{university_id?:int,status?:string,mode?:string,q?:string,user_id?:int,app_id?:int} $f */
+    public function adminKeys(array $f, int $page = 1, int $per = 30): array
+    {
+        $per = max(1, min(100, $per));
+        $page = max(1, $page);
+        $q = DB::table('dev_api_keys as k')->leftJoin('users as u', 'u.id', '=', 'k.user_id');
+        if (!empty($f['university_id'])) {
+            $q->whereIn('k.user_id', $this->ownerIdsOfUniversity((int) $f['university_id']) ?: [0]);
+        }
+        foreach (['user_id' => 'k.user_id', 'app_id' => 'k.app_id'] as $in => $col) {
+            if (!empty($f[$in])) {
+                $q->where($col, (int) $f[$in]);
+            }
+        }
+        if (!empty($f['mode']) && in_array($f['mode'], ['live', 'sandbox'], true)) {
+            $q->where('k.mode', $f['mode']);
+        }
+        $st = (string) ($f['status'] ?? '');
+        if ($st === 'active') {
+            $q->whereNull('k.revoked_at')->where(fn ($w) => $w->whereNull('k.expires_at')->orWhere('k.expires_at', '>', now()));
+        } elseif ($st === 'revoked') {
+            $q->whereNotNull('k.revoked_at');
+        } elseif ($st === 'expired') {
+            $q->whereNull('k.revoked_at')->whereNotNull('k.expires_at')->where('k.expires_at', '<=', now());
+        }
+        if (!empty($f['q'])) {
+            $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string) $f['q']) . '%';
+            $q->where(fn ($w) => $w->where('k.name', 'like', $like)->orWhere('k.prefix', 'like', $like)->orWhere('u.email', 'like', $like)->orWhere('u.full_name', 'like', $like));
+        }
+        $total = (clone $q)->count();
+        $rows = $q->orderByDesc('k.id')->forPage($page, $per)->get(['k.*', 'u.full_name as owner_name', 'u.email as owner_email'])
+            ->map(fn ($k) => $this->keyPayload($k) + ['user_id' => (int) $k->user_id, 'owner_name' => $k->owner_name, 'owner_email' => $k->owner_email])->values()->all();
+        return ['items' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $per];
+    }
+
+    public function adminRevokeKey(int $keyId, ?int $universityId): array
+    {
+        $k = DB::table('dev_api_keys')->where('id', $keyId)->when($universityId, fn ($q) => $q->whereIn('user_id', $this->ownerIdsOfUniversity($universityId) ?: [0]))->first();
+        if (!$k) {
+            $this->fail('API key not found.', 404);
+        }
+        DB::table('dev_api_keys')->where('id', $k->id)->whereNull('revoked_at')->update(['revoked_at' => now(), 'updated_at' => now()]);
+        return $this->keyPayload(DB::table('dev_api_keys')->find($k->id)) + ['user_id' => (int) $k->user_id];
     }
 
     /** IDs أصحاب التطبيقات/المفاتيح في الجامعة (لتصفية السجل في لوحتها). */

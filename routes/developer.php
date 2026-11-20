@@ -17,6 +17,8 @@ Route::prefix('oauth')->middleware('throttle:60,1')->group(function () {
 // 2) Developer Center لأي مستخدم مسجّل دخول (JWT المنصة)
 Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::get('/overview', [DeveloperCenterController::class, 'overview'])->middleware('throttle:120,1');
+    Route::get('/access', [DeveloperCenterController::class, 'access'])->middleware('throttle:120,1');
+    Route::post('/access/request', [DeveloperCenterController::class, 'requestAccess'])->middleware('throttle:10,1');
 
     Route::get('/apps', [DeveloperCenterController::class, 'apps'])->middleware('throttle:120,1');
     Route::post('/apps', [DeveloperCenterController::class, 'createApp'])->middleware('throttle:20,1');
@@ -61,13 +63,40 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::get('/logs', [DeveloperCenterController::class, 'logs'])->middleware('throttle:120,1');
 });
 
-// 3) إدارة الجامعة / المنصة
+// 3) إدارة الجامعة / المنصة — تحكم كامل (السياسة، القواعد، المطورين، التطبيقات، المفاتيح، الـ webhooks، السجل)
 Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
+    Route::get('/meta', [DevAdminController::class, 'meta'])->middleware('throttle:120,1');
+
     Route::get('/policy', [DevAdminController::class, 'policy'])->middleware('throttle:120,1');
     Route::put('/policy', [DevAdminController::class, 'savePolicy'])->middleware('throttle:30,1');
+    Route::post('/policy/check', [DevAdminController::class, 'checkAccess'])->middleware('throttle:60,1');
+
+    Route::get('/rules', [DevAdminController::class, 'rules'])->middleware('throttle:120,1');
+    Route::post('/rules', [DevAdminController::class, 'addRule'])->middleware('throttle:60,1');
+    Route::put('/rules/{id}', [DevAdminController::class, 'updateRule'])->whereNumber('id')->middleware('throttle:60,1');
+    Route::delete('/rules/{id}', [DevAdminController::class, 'deleteRule'])->whereNumber('id')->middleware('throttle:60,1');
+
+    Route::get('/developers', [DevAdminController::class, 'developers'])->middleware('throttle:120,1');
+    Route::post('/developers/bulk', [DevAdminController::class, 'bulk'])->middleware('throttle:20,1');
+    Route::get('/developers/{userId}', [DevAdminController::class, 'developer'])->whereNumber('userId')->middleware('throttle:120,1');
+    Route::put('/developers/{userId}/access', [DevAdminController::class, 'setAccess'])->whereNumber('userId')->middleware('throttle:60,1');
+    Route::delete('/developers/{userId}/access', [DevAdminController::class, 'clearAccess'])->whereNumber('userId')->middleware('throttle:60,1');
+    Route::post('/developers/{userId}/decision', [DevAdminController::class, 'decide'])->whereNumber('userId')->middleware('throttle:60,1');
+    Route::post('/developers/{userId}/revoke-all', [DevAdminController::class, 'revokeAll'])->whereNumber('userId')->middleware('throttle:20,1');
+
     Route::get('/apps', [DevAdminController::class, 'apps'])->middleware('throttle:120,1');
+    Route::get('/apps/{id}', [DevAdminController::class, 'app'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::put('/apps/{id}', [DevAdminController::class, 'updateApp'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::delete('/apps/{id}', [DevAdminController::class, 'deleteApp'])->whereNumber('id')->middleware('throttle:20,1');
     Route::post('/apps/{id}/suspend', [DevAdminController::class, 'suspend'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/apps/{id}/resume', [DevAdminController::class, 'resume'])->whereNumber('id')->middleware('throttle:30,1');
+
+    Route::get('/keys', [DevAdminController::class, 'keys'])->middleware('throttle:120,1');
+    Route::delete('/keys/{id}', [DevAdminController::class, 'revokeKey'])->whereNumber('id')->middleware('throttle:30,1');
+
+    Route::get('/webhooks', [DevAdminController::class, 'webhooks'])->middleware('throttle:120,1');
+    Route::post('/webhooks/{id}/active', [DevAdminController::class, 'setWebhookActive'])->whereNumber('id')->middleware('throttle:30,1');
+
     Route::get('/logs', [DevAdminController::class, 'logs'])->middleware('throttle:120,1');
 });
 

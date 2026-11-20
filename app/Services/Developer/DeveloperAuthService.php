@@ -50,10 +50,17 @@ class DeveloperAuthService
 
         $policy = $this->apps->policyFor($ctx['user_id']);
         if (!$policy['apps_enabled']) {
-            $this->deny('Developer access is turned off by the university.', 403, 'tenant_disabled');
+            $a = $policy['access'];
+            $this->deny($a['message'] ?? 'Developer access is turned off.', 403, $a['reason'] ?? 'tenant_disabled');
+        }
+        if ($policy['sandbox_only'] && $ctx['mode'] !== 'sandbox') {
+            $this->deny('This account can only use sandbox (test) credentials.', 403, 'sandbox_only');
         }
         $ctx['scopes'] = array_values(array_intersect($ctx['scopes'], $policy['allowed_scopes'] ?? DevScopes::names()));
         $ctx['webhooks_enabled'] = $policy['webhooks_enabled'];
+        if (!empty($policy['rate_limit_per_min'])) {
+            $ctx['limit'] = max(1, min($ctx['limit'], (int) $policy['rate_limit_per_min']));
+        }
 
         // الصندوق: لازم لسه بتاع المستخدم ونشط، وإلا الافتراضي.
         $accId = $ctx['mail_account_id'];

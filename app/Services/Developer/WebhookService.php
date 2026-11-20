@@ -139,15 +139,19 @@ class WebhookService
         return $out;
     }
 
-    private function assertAllowed(int $userId): void
+    private function assertAllowed(int $userId): array
     {
         if (!config('developer.enabled')) {
             $this->fail('The Developer Center is disabled.', 503);
         }
         $p = $this->apps->policyFor($userId);
-        if (!$p['apps_enabled'] || !$p['webhooks_enabled']) {
-            $this->fail('Webhooks are turned off by your university.', 403);
+        if (!$p['apps_enabled']) {
+            $this->fail($p['access']['message'] ?? 'Developer access is not available for your account.', 403);
         }
+        if (!$p['webhooks_enabled']) {
+            $this->fail('Webhooks are turned off for your account.', 403);
+        }
+        return $p;
     }
 
     public function list(int $userId): array
@@ -164,7 +168,7 @@ class WebhookService
         return $h;
     }
 
-    private function cleanEvents($in): array
+    private function cleanEvents($in, ?array $allowed = null): array
     {
         $ev = array_values(array_unique(array_filter(array_map(fn ($e) => trim((string) $e), (array) $in), fn ($e) => $e !== '')));
         if (!$ev) {
@@ -174,19 +178,25 @@ class WebhookService
         if ($bad = array_diff($ev, $known)) {
             $this->fail('Unknown event: ' . implode(', ', $bad));
         }
+        if ($allowed !== null && ($denied = array_diff($ev, $allowed, ['webhook.test']))) {
+            $this->fail('These events are not allowed for your account: ' . implode(', ', $denied), 403);
+        }
         return $ev;
     }
 
     public function create(int $userId, array $in, ?int $appId = null): array
     {
-        $this->assertAllowed($userId);
-        if (DB::table('dev_webhooks')->where('user_id', $userId)->count() >= (int) config('developer.limits.webhooks_per_user', 10)) {
+        $policy = $this->assertAllowed($userId);
+        if (DB::table('dev_webhooks')->where('user_id', $userId)->count() >= (int) $policy['max_webhooks_per_user']) {
             $this->fail('You reached the maximum number of webhooks.', 403);
         }
         $this->assertSafeUrl((string) ($in['url'] ?? ''));
-        $mode = (string) ($in['mode'] ?? 'live');
+        $mode = (string) ($in['mode'] ?? ($policy['sandbox_only'] ? 'sandbox' : 'live'));
         if (!in_array($mode, ['live', 'sandbox'], true)) {
             $this->fail('Invalid mode.');
+        }
+        if ($mode === 'live' && $policy['sandbox_only']) {
+            $this->fail('Your account can only create sandbox (test) webhooks.', 403);
         }
         $appId = $appId ?: (!empty($in['app_id']) ? (int) $in['app_id'] : null);
         if ($appId && !DB::table('dev_apps')->where('id', $appId)->where('owner_user_id', $userId)->exists()) {
@@ -199,7 +209,7 @@ class WebhookService
         $secret = DevTokens::make('whsec_', 40);
         $id = DB::table('dev_webhooks')->insertGetId([
             'user_id' => $userId, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => isset($in['name']) ? Str::limit(trim((string) $in['name']), 80, '') : null,
-            'url' => trim((string) $in['url']), 'secret_enc' => Crypt::encryptString($secret), 'events' => json_encode($this->cleanEvents($in['events'] ?? [])),
+            'url' => trim((string) $in['url']), 'secret_enc' => Crypt::encryptString($secret), 'events' => json_encode($this->cleanEvents($in['events'] ?? [], $policy['allowed_events'])),
             'mode' => $mode, 'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
         ]);
         return $this->payload(DB::table('dev_webhooks')->find($id), $secret);
@@ -207,7 +217,7 @@ class WebhookService
 
     public function update(int $userId, int $id, array $in): array
     {
-        $this->assertAllowed($userId);
+        $policy = $this->assertAllowed($userId);
         $h = $this->own($userId, $id);
         $upd = ['updated_at' => now()];
         if (array_key_exists('name', $in)) {
@@ -218,7 +228,7 @@ class WebhookService
             $upd['url'] = trim((string) $in['url']);
         }
         if (array_key_exists('events', $in)) {
-            $upd['events'] = json_encode($this->cleanEvents($in['events']));
+            $upd['events'] = json_encode($this->cleanEvents($in['events'], $policy['allowed_events']));
         }
         if (array_key_exists('mail_account_id', $in)) {
             $accId = $in['mail_account_id'] ? (int) $in['mail_account_id'] : null;
@@ -236,6 +246,9 @@ class WebhookService
         $this->assertAllowed($userId);
         $h = $this->own($userId, $id);
         if ($active) {
+            if ($h->disabled_reason === 'Disabled by an administrator') {
+                $this->fail('This webhook was disabled by an administrator.', 403);
+            }
             $this->assertSafeUrl((string) $h->url);
             DB::table('dev_webhooks')->where('id', $h->id)->update(['is_active' => 1, 'failure_count' => 0, 'disabled_at' => null, 'disabled_reason' => null, 'updated_at' => now()]);
         } else {
@@ -290,6 +303,49 @@ class WebhookService
             $this->fail('Delivery not found.', 404);
         }
         return $this->deliveryPayload($d, true);
+    }
+
+    /* ------------------------------------------------------------ admin (الجامعة / أدمن المنصة) */
+
+    /** @param array{university_id?:int,q?:string,active?:mixed,user_id?:int} $f */
+    public function adminList(array $f, int $page = 1, int $per = 30): array
+    {
+        $per = max(1, min(100, $per));
+        $page = max(1, $page);
+        $q = DB::table('dev_webhooks as w')->leftJoin('users as u', 'u.id', '=', 'w.user_id');
+        if (!empty($f['university_id'])) {
+            $q->whereIn('w.user_id', $this->apps->ownerIdsOfUniversity((int) $f['university_id']) ?: [0]);
+        }
+        if (!empty($f['user_id'])) {
+            $q->where('w.user_id', (int) $f['user_id']);
+        }
+        if (isset($f['active']) && $f['active'] !== '' && $f['active'] !== null) {
+            $q->where('w.is_active', filter_var($f['active'], FILTER_VALIDATE_BOOLEAN) ? 1 : 0);
+        }
+        if (!empty($f['q'])) {
+            $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string) $f['q']) . '%';
+            $q->where(fn ($w) => $w->where('w.name', 'like', $like)->orWhere('w.url', 'like', $like)->orWhere('u.email', 'like', $like)->orWhere('u.full_name', 'like', $like));
+        }
+        $total = (clone $q)->count();
+        $rows = $q->orderByDesc('w.id')->forPage($page, $per)->get(['w.*', 'u.full_name as owner_name', 'u.email as owner_email'])
+            ->map(fn ($h) => $this->payload($h) + ['user_id' => (int) $h->user_id, 'owner_name' => $h->owner_name, 'owner_email' => $h->owner_email])->values()->all();
+        return ['items' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $per];
+    }
+
+    /** الإدارة توقف/تشغّل webhook. اللي الإدارة وقفته المالك مينفعش يشغّله (disabled_reason بيبيّن ده). */
+    public function adminSetActive(int $id, ?int $universityId, bool $active): array
+    {
+        $h = DB::table('dev_webhooks')->where('id', $id)->when($universityId, fn ($q) => $q->whereIn('user_id', $this->apps->ownerIdsOfUniversity($universityId) ?: [0]))->first();
+        if (!$h) {
+            $this->fail('Webhook not found.', 404);
+        }
+        if ($active) {
+            $this->assertSafeUrl((string) $h->url);
+            DB::table('dev_webhooks')->where('id', $h->id)->update(['is_active' => 1, 'failure_count' => 0, 'disabled_at' => null, 'disabled_reason' => null, 'updated_at' => now()]);
+        } else {
+            DB::table('dev_webhooks')->where('id', $h->id)->update(['is_active' => 0, 'disabled_at' => now(), 'disabled_reason' => 'Disabled by an administrator', 'updated_at' => now()]);
+        }
+        return $this->payload(DB::table('dev_webhooks')->find($h->id)) + ['user_id' => (int) $h->user_id];
     }
 
     /* ------------------------------------------------------------ enqueue / deliver */

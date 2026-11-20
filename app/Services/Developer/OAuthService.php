@@ -44,7 +44,10 @@ class OAuthService
         }
         $policy = $this->apps->policyFor($userId);
         if (!$policy['apps_enabled']) {
-            throw $err('access_denied', 'Third-party apps are turned off by your university.', 403);
+            throw $err('access_denied', 'Third-party apps are turned off for your account: ' . ($policy['access']['message'] ?? 'not allowed') , 403);
+        }
+        if ($policy['sandbox_only']) {
+            throw $err('access_denied', 'Live OAuth access is not allowed for your account (sandbox only).', 403);
         }
         if (($q['response_type'] ?? '') !== 'code') {
             throw $err('unsupported_response_type', 'Only response_type=code is supported.');
@@ -191,7 +194,10 @@ class OAuthService
         }
         $p = $this->apps->policyFor($userId);
         if (!$p['apps_enabled']) {
-            throw OAuthException::make('invalid_grant', 'Third-party apps are turned off by the university.');
+            throw OAuthException::make('invalid_grant', 'Third-party apps are turned off for this account.');
+        }
+        if ($p['sandbox_only']) {
+            throw OAuthException::make('invalid_grant', 'Live OAuth access is not allowed for this account (sandbox only).');
         }
     }
 

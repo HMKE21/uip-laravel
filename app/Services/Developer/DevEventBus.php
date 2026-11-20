@@ -29,6 +29,12 @@ class DevEventBus
             if (!$policy['apps_enabled'] || !$policy['webhooks_enabled']) {
                 return;
             }
+            if ($policy['allowed_events'] !== null && !in_array($event, $policy['allowed_events'], true)) {
+                return;
+            }
+            if ($policy['sandbox_only'] && $mode !== 'sandbox') {
+                return;
+            }
             $hooks = DB::table('dev_webhooks')->where('user_id', $userId)->where('is_active', 1)->where('mode', $mode)
                 ->when($accountId, fn ($q) => $q->where(fn ($w) => $w->whereNull('mail_account_id')->orWhere('mail_account_id', $accountId)))
                 ->when($appId, fn ($q) => $q->where(fn ($w) => $w->whereNull('app_id')->orWhere('app_id', $appId)))

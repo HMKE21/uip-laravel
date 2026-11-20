@@ -23,8 +23,34 @@ class DeveloperCenterController extends Controller
     use RunsDomain;
 
     public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private SandboxMailService $sandbox,
-                                private DevLogService $logs, private OAuthService $oauth)
+                                private DevLogService $logs, private OAuthService $oauth, private \App\Services\Developer\DevAccessService $access)
     {
+    }
+
+    /** وصولي كمطوّر: مسموح؟ ولو لأ ليه، وأقدر أطلب وصول؟ + scopes وحدودي الفعلية. */
+    public function access(Request $r)
+    {
+        return $this->dom(fn () => ['access' => $this->access->effective($this->uid($r))]);
+    }
+
+    public function requestAccess(Request $r)
+    {
+        $in = $r->validate(['note' => 'nullable|string|max:300']);
+        return $this->dom(fn () => ['access' => $this->access->requestAccess($this->uid($r), $in['note'] ?? null)]);
+    }
+
+    /** الحدود الفعلية للمستخدم (بعد المنصة + الجامعة + استثناءه) بنفس مفاتيح config('developer.limits') عشان الواجهة القديمة تفضل شغالة. */
+    private function effectiveLimits(int $u): array
+    {
+        $l = (array) config('developer.limits');
+        $p = $this->apps->policyFor($u);
+        $l['apps_per_user'] = $p['max_apps_per_user'];
+        $l['keys_per_user'] = $p['max_keys_per_user'];
+        $l['webhooks_per_user'] = $p['max_webhooks_per_user'];
+        if (!empty($p['rate_limit_per_min'])) {
+            $l['rate_per_min'] = min((int) $l['rate_per_min'], (int) $p['rate_limit_per_min']);
+        }
+        return $l;
     }
 
     public function overview(Request $r)
@@ -33,7 +59,7 @@ class DeveloperCenterController extends Controller
             $u = $this->uid($r);
             return [
                 'enabled' => (bool) config('developer.enabled'), 'api_version' => config('developer.api_version'),
-                'policy' => $this->apps->policyFor($u), 'limits' => config('developer.limits'),
+                'policy' => $this->apps->policyFor($u), 'limits' => $this->effectiveLimits($u), 'access' => $this->access->effective($u),
                 'scopes' => DevScopes::catalog(), 'events' => config('developer.events'),
                 'sandbox_address' => $this->sandbox->address($u),
                 'counts' => [
