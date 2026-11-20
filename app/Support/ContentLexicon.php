@@ -163,7 +163,7 @@ class ContentLexicon
     }
 
     /** @return string[] الـ tokens (بعد دمج الحروف المفردة المتتالية "p o r n"). */
-    private static function tokens(string $norm): array
+    public static function tokens(string $norm): array
     {
         $parts = preg_split('/[^\p{L}\p{N}@$!]+/u', $norm, -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $plain = [];
@@ -204,7 +204,7 @@ class ContentLexicon
     }
 
     /** كل صيغ التحايل للـ token الواحد. @return string[] */
-    private static function variants(string $tok): array
+    public static function variants(string $tok): array
     {
         $v = [$tok];
         $leet = strtr($tok, ['0' => 'o', '1' => 'i', '3' => 'e', '4' => 'a', '5' => 's', '7' => 't', '8' => 'b', '@' => 'a', '$' => 's', '!' => 'i']);
@@ -364,6 +364,7 @@ class ContentLexicon
             }
         }
 
-        return null;
+        // قوائم الـ Lexicon Hub المحمّلة محليًا (php artisan lexicon:sync) — هاشات: دومينات + كلمات/عبارات. من غير نسخة محمّلة بترجّع null.
+        return LexiconStore::check($norm, $strict, $allowSet);
     }
 }

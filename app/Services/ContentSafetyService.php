@@ -70,6 +70,7 @@ class ContentSafetyService
             'child_safety' => $ar ? 'محتوى يمسّ سلامة الأطفال' : 'content that endangers children',
             'profanity' => $ar ? 'ألفاظ نابية أو شتائم' : 'profanity or abusive language',
             'custom' => $ar ? 'كلمات محظورة من إدارة المنصة' : 'words blocked by the platform administrators',
+            'blocked_link' => $ar ? 'رابط أو موقع محظور' : 'a blocked link or website',
             'scanner_unavailable' => $ar ? 'تعذّر فحص المحتوى حاليًا' : 'the content could not be checked right now',
             default => $ar ? 'محتوى غير لائق' : 'inappropriate or adult content',
         };
@@ -333,6 +334,8 @@ class ContentSafetyService
             'gd' => function_exists('imagecreatefromstring'),
             'fail_open' => (bool) config('content_safety.fail_open', false),
             'require_scanner' => (bool) config('content_safety.require_image_scanner', false),
+            // Lexicon Hub (lexicon:sync): النسخة المحمّلة + آخر محاولة. loaded=false => القاموس المدمج بس.
+            'lexicon' => ['configured' => !empty(config('content_safety.remote.urls'))] + \App\Support\LexiconStore::status(),
         ];
     }
 

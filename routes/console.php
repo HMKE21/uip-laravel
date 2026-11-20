@@ -99,3 +99,7 @@ Schedule::command('dev:maintenance --prune')->dailyAt('05:00')->withoutOverlappi
 // وسياسات الاحتفاظ لكل جامعة + تنضيف سجلات التشغيل يوميًا. (إعادة محاولة الإرسال الخارجي جوّه mail:process كل دقيقة.)
 Schedule::command('mail:security-scan')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('mail:retention')->dailyAt('04:40')->withoutOverlapping();
+
+// Lexicon Hub: مزامنة قوايم الدومينات/الكلمات المحظورة (هاشات موقّعة) يوميًا — بتشتغل بس لو CONTENT_SAFETY_REMOTE_URLS متظبط.
+// (بديل الـ crontab المنفصل: `30 3 * * * cd /var/www/uipe && php artisan lexicon:sync`. اختار واحد بس، التكرار مش بيضر لأن نفس الإصدار = no-op.)
+Schedule::command('lexicon:sync')->dailyAt('03:20')->withoutOverlapping()->when(fn () => !empty(config('content_safety.remote.urls')));

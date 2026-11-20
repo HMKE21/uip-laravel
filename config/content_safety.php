@@ -88,4 +88,21 @@ return [
 
     // true = نتايج الـ GIF من القنوات الموثّقة في Giphy بس (أشد أمانًا؛ تصنيف Giphy للـ GIFs المرفوعة بيحطّه أي حد وبيبقى غلط كتير).
     'gif_verified_only' => (bool) env('CONTENT_SAFETY_GIF_VERIFIED_ONLY', false),
+
+    // Lexicon Hub (قوايم محظورة ضخمة كهاشات من موقع static) — `php artisan lexicon:sync` بينزّلها ويتحقق منها ويحفظها محليًا،
+    // والفحص بيتم محليًا في ContentLexicon (مفيش نص مستخدم بيتبعت للـ Hub). مفيش URLs = الميزة مقفولة والقاموس المدمج بس شغّال.
+    'remote' => [
+        // أول رابط = أساسي، والباقي احتياطي (مفصولين بفاصلة). الرابط الأساسي للموقع من غير /v1، مثلًا https://user.github.io/repo
+        'urls' => array_values(array_filter(array_map('trim', explode(',', (string) env('CONTENT_SAFETY_REMOTE_URLS', ''))))),
+        // نفس LEXICON_SIGN_KEY بتاع الـ Hub. من غيره الـ sync بيرفض (مفيش ثقة في قوايم من غير توقيع).
+        'key' => env('CONTENT_SAFETY_REMOTE_KEY', ''),
+        'timeout' => (int) env('CONTENT_SAFETY_REMOTE_TIMEOUT', 30),
+        // أي تحديث بيصغّر قايمة الدومينات (أو الكلمات العامة) لأقل من النسبة دي من المثبّت = مرفوض.
+        'min_ratio' => (float) env('CONTENT_SAFETY_REMOTE_MIN_RATIO', 0.5),
+        'min_domains' => (int) env('CONTENT_SAFETY_REMOTE_MIN_DOMAINS', 1000),
+        // للتجربة المحلية بس: السماح بـ http://
+        'allow_http' => (bool) env('CONTENT_SAFETY_REMOTE_ALLOW_HTTP', false),
+        // مكان التخزين (افتراضي storage/app/lexicon)
+        'path' => env('CONTENT_SAFETY_REMOTE_PATH', ''),
+    ],
 ];
