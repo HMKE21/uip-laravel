@@ -399,7 +399,34 @@ class WebhookService
 
     public function sign(string $secret, int $ts, string $body): string
     {
-        return hash_hmac('sha256', $ts . '.' . $body, $secret);
+        return WebhookSignature::sign($secret, $ts, $body);
+    }
+
+    /**
+     * أداة تشخيص للمالك: بيلصق الـ raw body وهيدر X-UIPE-Signature اللي وصله، ونتحقق بـ secret الـ webhook (الـ secret مبيسيبش السيرفر).
+     * بترجّع السبب، وعمر التوقيع، وهل نفس الـ event id اتفحص قبل كده جوه النافذة (replayed).
+     */
+    public function checkSignature(int $userId, int $id, string $payload, string $signature, ?int $tolerance = null): array
+    {
+        $this->assertAllowed($userId);
+        $h = $this->own($userId, $id);
+        $tol = $tolerance !== null && $tolerance > 0 ? min($tolerance, 3600) : WebhookSignature::tolerance();
+        $secret = $this->secretOf($h);
+        $res = WebhookSignature::inspect($payload, $signature, $secret, $tol);
+        $eventId = null;
+        $json = json_decode($payload, true);
+        if (is_array($json) && isset($json['id']) && is_string($json['id']) && $json['id'] !== '') {
+            $eventId = Str::limit($json['id'], 64, '');
+        }
+        $replayed = false;
+        if ($res['valid'] && $eventId !== null) {
+            $replayed = !WebhookReplayGuard::firstSeen('verify:' . $h->id, $eventId, $tol * 2);
+        }
+        return [
+            'valid' => $res['valid'], 'reason' => $res['reason'], 'message' => WebhookSignature::explain($res['reason']),
+            'timestamp' => $res['timestamp'], 'age_seconds' => $res['age_seconds'], 'tolerance_seconds' => $res['tolerance_seconds'],
+            'event_id' => $eventId, 'replayed' => $replayed,
+        ];
     }
 
     /** يسلّم محاولة واحدة. $manual = تسليم يدوي (اختبار/إعادة إرسال): مبيحسبش على فشل الـ webhook ولا بيعمل retry. */
@@ -422,7 +449,7 @@ class WebhookService
             if ($secret === '') {
                 throw new \RuntimeException('Webhook secret is unreadable. Rotate the secret.');
             }
-            $ts = time();
+            $ts = time(); // بيتحدد وقت الإرسال الفعلي (مش وقت الـ enqueue)، فتأخير الـ queue ومحاولات الـ retry كلها بتتوقّع بتوقيت جديد
             $body = (string) $d->payload;
             $opts = ['allow_redirects' => false, 'connect_timeout' => 5, 'http_errors' => false];
             if ($safe['ip'] && defined('CURLOPT_RESOLVE')) { // نثبّت الـ IP اللي اتفحص (ضد DNS rebinding)
@@ -432,7 +459,7 @@ class WebhookService
             $t0 = microtime(true);
             $res = Http::withOptions($opts)->timeout((int) config('developer.webhooks.timeout', 8))->withHeaders([
                 'User-Agent' => 'UIPE-Webhooks/1.0', 'Content-Type' => 'application/json', 'X-UIPE-Event' => $d->event, 'X-UIPE-Event-Id' => $d->event_id,
-                'X-UIPE-Delivery' => (string) $d->id, 'X-UIPE-Signature' => 't=' . $ts . ',v1=' . $this->sign($secret, $ts, $body),
+                'X-UIPE-Delivery' => (string) $d->id, WebhookSignature::HEADER => WebhookSignature::header($secret, $body, $ts),
             ])->withBody($body, 'application/json')->post($safe['url']);
             $ms = (int) round((microtime(true) - $t0) * 1000);
             $code = $res->status();

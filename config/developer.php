@@ -33,6 +33,7 @@ return [
         'allow_http'     => (bool) env('DEV_WEBHOOK_ALLOW_HTTP', false),
         'allow_private'  => (bool) env('DEV_WEBHOOK_ALLOW_PRIVATE', false),   // للتطوير المحلي بس
         'excerpt_bytes'  => 500,
+        'tolerance'      => (int) env('DEV_WEBHOOK_TOLERANCE', 300),   // نافذة Replay Protection بالثواني (5 دقايق) — المستقبِل بيرفض أقدم/أحدث من كده
     ],
 
     'logs' => [

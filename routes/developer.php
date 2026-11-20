@@ -51,6 +51,7 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::post('/webhooks/{id}/active', [DeveloperCenterController::class, 'setWebhookActive'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/webhooks/{id}/rotate-secret', [DeveloperCenterController::class, 'rotateWebhookSecret'])->whereNumber('id')->middleware('throttle:10,1');
     Route::post('/webhooks/{id}/test', [DeveloperCenterController::class, 'testWebhook'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::post('/webhooks/{id}/verify-signature', [DeveloperCenterController::class, 'verifyWebhookSignature'])->whereNumber('id')->middleware('throttle:60,1');
     Route::delete('/webhooks/{id}', [DeveloperCenterController::class, 'deleteWebhook'])->whereNumber('id')->middleware('throttle:20,1');
     Route::get('/webhooks/{id}/deliveries', [DeveloperCenterController::class, 'webhookDeliveries'])->whereNumber('id')->middleware('throttle:120,1');
     Route::get('/deliveries/{id}', [DeveloperCenterController::class, 'delivery'])->whereNumber('id')->middleware('throttle:120,1');
@@ -111,6 +112,8 @@ Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
 Route::prefix('dev/v1')->group(function () {
     // التوثيق: OpenAPI 3.1 عام (من غير اعتماد) — مولّد من الـ routes الفعلية تحت. DevOpenApi بيتجاهل أي route من غير dev.auth فمش بيوثّق نفسه.
     Route::get('/openapi.json', [DevDocsController::class, 'openapi'])->middleware('throttle:60,1');
+    // شرح التحقق من توقيع الـ Webhook + test vector + كود جاهز للمستقبِل (عام، من غير اعتماد، بنفس منطق openapi.json).
+    Route::get('/docs/webhook-verification', [DevDocsController::class, 'webhookVerification'])->middleware('throttle:60,1');
 
     Route::get('/me', [DevApiController::class, 'me'])->middleware('dev.auth:profile.read');
     Route::get('/scopes', [DevApiController::class, 'scopes'])->middleware('dev.auth');

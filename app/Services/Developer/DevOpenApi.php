@@ -285,6 +285,7 @@ final class DevOpenApi
         foreach ($events as $name => $d) {
             $webhooks[$name] = ['post' => [
                 'operationId' => 'webhook_' . str_replace('.', '_', $name), 'tags' => ['Webhooks'], 'summary' => $name, 'description' => $d . '.' . "\n\n" . self::verifyText(),
+                'x-codeSamples' => WebhookSamples::codeSamples(),
                 'requestBody' => ['required' => true, 'content' => ['application/json' => ['schema' => self::ref('WebhookEvent')]]],
                 'responses' => ['2XX' => ['description' => 'Return any 2xx within 8 seconds to acknowledge. Anything else is retried with back-off, then the webhook is disabled after repeated failures.']],
             ]];
@@ -364,9 +365,13 @@ final class DevOpenApi
 
     private static function verifyText(): string
     {
-        return "**Verifying a delivery.** Each request has `X-UIPE-Signature: t=<unix seconds>,v1=<hex>`, where `v1 = HMAC-SHA256(secret, t + \".\" + rawBody)`. "
-            . "Recompute it over the raw body with your webhook secret, compare in constant time, and reject deliveries whose `t` is more than 5 minutes old (replay protection). "
-            . "Other headers: `X-UIPE-Event`, `X-UIPE-Event-Id` (stable across retries — use it to de-duplicate), `X-UIPE-Delivery`.";
+        $tol = WebhookSignature::tolerance();
+        return "**Verifying a delivery.** Each request has `X-UIPE-Signature: t=<unix seconds>,v1=<hex>`, where `v1 = HMAC-SHA256(secret, t + \".\" + rawBody)` as lowercase hex. "
+            . "`t` is set when the request is sent, so every retry carries a fresh timestamp and signature. "
+            . "Recompute it over the **raw** body with your webhook secret, compare in constant time, and reject the delivery when `|now - t|` is more than {$tol} seconds, in either direction (replay protection). "
+            . "A valid signature can still arrive twice (retries, manual redelivery): keep `X-UIPE-Event-Id` for at least " . ($tol * 2) . " seconds and ignore ids you already processed. "
+            . "Ready-made `verifySignature` code for PHP, Node.js, Python and Go is in `x-codeSamples` below and at `GET /api/dev/v1/docs/webhook-verification` (with a test vector for your unit tests). "
+            . "Other headers: `X-UIPE-Event`, `X-UIPE-Event-Id` (stable across retries), `X-UIPE-Delivery`.";
     }
 
     private static function oauthOperation(array $op, string $key): array

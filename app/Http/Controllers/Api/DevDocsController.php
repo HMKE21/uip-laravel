@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\Developer\DevOpenApi;
+use App\Services\Developer\WebhookSamples;
+use App\Services\Developer\WebhookSignature;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 
@@ -25,5 +27,12 @@ class DevDocsController extends Controller
             return response('', 304, $headers);
         }
         return response($json, 200, $headers);
+    }
+
+    /** GET /api/dev/v1/docs/webhook-verification — الخوارزمية + نافذة الـ 5 دقايق + test vector + كود المستقبِل (php, node, python, go). */
+    public function webhookVerification(Request $r)
+    {
+        $out = WebhookSignature::describe() + ['samples' => WebhookSamples::all()];
+        return response()->json($out, 200, ['Cache-Control' => 'public, max-age=300', 'Access-Control-Allow-Origin' => '*'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 }

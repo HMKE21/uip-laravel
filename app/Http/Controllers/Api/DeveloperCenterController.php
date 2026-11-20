@@ -260,6 +260,12 @@ class DeveloperCenterController extends Controller
         return $this->dom(fn () => $this->hooks->test($this->uid($r), $id));
     }
 
+    public function verifyWebhookSignature(Request $r, int $id)
+    {
+        $in = $r->validate(['payload' => 'required|string|max:1000000', 'signature' => 'required|string|max:1024', 'tolerance' => 'nullable|integer|min:1|max:3600']);
+        return $this->dom(fn () => $this->hooks->checkSignature($this->uid($r), $id, (string) $in['payload'], (string) $in['signature'], isset($in['tolerance']) ? (int) $in['tolerance'] : null));
+    }
+
     public function redeliver(Request $r, int $id)
     {
         return $this->dom(fn () => $this->hooks->redeliver($this->uid($r), $id));
