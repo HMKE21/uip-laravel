@@ -49,6 +49,9 @@ class OAuthService
         if ($policy['sandbox_only']) {
             throw $err('access_denied', 'Live OAuth access is not allowed for your account (sandbox only).', 403);
         }
+        if ((int) $userId !== (int) $app->owner_user_id && !$this->apps->reviewAllows($app)) { // App Review: غير المالك مينفعش يوافق قبل موافقة الإدارة
+            throw $err('access_denied', 'This app is awaiting approval from the university and cannot be authorized yet.', 403);
+        }
         if (($q['response_type'] ?? '') !== 'code') {
             throw $err('unsupported_response_type', 'Only response_type=code is supported.');
         }
@@ -90,7 +93,8 @@ class OAuthService
         $had = $grant ? (array) json_decode((string) $grant->scopes, true) : [];
         $owner = DB::table('users')->where('id', $app->owner_user_id)->value('full_name');
         return [
-            'app' => ['name' => $app->name, 'description' => $app->description, 'homepage_url' => $app->homepage_url, 'client_id' => $app->client_id, 'client_type' => $app->client_type, 'owner_name' => $owner],
+            'app' => ['name' => $app->name, 'description' => $app->description, 'homepage_url' => $app->homepage_url, 'client_id' => $app->client_id, 'client_type' => $app->client_type, 'owner_name' => $owner,
+                'verified' => $this->apps->reviewState($app) === 'approved'],
             'redirect_host' => parse_url($v['redirect_uri'], PHP_URL_HOST), 'redirect_uri' => $v['redirect_uri'], 'state' => $v['state'],
             'scopes' => $v['scopes'], 'scopes_described' => DevScopes::describe($v['scopes']),
             'already_granted' => $grant && !array_diff($v['scopes'], $had),
@@ -198,6 +202,9 @@ class OAuthService
         }
         if ($p['sandbox_only']) {
             throw OAuthException::make('invalid_grant', 'Live OAuth access is not allowed for this account (sandbox only).');
+        }
+        if ($userId !== (int) $app->owner_user_id && !$this->apps->reviewAllows($app)) { // يغطي code و refresh (client_credentials بيتصرّف باسم المالك)
+            throw OAuthException::make('invalid_grant', 'This app is not approved by the university (anymore).');
         }
     }
 

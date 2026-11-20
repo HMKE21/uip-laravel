@@ -24,6 +24,9 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::post('/apps', [DeveloperCenterController::class, 'createApp'])->middleware('throttle:20,1');
     Route::get('/apps/{id}', [DeveloperCenterController::class, 'app'])->whereNumber('id')->middleware('throttle:120,1');
     Route::put('/apps/{id}', [DeveloperCenterController::class, 'updateApp'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::get('/apps/{id}/review', [DeveloperCenterController::class, 'reviewStatus'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::post('/apps/{id}/review', [DeveloperCenterController::class, 'submitReview'])->whereNumber('id')->middleware('throttle:10,1');
+    Route::delete('/apps/{id}/review', [DeveloperCenterController::class, 'withdrawReview'])->whereNumber('id')->middleware('throttle:20,1');
     Route::post('/apps/{id}/rotate-secret', [DeveloperCenterController::class, 'rotateAppSecret'])->whereNumber('id')->middleware('throttle:10,1');
     Route::post('/apps/{id}/status', [DeveloperCenterController::class, 'setAppStatus'])->whereNumber('id')->middleware('throttle:30,1');
     Route::delete('/apps/{id}', [DeveloperCenterController::class, 'deleteApp'])->whereNumber('id')->middleware('throttle:20,1');
@@ -88,6 +91,8 @@ Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
     Route::get('/apps/{id}', [DevAdminController::class, 'app'])->whereNumber('id')->middleware('throttle:120,1');
     Route::put('/apps/{id}', [DevAdminController::class, 'updateApp'])->whereNumber('id')->middleware('throttle:30,1');
     Route::delete('/apps/{id}', [DevAdminController::class, 'deleteApp'])->whereNumber('id')->middleware('throttle:20,1');
+    Route::post('/apps/{id}/review', [DevAdminController::class, 'reviewApp'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::get('/review/impact', [DevAdminController::class, 'reviewImpact'])->middleware('throttle:60,1');
     Route::post('/apps/{id}/suspend', [DevAdminController::class, 'suspend'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/apps/{id}/resume', [DevAdminController::class, 'resume'])->whereNumber('id')->middleware('throttle:30,1');
 

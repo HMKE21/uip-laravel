@@ -121,6 +121,9 @@ class DeveloperAuthService
         if (!$app || $app->status !== 'active') {
             $this->deny('The app is suspended.', 403, 'app_suspended');
         }
+        if ((int) $t->user_id !== (int) $app->owner_user_id && !$this->apps->reviewAllows($app)) { // App Review: التوكنز بتقف لو الموافقة اتسحبت/بطلت
+            $this->deny('This app is not approved by the university.', 403, 'app_not_approved');
+        }
         $scopes = (array) json_decode((string) $t->scopes, true);
         if ($t->grant_id) {
             $g = DB::table('dev_oauth_grants')->where('id', $t->grant_id)->first();

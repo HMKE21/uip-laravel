@@ -3,6 +3,7 @@
 namespace App\Services\Developer;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
@@ -148,6 +149,7 @@ class DeveloperAppService
             'rate_limit_per_min' => $a->rate_limit_per_min !== null ? (int) $a->rate_limit_per_min : null,
             'authorized_users' => $users, 'last_used_at' => DevTokens::iso($a->last_used_at), 'created_at' => DevTokens::iso($a->created_at),
             'owner_user_id' => (int) $a->owner_user_id, 'university_id' => $a->university_id ? (int) $a->university_id : null,
+            'review' => $this->reviewInfo($a),
         ];
         if ($secret !== null) {
             $out['client_secret'] = $secret; // بيظهر مرة واحدة بس
@@ -229,6 +231,7 @@ class DeveloperAppService
             $upd['scopes'] = json_encode($this->cleanScopes($userId, $in['scopes']));
         }
         DB::table('dev_apps')->where('id', $a->id)->update($upd);
+        $this->reviewAfterChange($a, $userId, 'owner');
         return $this->appPayload(DB::table('dev_apps')->find($a->id));
     }
 
@@ -274,6 +277,236 @@ class DeveloperAppService
             }
             DB::table('dev_apps')->where('id', $a->id)->delete();
         });
+    }
+
+    /* ------------------------------------------------------------------ App Review */
+
+    private function appScopes(object $a): array
+    {
+        return array_values((array) json_decode((string) ($a->scopes ?? '[]'), true));
+    }
+
+    private function appRedirects(object $a): array
+    {
+        return array_values((array) json_decode((string) ($a->redirect_uris ?? '[]'), true));
+    }
+
+    private function reviewInput(object $a): array
+    {
+        $approved = $a->review_scopes ?? null;
+        return ['review_status' => $a->review_status ?? 'none', 'scopes' => $this->appScopes($a), 'redirects' => $this->appRedirects($a),
+            'review_scopes' => $approved !== null ? (array) json_decode((string) $approved, true) : null, 'review_redirects_hash' => $a->review_redirects_hash ?? null];
+    }
+
+    /** الوضع الفعلي لجامعة التطبيق (الأشد بين المنصة والجامعة). */
+    public function reviewMode(object $a): string
+    {
+        return $this->access->reviewModeFor(!empty($a->university_id) ? (int) $a->university_id : null);
+    }
+
+    /** @return array{state:string,required:bool,allows:bool,covered:bool} */
+    public function reviewEvaluate(object $a): array
+    {
+        return DevAppReview::evaluate($this->reviewInput($a), $this->reviewMode($a));
+    }
+
+    public function reviewState(object $a): string
+    {
+        return $this->reviewEvaluate($a)['state'];
+    }
+
+    /** مستخدم غير صاحب التطبيق يقدر يوافق عليه / يستخدم توكناته؟ (صاحبه دايمًا يقدر يجرّبه). */
+    public function reviewAllows(object $a): bool
+    {
+        return $this->reviewEvaluate($a)['allows'];
+    }
+
+    public function reviewInfo(object $a): array
+    {
+        $ev = $this->reviewEvaluate($a);
+        $scopes = $this->appScopes($a);
+        $approved = ($a->review_scopes ?? null) !== null ? (array) json_decode((string) $a->review_scopes, true) : null;
+        return [
+            'state' => $ev['state'], 'required' => $ev['required'], 'mode' => $this->reviewMode($a), 'status' => $a->review_status ?? 'none',
+            'verified' => $ev['state'] === 'approved', 'can_submit' => in_array($ev['state'], ['needs_review', 'rejected'], true),
+            'sensitive_scopes' => DevAppReview::sensitiveScopes($scopes), 'scopes_described' => DevScopes::describe($scopes),
+            'approved_scopes' => $approved, 'message' => $a->review_message ?? null, 'note' => $a->review_note ?? null,
+            'requested_at' => DevTokens::iso($a->review_requested_at ?? null), 'reviewed_at' => DevTokens::iso($a->reviewed_at ?? null), 'reviewed_by_role' => $a->reviewed_by_role ?? null,
+            'fingerprint' => DevAppReview::fingerprint($scopes, $this->appRedirects($a)),
+        ];
+    }
+
+    private function reviewEvent(int $appId, ?int $actorId, string $role, string $action, ?string $note, ?array $scopes = null): void
+    {
+        DB::table('dev_app_review_events')->insert(['app_id' => $appId, 'actor_user_id' => $actorId, 'actor_role' => $role, 'action' => $action,
+            'note' => $note !== null ? Str::limit($note, 500, '') : null, 'scopes' => $scopes === null ? null : json_encode(array_values($scopes)), 'created_at' => now()]);
+    }
+
+    /** سجل المراجعة لتطبيق. $withActors = الإدارة بس (بيظهر مين اتخذ القرار). */
+    public function reviewHistory(int $appId, bool $withActors = false): array
+    {
+        return DB::table('dev_app_review_events as e')->leftJoin('users as u', 'u.id', '=', 'e.actor_user_id')->where('e.app_id', $appId)->orderByDesc('e.id')->limit(50)
+            ->get(['e.id', 'e.action', 'e.actor_role', 'e.actor_user_id', 'e.note', 'e.scopes', 'e.created_at', 'u.full_name as actor_name'])
+            ->map(function ($e) use ($withActors) {
+                $row = ['id' => (int) $e->id, 'action' => $e->action, 'actor_role' => $e->actor_role, 'note' => $e->note, 'scopes' => $e->scopes ? (array) json_decode((string) $e->scopes, true) : null,
+                    'created_at' => DevTokens::iso($e->created_at)];
+                return $withActors ? $row + ['actor_user_id' => $e->actor_user_id ? (int) $e->actor_user_id : null, 'actor_name' => $e->actor_name] : $row;
+            })->values()->all();
+    }
+
+    public function ownerReview(int $userId, int $id): array
+    {
+        $a = $this->ownApp($userId, $id);
+        return ['review' => $this->reviewInfo($a), 'history' => $this->reviewHistory((int) $a->id)];
+    }
+
+    private function reviewNotify(?int $userId, string $title, string $body): void
+    {
+        if (!$userId) {
+            return;
+        }
+        try {
+            app(\App\Services\NotificationService::class)->notify($userId, 'developer_app_review', $title, $body, null, 'normal');
+        } catch (\Throwable $e) {
+            Log::warning('App review notice failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /** لو الموافقة القديمة مبقتش تغطي التطبيق بعد تعديل (scope جديد / redirect مختلف) → الحالة ترجع none وتتسجّل. */
+    private function reviewAfterChange(object $before, ?int $actorId, string $role): void
+    {
+        if (($before->review_status ?? 'none') !== 'approved') {
+            return;
+        }
+        $a = DB::table('dev_apps')->where('id', $before->id)->first();
+        if (!$a) {
+            return;
+        }
+        $in = $this->reviewInput($a);
+        if (DevAppReview::covers($in['review_scopes'], $in['review_redirects_hash'], $in['scopes'], $in['redirects'])) {
+            return;
+        }
+        $n = DB::table('dev_apps')->where('id', $a->id)->where('review_status', 'approved')->update(['review_status' => 'none', 'review_note' => 'Scopes or redirect URIs changed after approval.', 'updated_at' => now()]);
+        if ($n) {
+            $this->reviewEvent((int) $a->id, $actorId, $role, 'invalidated', 'Scopes or redirect URIs changed after approval.', $in['scopes']);
+        }
+    }
+
+    /** المطوّر يبعت التطبيق للمراجعة. */
+    public function submitForReview(int $userId, int $id, string $message): array
+    {
+        $this->assertDevAllowed($userId);
+        $a = $this->ownApp($userId, $id);
+        $message = trim($message);
+        if (mb_strlen($message) < 10 || mb_strlen($message) > 500) {
+            $this->fail('Explain what the app does and why it needs these permissions (10 to 500 characters).');
+        }
+        $ev = $this->reviewEvaluate($a);
+        if ($ev['state'] === 'pending') {
+            $this->fail('This app is already waiting for review.', 409);
+        }
+        if ($ev['state'] === 'approved') {
+            $this->fail('This app is already approved.', 409);
+        }
+        if (!$ev['required']) {
+            $this->fail('This app does not need review.', 422);
+        }
+        $n = DB::table('dev_apps')->where('id', $a->id)->where('review_status', '!=', 'pending')->update(['review_status' => 'pending', 'review_message' => $message, 'review_note' => null,
+            'review_requested_at' => now(), 'reviewed_at' => null, 'reviewed_by' => null, 'reviewed_by_role' => null, 'updated_at' => now()]);
+        if (!$n) {
+            $this->fail('This app is already waiting for review.', 409);
+        }
+        $this->reviewEvent((int) $a->id, $userId, 'owner', 'submitted', $message, $this->appScopes($a));
+        if ($a->university_id) {
+            $this->reviewNotify((int) DB::table('universities')->where('id', $a->university_id)->value('user_id'), 'تطبيق جديد مستني المراجعة',
+                'التطبيق "' . $a->name . '" اتبعت لمراجعة الجامعة وبيطلب صلاحيات: ' . implode(', ', $this->appScopes($a)) . '.');
+        }
+        return $this->appPayload(DB::table('dev_apps')->find($a->id));
+    }
+
+    /** المطوّر يسحب طلب المراجعة (قبل القرار). */
+    public function withdrawReview(int $userId, int $id): array
+    {
+        $a = $this->ownApp($userId, $id);
+        $n = DB::table('dev_apps')->where('id', $a->id)->where('review_status', 'pending')->update(['review_status' => 'none', 'review_requested_at' => null, 'updated_at' => now()]);
+        if (!$n) {
+            $this->fail('There is no pending review request to withdraw.', 409);
+        }
+        $this->reviewEvent((int) $a->id, $userId, 'owner', 'withdrawn', null, $this->appScopes($a));
+        return $this->appPayload(DB::table('dev_apps')->find($a->id));
+    }
+
+    /**
+     * قرار الإدارة. الموافقة لازم تتبعت معاها $fingerprint (من تفاصيل التطبيق) — لو المطوّر عدّل scopes/redirects بعد ما المراجع فتح الصفحة، القرار بيترفض 409.
+     * المراجع ميقدرش يراجع تطبيقه هو. $universityId = null → أدمن المنصة (أي جامعة).
+     */
+    public function adminReviewDecision(int $appId, ?int $universityId, bool $approve, ?string $note, ?string $fingerprint, int $actorId, string $actorRole): array
+    {
+        $note = $note !== null ? trim($note) : null;
+        if (!$approve && ($note === null || mb_strlen($note) < 3)) {
+            $this->fail('Give the developer a reason for the rejection.');
+        }
+        if ($approve && ($fingerprint === null || $fingerprint === '')) {
+            $this->fail('The review fingerprint is required to approve.');
+        }
+        $role = $actorRole === 'admin' ? 'admin' : 'university';
+        $app = $this->adminApp($appId, $universityId);
+        if ((int) $app->owner_user_id === $actorId) {
+            $this->fail('You cannot review your own app.', 403);
+        }
+        DB::transaction(function () use ($app, $approve, $note, $fingerprint, $actorId, $role) {
+            $a = DB::table('dev_apps')->where('id', $app->id)->lockForUpdate()->first();
+            if (!$a || ($a->review_status ?? 'none') !== 'pending') {
+                $this->fail('This app is not waiting for review.', 409);
+            }
+            $scopes = $this->appScopes($a);
+            $redirects = $this->appRedirects($a);
+            if ($approve && !hash_equals(DevAppReview::fingerprint($scopes, $redirects), (string) $fingerprint)) {
+                $this->fail('The app changed after you opened it. Reload it and review the new permissions.', 409);
+            }
+            $upd = ['review_status' => $approve ? 'approved' : 'rejected', 'review_note' => $note !== null ? Str::limit($note, 500, '') : null,
+                'reviewed_at' => now(), 'reviewed_by' => $actorId, 'reviewed_by_role' => $role, 'updated_at' => now()];
+            if ($approve) {
+                $upd += ['review_scopes' => json_encode($scopes), 'review_redirects_hash' => DevAppReview::redirectsHash($redirects)];
+            }
+            DB::table('dev_apps')->where('id', $a->id)->update($upd);
+            $this->reviewEvent((int) $a->id, $actorId, $role, $approve ? 'approved' : 'rejected', $note, $scopes);
+        });
+        $this->reviewNotify((int) $app->owner_user_id, $approve ? 'تمت الموافقة على تطبيقك' : 'تم رفض مراجعة تطبيقك',
+            $approve ? 'التطبيق "' . $app->name . '" اتوافق عليه، ودلوقتي مستخدمين تانيين يقدروا يربطوه بحساباتهم.'
+                : 'التطبيق "' . $app->name . '" اترفض.' . ($note ? ' السبب: ' . $note : ''));
+        return $this->appPayload(DB::table('dev_apps')->find($app->id));
+    }
+
+    /**
+     * "لو الوضع بقى X يتأثر إيه؟" — بيحسب من غير ما يغيّر حاجة. $level = جامعة، أو 0 = المنصة. $mode = الوضع المقترح (null = ورّث).
+     * @return array{mode:?string,apps_total:int,apps_blocked:int,apps_blocked_with_users:int,users_affected:int}
+     */
+    public function reviewImpact(int $level, ?string $mode): array
+    {
+        if ($mode !== null && !in_array($mode, DevAppReview::MODES, true)) {
+            $this->fail('review_mode must be off, sensitive or all.');
+        }
+        $modes = DB::table('dev_tenant_policies')->pluck('review_mode', 'university_id')->all();
+        $modes[$level] = $mode; // الوضع المقترح بدل الحالي
+        $platform = $modes[DevAccessService::PLATFORM] ?? null;
+        $out = ['mode' => $mode, 'apps_total' => 0, 'apps_blocked' => 0, 'apps_blocked_with_users' => 0, 'users_affected' => 0];
+        DB::table('dev_apps')->when($level, fn ($q) => $q->where('university_id', $level))->orderBy('id')->chunkById(500, function ($rows) use (&$out, $modes, $platform) {
+            foreach ($rows as $a) {
+                $out['apps_total']++;
+                $m = DevAppReview::mode($platform, $a->university_id ? ($modes[(int) $a->university_id] ?? null) : null);
+                if (DevAppReview::evaluate($this->reviewInput($a), $m)['allows']) {
+                    continue;
+                }
+                $out['apps_blocked']++;
+                $users = (int) DB::table('dev_oauth_grants')->where('app_id', $a->id)->whereNull('revoked_at')->count();
+                if ($users > 0) {
+                    $out['apps_blocked_with_users']++;
+                    $out['users_affected'] += $users;
+                }
+            }
+        });
+        return $out;
     }
 
     /* ------------------------------------------------------------------ API keys */
@@ -400,10 +633,13 @@ class DeveloperAppService
     public function listGrants(int $userId): array
     {
         return DB::table('dev_oauth_grants as g')->join('dev_apps as a', 'a.id', '=', 'g.app_id')->where('g.user_id', $userId)->whereNull('g.revoked_at')
-            ->orderByDesc('g.id')->get(['g.id as gid', 'g.scopes as gscopes', 'g.mail_account_id', 'g.created_at as gcreated', 'g.last_used_at as glast', 'a.id as aid', 'a.name', 'a.description', 'a.homepage_url', 'a.client_id', 'a.status'])
+            ->orderByDesc('g.id')->get(['g.id as gid', 'g.scopes as gscopes', 'g.mail_account_id', 'g.created_at as gcreated', 'g.last_used_at as glast', 'a.id as aid', 'a.name', 'a.description', 'a.homepage_url', 'a.client_id', 'a.status',
+                'a.owner_user_id', 'a.university_id', 'a.scopes as app_scopes', 'a.redirect_uris', 'a.review_status', 'a.review_scopes', 'a.review_redirects_hash'])
             ->map(function ($r) {
                 $scopes = (array) json_decode((string) $r->gscopes, true);
-                return ['id' => (int) $r->gid, 'app' => ['id' => (int) $r->aid, 'name' => $r->name, 'description' => $r->description, 'homepage_url' => $r->homepage_url, 'client_id' => $r->client_id, 'status' => $r->status],
+                return ['id' => (int) $r->gid, 'app' => ['id' => (int) $r->aid, 'name' => $r->name, 'description' => $r->description, 'homepage_url' => $r->homepage_url, 'client_id' => $r->client_id, 'status' => $r->status,
+                    'review_state' => $this->reviewState((object) ['scopes' => $r->app_scopes, 'redirect_uris' => $r->redirect_uris, 'review_status' => $r->review_status, 'review_scopes' => $r->review_scopes,
+                        'review_redirects_hash' => $r->review_redirects_hash, 'university_id' => $r->university_id])],
                     'scopes' => $scopes, 'scopes_described' => DevScopes::describe($scopes), 'mail_account_id' => $r->mail_account_id ? (int) $r->mail_account_id : null,
                     'created_at' => DevTokens::iso($r->gcreated), 'last_used_at' => DevTokens::iso($r->glast)];
             })->values()->all();
@@ -439,12 +675,15 @@ class DeveloperAppService
         if (!empty($f['status'])) {
             $q->where('a.status', (string) $f['status']);
         }
+        if (!empty($f['review']) && in_array($f['review'], DevAppReview::STATUSES, true)) {
+            $q->where('a.review_status', (string) $f['review']);
+        }
         if (!empty($f['q'])) {
             $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], (string) $f['q']) . '%';
             $q->where(fn ($w) => $w->where('a.name', 'like', $like)->orWhere('a.client_id', 'like', $like));
         }
         $total = (clone $q)->count();
-        $rows = $q->orderByDesc('a.id')->forPage($page, $per)->get(['a.*', 'u.full_name as owner_name', 'u.email as owner_email'])->map(function ($a) {
+        $rows = $q->orderByRaw("CASE WHEN a.review_status = 'pending' THEN 0 ELSE 1 END")->orderByDesc('a.id')->forPage($page, $per)->get(['a.*', 'u.full_name as owner_name', 'u.email as owner_email'])->map(function ($a) {
             return $this->appPayload($a) + ['owner_name' => $a->owner_name ?? null, 'owner_email' => $a->owner_email ?? null,
                 'keys' => (int) DB::table('dev_api_keys')->where('user_id', $a->owner_user_id)->whereNull('revoked_at')->count()];
         })->values()->all();
@@ -485,7 +724,8 @@ class DeveloperAppService
             'webhooks' => DB::table('dev_webhooks')->where('app_id', $a->id)->orderByDesc('id')->get(['id', 'name', 'url', 'events', 'mode', 'is_active', 'last_status', 'last_delivery_at'])
                 ->map(fn ($h) => ['id' => (int) $h->id, 'name' => $h->name, 'url' => $h->url, 'events' => (array) json_decode((string) $h->events, true), 'mode' => $h->mode,
                     'is_active' => (bool) $h->is_active, 'last_status' => $h->last_status, 'last_delivery_at' => DevTokens::iso($h->last_delivery_at)])->values()->all(),
-            'authorized_users' => (int) DB::table('dev_oauth_grants')->where('app_id', $a->id)->whereNull('revoked_at')->count()];
+            'authorized_users' => (int) DB::table('dev_oauth_grants')->where('app_id', $a->id)->whereNull('revoked_at')->count(),
+            'review_history' => $this->reviewHistory((int) $a->id, true)];
     }
 
     /** الإدارة تقيّد تطبيق: scopes (بتتقص من المفاتيح كمان) وحد الطلبات. */
@@ -507,6 +747,7 @@ class DeveloperAppService
             $upd['rate_limit_per_min'] = ($in['rate_limit_per_min'] === null || $in['rate_limit_per_min'] === '') ? null : max(1, min(100000, (int) $in['rate_limit_per_min']));
         }
         DB::table('dev_apps')->where('id', $a->id)->update($upd);
+        $this->reviewAfterChange($a, null, 'admin');
         return $this->appPayload(DB::table('dev_apps')->find($a->id));
     }
 

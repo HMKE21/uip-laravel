@@ -48,7 +48,7 @@ class DevAccessService
     {
         return ['apps_enabled' => true, 'webhooks_enabled' => true, 'max_apps_per_user' => null, 'max_keys_per_user' => null, 'max_webhooks_per_user' => null,
             'allowed_scopes' => null, 'allowed_roles' => null, 'default_access' => 'open', 'require_approval' => false, 'sandbox_only' => false,
-            'rate_limit_per_min' => null, 'allowed_events' => null];
+            'rate_limit_per_min' => null, 'allowed_events' => null, 'review_mode' => null];
     }
 
     public static function jsonList($v): ?array
@@ -92,6 +92,7 @@ class DevAccessService
             'sandbox_only' => (bool) ($row->sandbox_only ?? false),
             'rate_limit_per_min' => ($row->rate_limit_per_min ?? null) !== null ? (int) $row->rate_limit_per_min : null,
             'allowed_events' => $events === null ? null : array_values(array_intersect(array_keys((array) config('developer.events', [])), $events)),
+            'review_mode' => in_array($row->review_mode ?? null, DevAppReview::MODES, true) ? $row->review_mode : null,   // null = الافتراضي/سياسة المنصة
         ]);
     }
 
@@ -113,6 +114,12 @@ class DevAccessService
         }
         if (array_key_exists('rate_limit_per_min', $in)) {
             $new['rate_limit_per_min'] = self::intOrNull($in['rate_limit_per_min'], 1, 100000);
+        }
+        if (array_key_exists('review_mode', $in)) {
+            if ($in['review_mode'] !== null && !in_array($in['review_mode'], DevAppReview::MODES, true)) {
+                $this->fail('review_mode must be off, sensitive or all.');
+            }
+            $new['review_mode'] = $in['review_mode'];
         }
         if (array_key_exists('default_access', $in)) {
             if (!in_array($in['default_access'], ['open', 'closed'], true)) {
@@ -165,6 +172,7 @@ class DevAccessService
             'default_access' => $new['default_access'], 'require_approval' => (int) $new['require_approval'], 'sandbox_only' => (int) $new['sandbox_only'],
             'rate_limit_per_min' => $new['rate_limit_per_min'],
             'allowed_events' => $new['allowed_events'] === null ? null : json_encode($new['allowed_events']),
+            'review_mode' => $new['review_mode'] ?? null,
             'updated_by' => $by, 'updated_at' => now(),
         ];
         if (DB::table('dev_tenant_policies')->where('university_id', $universityId)->exists()) {
@@ -545,6 +553,19 @@ class DevAccessService
         return $roles ?: [$svc->primaryRoleFor($userId)];
     }
 
+    /**
+     * وضع مراجعة التطبيقات الفعلي لجامعة (أو من غير جامعة = null): الأشد بين المنصة والجامعة، والافتراضي sensitive.
+     * متكاشّي بنفس epoch بتاع السياسات، فأي تغيير في السياسة بيظهر فورًا.
+     */
+    public function reviewModeFor(?int $universityId): string
+    {
+        return Cache::remember('dev:review:mode:' . $this->epoch() . ':' . (int) $universityId, 30, function () use ($universityId) {
+            $ids = array_values(array_unique([self::PLATFORM, (int) $universityId]));
+            $m = DB::table('dev_tenant_policies')->whereIn('university_id', $ids)->pluck('review_mode', 'university_id');
+            return DevAppReview::mode($m[self::PLATFORM] ?? null, $universityId ? ($m[(int) $universityId] ?? null) : null);
+        });
+    }
+
     public function effective(int $userId): array
     {
         return Cache::remember('dev:access:' . $this->epoch() . ':' . $userId, 10, fn () => $this->compute($userId));
@@ -809,6 +830,7 @@ class DevAccessService
         $acc = DB::table('dev_user_access')->when($uni, fn ($q) => $q->where('university_id', $uni));
         return [
             'apps' => (clone $apps)->count(), 'apps_suspended' => (clone $apps)->where('status', 'suspended')->count(),
+            'reviews_pending' => (clone $apps)->where('review_status', 'pending')->count(),
             'developers_blocked' => (clone $acc)->where('status', 'blocked')->count(), 'requests_pending' => (clone $acc)->where('status', 'pending')->count(),
             'rules' => DB::table('dev_access_rules')->where('university_id', $uni ?: self::PLATFORM)->count(),
         ];

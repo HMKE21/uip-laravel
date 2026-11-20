@@ -88,6 +88,23 @@ class DeveloperCenterController extends Controller
         return $this->dom(fn () => ['apps' => $this->apps->listApps($this->uid($r))]);
     }
 
+    /** المطوّر يبعت التطبيق لمراجعة الجامعة/المنصة. */
+    public function submitReview(Request $r, int $id)
+    {
+        $in = $r->validate(['message' => 'required|string|min:10|max:500']);
+        return $this->dom(fn () => ['app' => $this->apps->submitForReview($this->uid($r), $id, $in['message'])]);
+    }
+
+    public function withdrawReview(Request $r, int $id)
+    {
+        return $this->dom(fn () => ['app' => $this->apps->withdrawReview($this->uid($r), $id)]);
+    }
+
+    public function reviewStatus(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->apps->ownerReview($this->uid($r), $id));
+    }
+
     public function createApp(Request $r)
     {
         $in = $r->validate($this->appRules(true));

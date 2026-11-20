@@ -92,7 +92,7 @@ class DevAdminController extends Controller
     {
         return $this->run($r, fn ($s) => ['policy' => $this->access->rawPolicy($this->level($s)), 'platform_policy' => $s['universityId'] ? $this->access->rawPolicy(DevAccessService::PLATFORM) : null,
             'scopes' => DevScopes::catalog(), 'roles' => $this->access->roleCatalog(), 'events' => config('developer.events'), 'defaults' => config('developer.limits'),
-            'level' => $s['universityId'] ? 'university' : 'platform']);
+            'level' => $s['universityId'] ? 'university' : 'platform', 'effective_review_mode' => $this->access->reviewModeFor($s['universityId'])]);
     }
 
     public function savePolicy(Request $r)
@@ -102,7 +102,7 @@ class DevAdminController extends Controller
             'max_apps_per_user' => 'nullable|integer|min:0|max:100', 'max_keys_per_user' => 'nullable|integer|min:0|max:500', 'max_webhooks_per_user' => 'nullable|integer|min:0|max:100',
             'rate_limit_per_min' => 'nullable|integer|min:1|max:100000', 'default_access' => 'sometimes|string|in:open,closed',
             'allowed_scopes' => 'nullable|array', 'allowed_scopes.*' => 'string|max:40', 'allowed_roles' => 'nullable|array', 'allowed_roles.*' => 'string|max:50',
-            'allowed_events' => 'nullable|array', 'allowed_events.*' => 'string|max:60',
+            'allowed_events' => 'nullable|array', 'allowed_events.*' => 'string|max:60', 'review_mode' => 'nullable|string|in:off,sensitive,all',
         ]);
         return $this->run($r, function ($s) use ($in, $r) {
             $p = $this->access->savePolicy($this->level($s), $in, $this->uid($r));
@@ -259,7 +259,7 @@ class DevAdminController extends Controller
 
     public function apps(Request $r)
     {
-        return $this->run($r, fn ($s) => $this->apps->adminApps(['university_id' => $s['universityId'], 'status' => $r->query('status'), 'q' => $r->query('q')], (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
+        return $this->run($r, fn ($s) => $this->apps->adminApps(['university_id' => $s['universityId'], 'status' => $r->query('status'), 'q' => $r->query('q'), 'review' => $r->query('review')], (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
     }
 
     public function app(Request $r, int $id)
@@ -284,6 +284,24 @@ class DevAdminController extends Controller
             $this->audit($r, 'app.delete', null, null, $id);
             return null;
         }, true);
+    }
+
+    /** قرار مراجعة تطبيق. body: { approve:bool, note? (إجباري مع الرفض), fingerprint (إجباري مع الموافقة، من تفاصيل التطبيق) }. */
+    public function reviewApp(Request $r, int $id)
+    {
+        $in = $r->validate(['approve' => 'required|boolean', 'note' => 'nullable|string|max:500', 'fingerprint' => 'nullable|string|size:64']);
+        return $this->run($r, function ($s) use ($in, $r, $id) {
+            $app = $this->apps->adminReviewDecision($id, $s['universityId'], (bool) $in['approve'], $in['note'] ?? null, $in['fingerprint'] ?? null, $this->uid($r), $s['role']);
+            $this->audit($r, 'app.review.' . ($in['approve'] ? 'approve' : 'reject'), $app['owner_user_id'] ?? null, $in['note'] ?? null, $id);
+            return ['app' => $app];
+        }, true);
+    }
+
+    /** معاينة: لو وضع المراجعة بقى كذا، كام تطبيق/مستخدم هيتأثروا؟ (من غير تغيير). review_mode=off|sensitive|all|inherit */
+    public function reviewImpact(Request $r)
+    {
+        $in = $r->validate(['review_mode' => 'required|string|in:off,sensitive,all,inherit']);
+        return $this->run($r, fn ($s) => ['impact' => $this->apps->reviewImpact($this->level($s), $in['review_mode'] === 'inherit' ? null : $in['review_mode'])]);
     }
 
     public function suspend(Request $r, int $id)
