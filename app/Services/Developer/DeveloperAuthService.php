@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\RateLimiter;
 /** يتحقق من Bearer (API key uipk_… أو OAuth access token uipo_…) ويرجّع سياق الطلب. بيرمي DevAuthException (msg, http) مع errorCode. */
 class DeveloperAuthService
 {
-    public function __construct(private DeveloperAppService $apps)
+    public function __construct(private DeveloperAppService $apps, private DevLogService $logs)
     {
     }
 
@@ -70,11 +70,23 @@ class DeveloperAuthService
         // Rate limit لكل مفتاح/توكن.
         $rk = 'dev:rl:' . $ctx['rate_key'];
         if (RateLimiter::tooManyAttempts($rk, $ctx['limit'])) {
+            $this->noteThrottled($r, $ctx);
             $this->deny('Rate limit exceeded.', 429, 'rate_limited', ['Retry-After' => (string) max(1, RateLimiter::availableIn($rk)), 'X-RateLimit-Limit' => (string) $ctx['limit'], 'X-RateLimit-Remaining' => '0']);
         }
         RateLimiter::hit($rk, 60);
         $ctx['remaining'] = max(0, $ctx['limit'] - RateLimiter::attempts($rk));
         return $ctx;
+    }
+
+    /**
+     * الـ 429 كانت بتتحجب من غير ما تتسجّل، فشاشة الاستهلاك ماكانتش هتشوفها. بنسجّل صف واحد بس في الدقيقة لكل مفتاح/توكن:
+     * حد يغرّق الـ API بعد ما يتحجب ميقدرش يملا الـ DB (الـ Cache::add ذرّي، ومفيش كتابة تانية لحد ما الدقيقة تخلص).
+     */
+    private function noteThrottled(Request $r, array $ctx): void
+    {
+        if (Cache::add('dev:rl429:' . $ctx['rate_key'], 1, 60)) {
+            $this->logs->fromRequest($r, 429, $ctx, 0, 'rate_limited');
+        }
     }
 
     private function fromKey(string $raw, string $ip): array

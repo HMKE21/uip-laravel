@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\Concerns\RunsDomain;
 use App\Http\Controllers\Controller;
 use App\Services\Developer\DevLogService;
 use App\Services\Developer\DevScopes;
+use App\Services\Developer\DevUsageService;
 use App\Services\Developer\DeveloperAppService;
 use App\Services\Developer\OAuthException;
 use App\Services\Developer\OAuthService;
@@ -310,6 +311,13 @@ class DeveloperCenterController extends Controller
     }
 
     /* ---------------------------------------------------------------- سجل التكاملات (بتاعي) */
+
+    /** Rate Limit Dashboard: استهلاك مفاتيحي وتطبيقاتي. ?range=1h|24h|7d */
+    public function usage(Request $r, DevUsageService $usage)
+    {
+        $r->validate(['range' => 'nullable|string|in:' . implode(',', DevUsageService::ranges())]);
+        return $this->dom(fn () => $usage->report($this->uid($r), (string) $r->query('range', '24h')));
+    }
 
     public function logs(Request $r)
     {

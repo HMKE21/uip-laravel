@@ -19,6 +19,7 @@ Route::prefix('oauth')->middleware('throttle:60,1')->group(function () {
 Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::get('/overview', [DeveloperCenterController::class, 'overview'])->middleware('throttle:120,1');
     Route::get('/access', [DeveloperCenterController::class, 'access'])->middleware('throttle:120,1');
+    Route::get('/usage', [DeveloperCenterController::class, 'usage'])->middleware('throttle:60,1');
     Route::post('/access/request', [DeveloperCenterController::class, 'requestAccess'])->middleware('throttle:10,1');
 
     Route::get('/apps', [DeveloperCenterController::class, 'apps'])->middleware('throttle:120,1');
