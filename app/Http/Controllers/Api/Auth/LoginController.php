@@ -238,7 +238,9 @@ class LoginController extends Controller
                 return response()->json(['success' => false, 'message' => 'Invalid email or password.'], 422);
             }
         }
-        if (!$isJoker && in_array($role, self::STAFF_ROLES, true) !== $viaStaffPortal) {
+        // منصة معزولة: صفحة دخول واحدة لكل الأدوار (مفيش بوابة staff ولا اختيار نوع حساب).
+        $ownPlatform = \App\Services\Tenancy\TenantContext::active();
+        if (!$ownPlatform && !$isJoker && in_array($role, self::STAFF_ROLES, true) !== $viaStaffPortal) {
             $this->logLogin($request, $user, false, 'wrong_portal');
             SecurityLog::write('Login refused - wrong entry portal', [
                 'user_id' => $user->id, 'role' => $role, 'portal' => $viaStaffPortal ? 'staff' : 'public', 'ip' => $request->ip(),
@@ -249,7 +251,7 @@ class LoginController extends Controller
             ], 422);
         }
 
-        if (!$viaStaffPortal && !$isJoker) {
+        if (!$viaStaffPortal && !$isJoker && !$ownPlatform) {
             $loginAs = (string) $request->input('login_as', '');
             if (!isset(self::PUBLIC_ROLE_LABELS[$loginAs])) {
                 return response()->json([

@@ -36,7 +36,7 @@ class MicrosoftAuthController extends Controller
             'data'    => [
                 'enabled'   => $id !== '',
                 'client_id' => $id ?: null,
-                'authority' => (string) config('services.microsoft.authority', 'https://login.microsoftonline.com/common'),
+                'authority' => \App\Services\Tenancy\TenantAuthSettings::microsoftAuthority() ?? (string) config('services.microsoft.authority', 'https://login.microsoftonline.com/common'),
             ],
             'errors'  => null,
             'meta'    => (object) [],

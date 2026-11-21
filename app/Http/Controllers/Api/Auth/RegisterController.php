@@ -39,6 +39,10 @@ class RegisterController extends Controller
 
     public function submit(Request $request)
     {
+        if (\App\Services\Tenancy\TenantContext::active()) { // منصة معزولة: الأدمن بس هو اللي بيضيف الناس
+            return response()->json(['success' => false, 'message' => $request->header('X-Locale', 'en') === 'ar' ? 'التسجيل مقفول على المنصة دي.' : 'Sign-up is closed on this platform.',
+                'data' => ['registration_closed' => true], 'errors' => ['code' => 'registration_closed'], 'meta' => (object) []], 403);
+        }
         // Admin → Platform Policy: public sign-up can be closed without a deploy (existing users are unaffected).
         if (!\App\Support\PlatformPolicy::registrationOpen()) {
             return response()->json([

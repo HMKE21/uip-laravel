@@ -28,6 +28,9 @@ class GithubAuthController extends Controller
 
     public function config()
     {
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return response()->json(['success' => true, 'message' => 'OK', 'data' => ['enabled' => false], 'errors' => null, 'meta' => (object) []]);
+        }
         return response()->json([
             'success' => true,
             'message' => 'OK',
@@ -39,6 +42,9 @@ class GithubAuthController extends Controller
 
     public function start(Request $request)
     {
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return response()->json(['success' => false, 'message' => 'Not available on this platform.', 'data' => null, 'errors' => ['code' => 'provider_unavailable'], 'meta' => (object) []], 403);
+        }
         $ar = $request->header('X-Locale', 'en') === 'ar';
         $nonce = (string) $request->input('nonce', '');
         if (!GithubLoginService::validNonce($nonce)) {

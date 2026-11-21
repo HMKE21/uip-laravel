@@ -64,6 +64,22 @@ class TenantController extends Controller
         return $this->dom(fn () => ['users' => app(\App\Services\Tenancy\PlatformUsers::class)->setActive($this->uid($r), $id, $userId, (bool) $in['active'])]);
     }
 
+    public function signIn(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->tenants->signInSettings($this->uid($r), $id));
+    }
+
+    public function saveSignIn(Request $r, int $id)
+    {
+        $in = $r->validate([
+            'template' => 'required|string|max:24', 'headline' => 'nullable|array', 'headline.*' => 'nullable|string|max:80',
+            'subtitle' => 'nullable|array', 'subtitle.*' => 'nullable|string|max:200',
+            'google' => 'nullable|array', 'google.enabled' => 'nullable|boolean', 'google.client_id' => 'nullable|string|max:200',
+            'microsoft' => 'nullable|array', 'microsoft.enabled' => 'nullable|boolean', 'microsoft.client_id' => 'nullable|string|max:80', 'microsoft.directory' => 'nullable|string|max:60',
+        ]);
+        return $this->dom(fn () => $this->tenants->saveSignInSettings($this->uid($r), $id, $in));
+    }
+
     public function launchOptions(Request $r)
     {
         return $this->dom(fn () => $this->tenants->launchOptions());

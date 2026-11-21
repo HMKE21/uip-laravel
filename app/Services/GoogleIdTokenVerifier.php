@@ -20,6 +20,10 @@ class GoogleIdTokenVerifier
     /** @return string[] */
     public function clientIds(): array
     {
+        // جوّه منصة معزولة: الـ client ids بتاعتها هي بس (مفيش تسريب بين المنصات ولا استخدام لإعدادات UIPE).
+        if (($own = \App\Services\Tenancy\TenantAuthSettings::googleIds()) !== null) {
+            return $own;
+        }
         $raw = (string) \App\Support\PlatformPolicy::value('google_client_ids');
         return array_values(array_filter(array_map('trim', explode(',', $raw))));
     }

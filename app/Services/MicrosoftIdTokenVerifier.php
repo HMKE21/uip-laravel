@@ -28,6 +28,9 @@ class MicrosoftIdTokenVerifier
 
     public function clientId(): string
     {
+        if (($own = \App\Services\Tenancy\TenantAuthSettings::microsoftClientId()) !== null) {
+            return $own;
+        }
         return trim((string) config('services.microsoft.client_id', ''));
     }
 

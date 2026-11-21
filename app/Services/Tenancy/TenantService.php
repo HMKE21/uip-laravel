@@ -323,6 +323,28 @@ final class TenantService
         return $this->features($userId, $tenantId);
     }
 
+    /** إعدادات صفحة دخول المنصة (القالب + جوجل/مايكروسوفت). */
+    public function signInSettings(int $userId, int $tenantId): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return ['settings' => TenantAuthSettings::forTenant((int) $t->id), 'templates' => TenantAuthSettings::TEMPLATES, 'isolated' => ($t->mode ?? 'shared') === 'isolated', 'slug' => $t->slug ?? null];
+    }
+
+    public function saveSignInSettings(int $userId, int $tenantId, array $in): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'site');
+        if (($t->mode ?? 'shared') !== 'isolated') {
+            $this->fail('Sign-in design is available for launched platforms (with their own accounts).', 409);
+        }
+        try {
+            TenantAuthSettings::save((int) $t->id, $in);
+        } catch (\InvalidArgumentException $e) {
+            $this->fail($e->getMessage());
+        }
+        $this->audit($userId, (int) $t->id, 'sign-in.settings', (string) ($in['template'] ?? ''));
+        return $this->signInSettings($userId, $tenantId);
+    }
+
     public function rename(int $userId, int $tenantId, string $name): array
     {
         [$t] = $this->authorize($userId, $tenantId, 'branding');

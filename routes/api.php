@@ -193,6 +193,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/login', [LoginController::class, 'submit'])->middleware('throttle:auth-login');
         Route::post('/register', [RegisterController::class, 'submit'])->middleware('throttle:10,1');
         // Sign in / sign up with Google (ويب + أندرويد).
+        Route::get('/tenant-sign-in', [\App\Http\Controllers\Api\Auth\TenantSignInController::class, 'show']);
         Route::get('/google/config', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'config']);
         Route::post('/google', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'submit'])->middleware('throttle:20,1');
         Route::post('/google/complete', [\App\Http\Controllers\Api\Auth\GoogleAuthController::class, 'complete'])->middleware('throttle:10,1');

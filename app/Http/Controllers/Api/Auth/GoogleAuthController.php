@@ -93,6 +93,13 @@ class GoogleAuthController extends Controller
             return $this->signIn($request, $user, $g, $locale);
         }
 
+        // منصة معزولة: الدخول لحسابات المنصة نفسها بس — مفيش تسجيل ذاتي (الأدمن هو اللي بيضيف الناس).
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return $this->fail($locale === 'ar'
+                ? 'مفيش حساب بالإيميل ده على المنصة دي. اطلب من الأدمن يضيفك.'
+                : 'There is no account with this email on this platform. Ask the admin to add you.', 403, ['code' => 'no_workspace_account']);
+        }
+
         // مفيش حساب: التسجيل ممكن يكون مقفول من Admin → Platform Policy.
         if (!\App\Support\PlatformPolicy::registrationOpen()) {
             return $this->fail(\App\Support\PlatformPolicy::registrationClosedMessage($locale), 403, ['code' => 'registration_closed']);
@@ -146,6 +153,9 @@ class GoogleAuthController extends Controller
     public function complete(Request $request)
     {
         $locale = $this->locale($request);
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return $this->fail($locale === 'ar' ? 'التسجيل مقفول على المنصة دي.' : 'Sign-up is closed on this platform.', 403, ['code' => 'registration_closed']);
+        }
         $claims = UipJwtService::decode((string) $request->input('registration_token', ''));
         if (!$claims || ($claims['typ'] ?? null) !== self::SIGNUP_TYP || empty($claims['email']) || empty($claims['gsub'])) {
             return $this->fail($locale === 'ar'
@@ -249,6 +259,9 @@ class GoogleAuthController extends Controller
     public function restoreDeleted(Request $request)
     {
         $locale = $this->locale($request);
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return $this->fail($locale === 'ar' ? 'التسجيل مقفول على المنصة دي.' : 'Sign-up is closed on this platform.', 403, ['code' => 'registration_closed']);
+        }
         $claims = UipJwtService::decode((string) $request->input('registration_token', ''));
         if (!$claims || ($claims['typ'] ?? null) !== self::SIGNUP_TYP || empty($claims['email']) || empty($claims['gsub'])) {
             return $this->fail($locale === 'ar'
