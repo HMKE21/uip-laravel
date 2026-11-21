@@ -3,7 +3,6 @@
 namespace App\Services\Tenancy;
 
 use App\Services\Developer\DevLogService;
-use App\Services\Developer\DevUsageService;
 use App\Services\Developer\DeveloperAppService;
 use App\Services\Developer\WebhookService;
 use Illuminate\Support\Facades\Cache;
@@ -29,7 +28,7 @@ final class TenantService
         'delete' => ['owner'],
     ];
 
-    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs, private DevUsageService $usage)
+    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs)
     {
     }
 
@@ -175,12 +174,11 @@ final class TenantService
         $this->forgetHosts((int) $t->id);
         DB::table('dev_api_keys')->where('tenant_id', $t->id)->whereNull('revoked_at')->update(['revoked_at' => now(), 'updated_at' => now()]);
         foreach (DB::table('dev_webhooks')->where('tenant_id', $t->id)->get(['id', 'user_id']) as $h) {
-            $this->hooks->delete((int) $h->user_id, (int) $h->id, null, (int) $t->id);
+            $this->hooks->delete((int) $h->user_id, (int) $h->id);
         }
         foreach (DB::table('dev_apps')->where('tenant_id', $t->id)->get(['id', 'owner_user_id']) as $a) {
-            $this->apps->deleteApp((int) $a->owner_user_id, (int) $a->id, (int) $t->id);
+            $this->apps->deleteApp((int) $a->owner_user_id, (int) $a->id);
         }
-        DB::table('dev_request_logs')->where('tenant_id', $t->id)->delete();                       // سجل الـ Workspace بيتمسح معاه
         DB::table('dev_api_keys')->where('tenant_id', $t->id)->update(['tenant_id' => null]);   // الصفوف الملغاة بتفضل في السجل من غير ربط
         DB::table('tenants')->where('id', $t->id)->delete();                                      // members / branding / domains cascade
         $this->audit($userId, null, 'delete', $t->slug);
@@ -357,7 +355,9 @@ final class TenantService
         if (DB::table('dev_apps')->where('tenant_id', $t->id)->count() >= (int) $this->limits($t)['apps']) {
             $this->fail('This workspace reached its app limit.', 403);
         }
-        $out = $this->apps->createApp($userId, $in, (int) $t->id);                                  // بيتختم بـ tenant_id جوه نفس الـ INSERT
+        $out = $this->apps->createApp($userId, $in);
+        DB::table('dev_apps')->where('id', $out['app']['id'])->update(['tenant_id' => $t->id]);
+        $out['app']['tenant_id'] = (int) $t->id;
         $this->audit($userId, (int) $t->id, 'app.create', '#' . $out['app']['id']);
         return $out;
     }
@@ -371,7 +371,9 @@ final class TenantService
         if (!empty($in['app_id'])) {
             $this->assertAppInTenant((int) $in['app_id'], (int) $t->id);
         }
-        $out = $this->apps->createKey($userId, $in, (int) $t->id);
+        $out = $this->apps->createKey($userId, $in);
+        DB::table('dev_api_keys')->where('id', $out['id'])->update(['tenant_id' => $t->id]);
+        $out['tenant_id'] = (int) $t->id;
         $this->audit($userId, (int) $t->id, 'key.create', '#' . $out['id']);
         return $out;
     }
@@ -385,8 +387,11 @@ final class TenantService
         if (!empty($in['app_id'])) {
             $this->assertAppInTenant((int) $in['app_id'], (int) $t->id);
         }
-        $out = $this->hooks->create($userId, $in, null, (int) $t->id);
-        $hid = (int) ($out['id'] ?? 0);
+        $out = $this->hooks->create($userId, $in);
+        $hid = (int) ($out['id'] ?? ($out['webhook']['id'] ?? 0));
+        if ($hid) {
+            DB::table('dev_webhooks')->where('id', $hid)->update(['tenant_id' => $t->id]);
+        }
         $this->audit($userId, (int) $t->id, 'webhook.create', '#' . $hid);
         return $out;
     }
@@ -407,7 +412,7 @@ final class TenantService
             $this->fail('API key not found.', 404);
         }
         $this->assertCanManage($role, $userId, (int) $k->user_id);
-        $this->apps->revokeKey((int) $k->user_id, (int) $k->id, (int) $t->id);
+        $this->apps->revokeKey((int) $k->user_id, (int) $k->id);
         $this->audit($userId, (int) $t->id, 'key.revoke', '#' . $keyId);
     }
 
@@ -419,7 +424,7 @@ final class TenantService
             $this->fail('App not found.', 404);
         }
         $this->assertCanManage($role, $userId, (int) $a->owner_user_id);
-        $this->apps->deleteApp((int) $a->owner_user_id, (int) $a->id, (int) $t->id);
+        $this->apps->deleteApp((int) $a->owner_user_id, (int) $a->id);
         $this->audit($userId, (int) $t->id, 'app.delete', '#' . $appId);
     }
 
@@ -431,23 +436,16 @@ final class TenantService
             $this->fail('Webhook not found.', 404);
         }
         $this->assertCanManage($role, $userId, (int) $h->user_id);
-        $this->hooks->delete((int) $h->user_id, (int) $h->id, null, (int) $t->id);
+        $this->hooks->delete((int) $h->user_id, (int) $h->id);
         $this->audit($userId, (int) $t->id, 'webhook.delete', '#' . $hookId);
     }
 
-    /* ------------------------------------------------------------------ activity & usage (isolated by tenant_id) */
-
-    /** سجل الـ Workspace: طلبات مفاتيحه/تطبيقاته + عمليات إدارته. للـ owner/admin/developer. */
+    /** سجل الـ Workspace المعزول: كل الأعضاء بيشوفوا طلبات tenant بتاعهم بس (مفاتيحه وتطبيقاته وأحداث إدارته). */
     public function logs(int $userId, int $tenantId, array $filters, int $page = 1, int $per = 30): array
     {
-        [$t] = $this->authorize($userId, $tenantId, 'resources');
-        return $this->logs->search(['tenant_id' => (int) $t->id] + array_intersect_key($filters, array_flip(['app_id', 'api_key_id', 'kind', 'status', 'from', 'to', 'q'])), $page, $per);
-    }
-
-    public function usage(int $userId, int $tenantId, string $range = '24h'): array
-    {
         [$t] = $this->authorize($userId, $tenantId);
-        return $this->usage->report($userId, $range, (int) $t->id);
+        $allowed = array_intersect_key($filters, array_flip(['kind', 'status', 'from', 'to', 'q', 'app_id', 'api_key_id']));
+        return $this->logs->search($allowed + ['tenant_id' => (int) $t->id], $page, $per);
     }
 
     /* ------------------------------------------------------------------ gate for the Developer API */
@@ -492,18 +490,6 @@ final class TenantService
             ];
         })->all();
         return ['items' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $per];
-    }
-
-    /** أدمن المنصة: تفاصيل Workspace (مالك + أعضاء + دومينات + branding) للفحص قبل التوقيف أو تفعيل features. */
-    public function adminShow(int $tenantId): array
-    {
-        $t = DB::table('tenants')->where('id', $tenantId)->first();
-        if (!$t) {
-            $this->fail('Workspace not found.', 404);
-        }
-        $members = DB::table('tenant_members as m')->join('users as u', 'u.id', '=', 'm.user_id')->where('m.tenant_id', $t->id)->orderBy('m.id')
-            ->get(['m.user_id', 'm.role', 'u.email', 'u.full_name'])->map(fn ($m) => ['user_id' => (int) $m->user_id, 'role' => $m->role, 'email' => $m->email, 'name' => $m->full_name])->all();
-        return ['tenant' => $this->payload($t), 'branding' => TenantBranding::get((int) $t->id), 'members' => $members, 'domains' => TenantDomainService::list((int) $t->id)];
     }
 
     /** أدمن المنصة: حالة (توقيف/تشغيل) + خطة + features + حدود. */
@@ -560,7 +546,7 @@ final class TenantService
 
     private function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
     {
-        $this->logs->record(['user_id' => $userId, 'tenant_id' => $tenantId, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
+        $this->logs->record(['user_id' => $userId, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
             'note' => $note]);
     }
 }

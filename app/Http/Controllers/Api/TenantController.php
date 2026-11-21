@@ -123,17 +123,6 @@ class TenantController extends Controller
         });
     }
 
-    /* ---- activity & usage */
-    public function logs(Request $r, int $id)
-    {
-        return $this->dom(fn () => $this->tenants->logs($this->uid($r), $id, $r->only(['app_id', 'api_key_id', 'kind', 'status', 'from', 'to', 'q']), (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
-    }
-
-    public function usage(Request $r, int $id)
-    {
-        return $this->dom(fn () => $this->tenants->usage($this->uid($r), $id, (string) $r->query('range', '24h')));
-    }
-
     /* ---- resources (isolated by tenant_id) */
     public function apps(Request $r, int $id)
     {
@@ -187,5 +176,13 @@ class TenantController extends Controller
             $this->tenants->deleteWebhook($this->uid($r), $id, $hookId);
             return null;
         });
+    }
+
+    /* ---- logs (isolated per tenant) */
+    public function logs(Request $r, int $id)
+    {
+        $f = $r->validate(['kind' => 'nullable|in:api,oauth,admin,webhook,sandbox', 'status' => 'nullable|string|max:8', 'from' => 'nullable|string|max:40', 'to' => 'nullable|string|max:40',
+            'q' => 'nullable|string|max:100', 'app_id' => 'nullable|integer', 'api_key_id' => 'nullable|integer', 'page' => 'nullable|integer|min:1', 'per_page' => 'nullable|integer|min:1|max:100']);
+        return $this->dom(fn () => $this->tenants->logs($this->uid($r), $id, $f, (int) ($f['page'] ?? 1), (int) ($f['per_page'] ?? 30)));
     }
 }

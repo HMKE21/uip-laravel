@@ -91,11 +91,10 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::post('/domains/{domainId}/verify', [TenantController::class, 'verifyDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
         Route::post('/domains/{domainId}/primary', [TenantController::class, 'primaryDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
         Route::delete('/domains/{domainId}', [TenantController::class, 'removeDomain'])->whereNumber('domainId')->middleware('throttle:20,1');
-        Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
-        Route::get('/usage', [TenantController::class, 'usage'])->middleware('throttle:60,1');
         Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
         Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
         Route::delete('/apps/{appId}', [TenantController::class, 'deleteApp'])->whereNumber('appId')->middleware('throttle:20,1');
+        Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
         Route::get('/keys', [TenantController::class, 'keys'])->middleware('throttle:120,1');
         Route::post('/keys', [TenantController::class, 'createKey'])->middleware('throttle:20,1');
         Route::delete('/keys/{keyId}', [TenantController::class, 'revokeKey'])->whereNumber('keyId')->middleware('throttle:30,1');
@@ -144,7 +143,6 @@ Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
     Route::get('/logs', [DevAdminController::class, 'logs'])->middleware('throttle:120,1');
 
     Route::get('/tenants', [TenantAdminController::class, 'index'])->middleware('throttle:120,1');
-    Route::get('/tenants/{id}', [TenantAdminController::class, 'show'])->whereNumber('id')->middleware('throttle:120,1');
     Route::put('/tenants/{id}', [TenantAdminController::class, 'update'])->whereNumber('id')->middleware('throttle:30,1');
 });
 

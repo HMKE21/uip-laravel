@@ -29,14 +29,6 @@ class TenantAdminController extends Controller
         return $this->dom(fn () => $this->tenants->adminList($r->query('q') ? (string) $r->query('q') : null, $r->query('status') ? (string) $r->query('status') : null, (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
     }
 
-    public function show(Request $r, int $id)
-    {
-        if ($deny = $this->admin($r)) {
-            return $deny;
-        }
-        return $this->dom(fn () => $this->tenants->adminShow($id));
-    }
-
     public function update(Request $r, int $id)
     {
         if ($deny = $this->admin($r)) {

@@ -13,7 +13,7 @@ class DevLogService
     {
         try {
             DB::table('dev_request_logs')->insert([
-                'user_id' => $f['user_id'] ?? null, 'tenant_id' => $f['tenant_id'] ?? null, 'app_id' => $f['app_id'] ?? null, 'api_key_id' => $f['api_key_id'] ?? null, 'token_id' => $f['token_id'] ?? null,
+                'user_id' => $f['user_id'] ?? null, 'app_id' => $f['app_id'] ?? null, 'api_key_id' => $f['api_key_id'] ?? null, 'token_id' => $f['token_id'] ?? null,
                 'kind' => $f['kind'] ?? 'api', 'method' => isset($f['method']) ? substr((string) $f['method'], 0, 8) : null,
                 'path' => isset($f['path']) ? substr((string) $f['path'], 0, 200) : null, 'status' => $f['status'] ?? null,
                 'duration_ms' => $f['duration_ms'] ?? null, 'scope' => $f['scope'] ?? null, 'error_code' => $f['error_code'] ?? null,
@@ -27,14 +27,14 @@ class DevLogService
     public function fromRequest(Request $r, int $status, array $ctx, int $ms, ?string $errorCode = null, ?string $scope = null): void
     {
         $this->record([
-            'user_id' => $ctx['user_id'] ?? null, 'tenant_id' => $ctx['tenant_id'] ?? null, 'app_id' => $ctx['app_id'] ?? null, 'api_key_id' => $ctx['key_id'] ?? null, 'token_id' => $ctx['token_id'] ?? null,
+            'user_id' => $ctx['user_id'] ?? null, 'app_id' => $ctx['app_id'] ?? null, 'api_key_id' => $ctx['key_id'] ?? null, 'token_id' => $ctx['token_id'] ?? null,
             'kind' => ($ctx['mode'] ?? 'live') === 'sandbox' ? 'sandbox' : 'api', 'method' => $r->method(), 'path' => '/' . ltrim($r->path(), '/'),
             'status' => $status, 'duration_ms' => $ms, 'scope' => $scope, 'error_code' => $errorCode, 'ip' => $r->ip(),
         ]);
     }
 
     /**
-     * @param array{user_id?:int,tenant_id?:int,personal?:bool,app_id?:int,kind?:string,status?:string,from?:string,to?:string,q?:string,university_id?:int,owner_ids?:int[]} $f
+     * @param array{user_id?:int,tenant_id?:int,app_id?:int,kind?:string,status?:string,from?:string,to?:string,q?:string,university_id?:int,owner_ids?:int[]} $f
      */
     public function search(array $f, int $page = 1, int $per = 30): array
     {
@@ -42,12 +42,16 @@ class DevLogService
         $page = max(1, $page);
         $q = DB::table('dev_request_logs as l');
         if (!empty($f['user_id'])) { $q->where('l.user_id', (int) $f['user_id']); }
-        if (!empty($f['tenant_id'])) { $q->where('l.tenant_id', (int) $f['tenant_id']); }
-        if (!empty($f['personal'])) { $q->whereNull('l.tenant_id'); } // السجل الشخصي: من غير طلبات/عمليات الـ Workspaces
         if (!empty($f['app_id'])) { $q->where('l.app_id', (int) $f['app_id']); }
         if (!empty($f['api_key_id'])) { $q->where('l.api_key_id', (int) $f['api_key_id']); }
         if (!empty($f['kind'])) { $q->where('l.kind', (string) $f['kind']); }
         if (!empty($f['owner_ids'])) { $q->whereIn('l.user_id', $f['owner_ids']); }
+        if (!empty($f['tenant_id'])) { // سجل الـ Workspace: طلبات مفاتيحه وتطبيقاته (بما فيها توكنز OAuth) وأحداث إدارته
+            $tid = (int) $f['tenant_id'];
+            $q->where(fn ($w) => $w->whereIn('l.api_key_id', DB::table('dev_api_keys')->where('tenant_id', $tid)->select('id'))
+                ->orWhereIn('l.app_id', DB::table('dev_apps')->where('tenant_id', $tid)->select('id'))
+                ->orWhere('l.path', 'like', 'tenant/' . $tid . '/%'));
+        }
         if (!empty($f['status'])) {
             $s = (string) $f['status'];
             if ($s === 'error') { $q->where('l.status', '>=', 400); }
