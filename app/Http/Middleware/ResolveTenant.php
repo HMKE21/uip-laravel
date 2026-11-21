@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\Tenancy\TenantAddress;
 use App\Services\Tenancy\TenantContext;
 use App\Services\Tenancy\TenantResolver;
 use Closure;
@@ -17,6 +18,9 @@ use Illuminate\Http\Request;
  *  - دومين المنصة الأصلي أو IP أو Host مجهول من غير هيدر => المنصة الأم من غير أي تبديل (زي ما كان).
  *  - tenant بـ mode=shared (الـ workspaces بتاعة الـ Developer API القديمة) => من غير تبديل.
  *  - tenant بـ mode=isolated => قاعدة بيانات خاصة.
+ *
+ * الرابط الجاهز من المنصة (/w/<slug>): الفرونت بيبعت X-Tenant-Slug بدل X-Tenant-Domain (من غير دومين). X-Tenant-Domain بيغلبه لو الاتنين موجودين.
+ * ده مسار تجربة/بداية على نفس origin المنصة؛ العزل الكامل بين الـ origins بيحتاج دومين العميل.
  *
  * بيتسجّل global (append) عشان يغطي web + api + broadcasting، وبعد TrustProxies.
  * التبديل بيفضل لحد نهاية الـ request (بعد terminate) عشان UipActivityLogMiddleware بيكتب بعد الرد.
@@ -44,6 +48,13 @@ class ResolveTenant
             $request->attributes->set('tenant_id', (int) $t->id);
             return $next($request);
         }
+
+        if (!$fromHeader) {
+            $slug = strtolower(trim((string) $request->header('X-Tenant-Slug', '')));
+            if ($slug !== '') {
+                return $this->handleSlug($request, $next, $slug);
+            }
+        }
         $host = TenantResolver::normalizeHost($fromHeader ? $header : $request->getHost());
 
         if ($host === null) {
@@ -67,6 +78,32 @@ class ResolveTenant
             return $this->reject($request, 503, 'workspace_not_ready', 'This workspace is not ready yet.');
         }
 
+        TenantContext::activate($t);
+        app()->terminating(static fn () => TenantContext::deactivate());
+        $request->attributes->set('tenant_id', (int) $t->id);
+
+        return $next($request);
+    }
+
+    /** X-Tenant-Slug: الرابط الجاهز من المنصة. أي slug مجهول/موقوف/مش جاهز => رفض (مفيش رجوع لقاعدة المنصة). */
+    private function handleSlug(Request $request, Closure $next, string $slug)
+    {
+        if (!TenantAddress::enabled() || preg_match(TenantAddress::PATTERN, $slug) !== 1) {
+            return $this->reject($request, 404, 'unknown_workspace', 'This workspace does not exist.');
+        }
+        $t = TenantResolver::lookupSlug($slug);
+        if (!$t) {
+            return $this->reject($request, 404, 'unknown_workspace', 'This workspace does not exist.');
+        }
+        if ($t->tenant_status !== 'active') {
+            return $this->reject($request, 403, 'workspace_unavailable', 'This workspace is not available.');
+        }
+        if (($t->mode ?? 'shared') !== 'isolated') {
+            return $next($request);
+        }
+        if ($t->db_status !== 'ready' || empty($t->db_name)) {
+            return $this->reject($request, 503, 'workspace_not_ready', 'This workspace is not ready yet.');
+        }
         TenantContext::activate($t);
         app()->terminating(static fn () => TenantContext::deactivate());
         $request->attributes->set('tenant_id', (int) $t->id);

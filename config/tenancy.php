@@ -77,4 +77,27 @@ return [
         /** دور أول أدمن عند العميل. */
         'admin_role' => 'admin',
     ],
+
+    /**
+     * رابط جاهز من المنصة لأي عميل (من غير دومين): https://<المنصة>/w/<slug>. الـ slug ممكن يكون أرقام بس.
+     * ده مسار للتجربة والبداية: نفس origin المنصة (الكوكيز/التخزين مشتركين). العزل الكامل = دومين العميل أو subdomain.
+     */
+    'address' => [
+        'enabled' => filter_var(env('TENANT_ADDRESS_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        /** أصل الروابط (https://uip-nub.vercel.app). فاضي = app.frontend_url. */
+        'base_url' => env('TENANT_ADDRESS_BASE', ''),
+        'path_prefix' => 'w',
+        /** slugs محجوزة للمنصة. */
+        'reserved' => ['admin', 'api', 'w', 'www', 'app', 'login', 'register', 'signup', 'dashboard', 'developer', 'developers', 'assets', 'static', 'uploads',
+            'mail', 'support', 'help', 'status', 'docs', 'uip', 'uipe', 'platform', 'null', 'undefined', 'test', 'demo', 'privacy-policy', 'projects'],
+    ],
+
+    /** موقع العميل (قوالب/تخصيص/نشر). */
+    'site' => [
+        'max_bytes' => (int) env('TENANT_SITE_MAX_BYTES', 32768),
+        'max_sections' => 12,
+        'max_nav' => 8,
+        'max_custom_templates' => (int) env('TENANT_SITE_MAX_TEMPLATES', 20),
+        'keep_versions' => (int) env('TENANT_SITE_KEEP_VERSIONS', 10),
+    ],
 ];

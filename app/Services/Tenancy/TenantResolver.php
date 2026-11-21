@@ -59,6 +59,32 @@ class TenantResolver
         }
     }
 
+    /**
+     * العميل من الـ slug بتاع الرابط الجاهز (/w/<slug>). بيرجّع نفس شكل lookup() (domain_status = active لأنه مفيش دومين).
+     * بيشتغل على قاعدة المنصة الأم قبل أي تبديل. النتيجة السالبة مش بتتكاشّى.
+     */
+    public static function lookupSlug(string $slug): ?object
+    {
+        $slug = strtolower($slug);
+        $key = 'tenancy:slug:' . $slug;
+        try {
+            $hit = Cache::get($key);
+            if (is_array($hit)) {
+                return (object) $hit;
+            }
+            $r = DB::table('tenants as t')->where('t.slug', $slug)
+                ->first(['t.id', 't.public_id', 't.name', 't.mode', 't.db_name', 't.db_status', 't.status as tenant_status']);
+            if (!$r) {
+                return null;
+            }
+            $r->domain_status = 'active';
+            Cache::put($key, (array) $r, 60);
+            return $r;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     public static function forget(string $host): void
     {
         Cache::forget('tenancy:host:' . strtolower($host));

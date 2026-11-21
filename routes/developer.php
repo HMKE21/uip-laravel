@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\DevSdkDownloadController;
 use App\Http\Controllers\Api\TenantAdminController;
 use App\Http\Controllers\Api\TenantController;
 use App\Http\Controllers\Api\TenantPublicController;
+use App\Http\Controllers\Api\TenantSiteController;
 use App\Http\Controllers\Api\DeveloperCenterController;
 use App\Http\Controllers\Api\OAuthTokenController;
 use Illuminate\Support\Facades\Route;
@@ -93,6 +94,19 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::post('/domains/{domainId}/verify', [TenantController::class, 'verifyDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
         Route::post('/domains/{domainId}/primary', [TenantController::class, 'primaryDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
         Route::delete('/domains/{domainId}', [TenantController::class, 'removeDomain'])->whereNumber('domainId')->middleware('throttle:20,1');
+        // موقع العميل: قوالب + تخصيص + معاينة + نشر + الرابط الجاهز (/w/<slug>).
+        Route::get('/site', [TenantSiteController::class, 'overview'])->middleware('throttle:120,1');
+        Route::put('/site/draft', [TenantSiteController::class, 'saveDraft'])->middleware('throttle:90,1');
+        Route::post('/site/apply-template', [TenantSiteController::class, 'applyTemplate'])->middleware('throttle:30,1');
+        Route::post('/site/discard', [TenantSiteController::class, 'discard'])->middleware('throttle:30,1');
+        Route::post('/site/publish', [TenantSiteController::class, 'publish'])->middleware('throttle:20,1');
+        Route::get('/site/versions', [TenantSiteController::class, 'versions'])->middleware('throttle:60,1');
+        Route::post('/site/versions/{versionId}/restore', [TenantSiteController::class, 'restoreVersion'])->whereNumber('versionId')->middleware('throttle:30,1');
+        Route::post('/site/preview-token', [TenantSiteController::class, 'previewToken'])->middleware('throttle:20,1');
+        Route::get('/site/templates', [TenantSiteController::class, 'templates'])->middleware('throttle:60,1');
+        Route::post('/site/templates', [TenantSiteController::class, 'saveTemplate'])->middleware('throttle:20,1');
+        Route::delete('/site/templates/{templateId}', [TenantSiteController::class, 'deleteTemplate'])->whereNumber('templateId')->middleware('throttle:20,1');
+        Route::put('/slug', [TenantSiteController::class, 'setSlug'])->middleware('throttle:10,1');
         Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
         Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
         Route::delete('/apps/{appId}', [TenantController::class, 'deleteApp'])->whereNumber('appId')->middleware('throttle:20,1');
@@ -164,6 +178,7 @@ Route::prefix('dev/v1')->group(function () {
     // تنزيل الـ SDKs جاهزة (zip لكل لغة) من Developer Center — عام، من غير اعتماد، مش جوه الـ OpenAPI (من غير dev.auth).
     // White Label: هوية الجهة اللي بتخدم الدومين + نقطة `ask` بتاعة Caddy on-demand TLS. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
     Route::get('/tenant/branding', [TenantPublicController::class, 'branding'])->middleware('throttle:120,1');
+    Route::get('/tenant/site', [TenantPublicController::class, 'site'])->middleware('throttle:120,1');
     Route::get('/tenant/domain-check', [TenantPublicController::class, 'domainCheck'])->middleware('throttle:300,1');
     // Embed SDK (الخطوة 2): صفحة الـ iframe + تبديل التوكن + جلسة الـ iframe + الـ loader. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
     Route::get('/embed/loader.js', [EmbedPublicController::class, 'loader'])->middleware('throttle:120,1');

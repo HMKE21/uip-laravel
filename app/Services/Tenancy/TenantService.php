@@ -28,6 +28,7 @@ final class TenantService
         'members' => ['owner', 'admin'],
         'domains' => ['owner', 'admin'],
         'embed' => ['owner', 'admin'],
+        'site' => ['owner', 'admin'],
         'delete' => ['owner'],
     ];
 

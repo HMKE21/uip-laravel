@@ -62,7 +62,7 @@ class TenantMailBrand
         } catch (\Throwable $e) {
             return null;
         }
-        return $d ? 'https://' . $d : null;
+        return $d ? 'https://' . $d : TenantAddress::urlFor($tenantId);   // مفيش دومين active: رابط المنصة الجاهز /w/<slug>
     }
 
     private static function hex($v): ?string
