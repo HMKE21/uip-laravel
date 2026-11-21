@@ -29,6 +29,7 @@ final class TenantService
         'domains' => ['owner', 'admin'],
         'embed' => ['owner', 'admin'],
         'site' => ['owner', 'admin'],
+        'features' => ['owner', 'admin'],
         'delete' => ['owner'],
     ];
 
@@ -252,6 +253,74 @@ final class TenantService
                 'features_enabled' => $auto, 'features_pending' => $pending,
             ],
         ];
+    }
+
+    private const OWNER_OFF_NOTE = 'turned off by owner';
+
+    /** ميزات المنصة وحالة كل واحدة (none|pending|enabled|rejected|disabled) + أنهي بتتفعّل فورًا. */
+    public function features(int $userId, int $tenantId): array
+    {
+        [$t, $role] = $this->authorize($userId, $tenantId);
+        $auto = (array) config('tenancy.launch.auto_features', []);
+        $rows = array_map(static fn (array $r) => $r + ['instant' => in_array($r['feature'], $auto, true), 'self_off' => ($r['decision_note'] ?? null) === self::OWNER_OFF_NOTE], TenantFeatures::stateFor((int) $t->id));
+        return ['features' => $rows, 'can_manage' => in_array($role, self::ABILITIES['features'], true)];
+    }
+
+    /**
+     * المالك/المدير يحدد الميزات اللي عايزها (المجموعة كلها). الجديدة: الفورية بتتفعّل، والباقي بيتبعت للأدمن كطلب.
+     * اللي مفعّلة وشالها => بتتقفل (يقدر يفعّلها تاني فورًا). طلب لسه pending وشالها => بيتلغي. قرار أدمن المنصة (رفض/إيقاف) مبيتغيّرش من هنا.
+     * @param string[] $want
+     */
+    public function setFeatures(int $userId, int $tenantId, array $want): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'features');
+        $want = array_values(array_unique(array_map('strval', $want)));
+        $catalog = array_keys(TenantFeatures::catalog());
+        foreach ($want as $f) {
+            if (!in_array($f, $catalog, true)) {
+                $this->fail("Unknown feature '{$f}'.");
+            }
+        }
+        $auto = (array) config('tenancy.launch.auto_features', []);
+        $ask = [];
+        foreach (TenantFeatures::stateFor((int) $t->id) as $r) {
+            $f = $r['feature'];
+            $on = in_array($f, $want, true);
+            switch ($r['status']) {
+                case 'enabled':
+                    if (!$on) {
+                        TenantFeatures::decide((int) $t->id, $f, 'disabled', null, self::OWNER_OFF_NOTE);
+                    }
+                    break;
+                case 'pending':
+                    if (!$on) {
+                        TenantFeatures::cancelRequest((int) $t->id, $f);
+                    }
+                    break;
+                case 'disabled':
+                    if ($on) {
+                        if (($r['decision_note'] ?? null) === self::OWNER_OFF_NOTE) {
+                            TenantFeatures::decide((int) $t->id, $f, 'enabled', null, 'turned on by owner'); // هو اللي قفلها بنفسه
+                        } else {
+                            $ask[] = $f;
+                        }
+                    }
+                    break;
+                default: // none | rejected
+                    if ($on) {
+                        if ($r['status'] === 'none' && in_array($f, $auto, true)) {
+                            TenantFeatures::decide((int) $t->id, $f, 'enabled', null, 'enabled by owner');
+                        } else {
+                            $ask[] = $f;
+                        }
+                    }
+            }
+        }
+        if ($ask) {
+            TenantFeatures::request((int) $t->id, $ask, $userId, 'requested by workspace owner');
+        }
+        $this->audit($userId, (int) $t->id, 'features', implode(',', $want));
+        return $this->features($userId, $tenantId);
     }
 
     public function rename(int $userId, int $tenantId, string $name): array

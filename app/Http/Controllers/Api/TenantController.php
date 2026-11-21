@@ -30,6 +30,17 @@ class TenantController extends Controller
         return $this->dom(fn () => $this->tenants->create($this->uid($r), $in), 201);
     }
 
+    public function features(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->tenants->features($this->uid($r), $id));
+    }
+
+    public function setFeatures(Request $r, int $id)
+    {
+        $in = $r->validate(['features' => 'present|array|max:40', 'features.*' => 'string|max:60']);
+        return $this->dom(fn () => $this->tenants->setFeatures($this->uid($r), $id, $in['features']));
+    }
+
     public function launchOptions(Request $r)
     {
         return $this->dom(fn () => $this->tenants->launchOptions());
