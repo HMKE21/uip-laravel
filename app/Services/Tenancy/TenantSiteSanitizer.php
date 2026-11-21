@@ -33,7 +33,7 @@ final class TenantSiteSanitizer
         if ($v === '' || strlen($v) > 300 || preg_match('/[\s<>"\'\\\\]/', $v)) {
             return null;
         }
-        if (preg_match('~^/(?!/)[A-Za-z0-9\-._~/%?=&#:@+]*$~', $v)) {
+        if (preg_match('~^/(?!/)[A-Za-z0-9\-._\~/%?=&#:@+]*$~', $v)) {
             return $v;                                              // مسار داخلي
         }
         if (preg_match('~^https://~i', $v) && filter_var($v, FILTER_VALIDATE_URL) && parse_url($v, PHP_URL_HOST)) {
@@ -109,8 +109,12 @@ final class TenantSiteSanitizer
         $specs = TenantSiteTemplates::sectionSpecs();
         $out = [];
         $seen = [];
-        foreach (array_slice(is_array($in) ? array_values($in) : [], 0, $max) as $row) {
-            if (!is_array($row) || !isset($specs[$row['type'] ?? ''])) {
+        // الأنواع غير المسموحة مبتاخدش من حصة الأقسام: بنفلتر الأول وبعدين نوقف عند الحد (مع سقف أمان على عدد الصفوف المفحوصة).
+        foreach (array_slice(is_array($in) ? array_values($in) : [], 0, max($max * 4, 50)) as $row) {
+            if (count($out) >= $max) {
+                break;
+            }
+            if (!is_array($row) || !is_string($row['type'] ?? null) || !isset($specs[$row['type']])) {
                 continue;
             }
             $type = $row['type'];
