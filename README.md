@@ -1,25 +1,27 @@
-# Tenants — الخطوة 1 (جزئي: الباك اند، لسه من غير اختبارات ولا فرونت)
+# UIPE Platform — الخطوة 1 كاملة + تنزيل الـ SDKs (باك + فرونت + اختبارات)
 
-انسخ الملفات فوق مشروع لارافيل بنفس المسارات، وبعدين `php artisan migrate`.
-الـ migration إضافي بس (جداول جديدة + عمود `tenant_id` nullable على `dev_apps` و`dev_api_keys` و`dev_webhooks`) ومش بيغيّر أي بيانات موجودة.
-ملفين موجودين اتعدّلوا: `routes/developer.php` و`app/Services/Developer/DeveloperAuthService.php`. لو كنت عدّلتهم عندك دمج التعديل بإيدك.
+الـ zip ده بيضم كل التغييرات: Tenants/Workspaces وتنزيل الـ SDK كـ zip (تبويب SDKs). مفيش حاجة تانية محتاجة تتركّب معاه غير `SDK.zip` (الباك اند بتاع مولّد الـ SDK) اللي إنت ركّبته.
+ملفات التنزيل الإضافية: `DevSdkDownloadController` · `SdkPackager` · `DevSdkDownloadTest` · `DevSdks.jsx` · `sdkTools.js`.
 
-## اللي اتعمل
-- `tenants` مستقل (company / university / developer) + `tenant_members` (owner / admin / developer / viewer) + `tenant_branding` + `tenant_domains`.
-- عزل: كل app/key/webhook بيتعمل جوه tenant بيتختم بـ `tenant_id`. مفتاح tenant مينفعش يتربط بتطبيق برّه نفس الـ tenant. والمفتاح بيقف فورًا لو الـ tenant اتوقف أو صاحب المفتاح اتشال أو بقى viewer (بوابة في `DeveloperAuthService`).
-- لما عضو يتشال: مفاتيحه بتتلغي وتطبيقاته بتتوقف وwebhooks بتاعته بتتعطل.
-- Branding: اسم، شعار وfavicon (https بس)، ألوان #RRGGBB، theme، لغة، روابط دعم وخصوصية وشروط. `hide_platform_branding` محتاج feature `white_label` (بيدّيها أدمن المنصة).
-- دومين مخصص: TXT `_uipe-challenge.<domain>` = `uipe-verify=<token>` ثم CNAME اختياري لـ `TENANT_CNAME_TARGET`. الحالات pending → verified → active. محتاج feature `custom_domain`.
-- Caddy on-demand TLS: `GET /api/dev/v1/tenant/domain-check?domain=…&token=…` (مقفولة لو `TENANT_ASK_SECRET` فاضي).
+# تفاصيل Tenants
 
-## الـ API
-- العضو: `/api/v1/developer/tenants` (+ `/{id}`، `/branding`، `/members`، `/domains`، `/apps`، `/keys`، `/webhooks`).
-- أدمن المنصة: `GET /api/v1/dev-admin/tenants` و`PUT /api/v1/dev-admin/tenants/{id}` (status, plan, features, limits).
-- عام: `GET /api/dev/v1/tenant/branding[?domain=]`.
-- الاتنين العامين مش بيظهروا في openapi.json.
+انسخ `laravel/` فوق مشروع لارافيل و`react/` فوق مشروع React بنفس المسارات، وبعدين `php artisan migrate`.
+ما اتشغّلش أي حاجة: الـ syntax اتفحص (`php -l` و esbuild) والاختبارات مكتوبة بس مش متجرّبة.
 
-## الـ env
-`TENANT_CNAME_TARGET` · `TENANT_ASK_SECRET` · `TENANT_RESERVED_DOMAINS` (مفصولة بفاصلة) · `TENANT_MAX_OWNED/MEMBERS/DOMAINS/APPS/KEYS/WEBHOOKS`.
+## ملفات موجودة وبتتعدّل (ادمجها لو عدّلتها عندك)
+- `routes/developer.php` · `app/Services/Developer/DeveloperAuthService.php` · `app/Services/Developer/DevLogService.php` (فلتر `tenant_id` للسجل بس)
+- `src/pages/developer/DeveloperCenter.jsx` (تبويب Workspaces) · `src/styles/css/uipe-developer.css` (آخره بس)
+- لو كنت نسخت zip الـ SDKs الأول: `DeveloperCenter.jsx` و`uipe-developer.css` و`routes/developer.php` فيهم تعديلاتها كمان.
 
-## مش متعمل لسه
-اختبارات، لوحة الإدارة في الفرونت، وسجل طلبات معزول لكل tenant. وكمان الـ syntax اتفحص بـ `php -l` بس، ومفيش حاجة اتشغلت.
+## جديد
+- باك: migration (`tenants`, `tenant_members`, `tenant_branding`, `tenant_domains` + `tenant_id` على dev_apps/keys/webhooks)، `config/tenancy.php`، `app/Services/Tenancy/*`، `Tenant{,Public,Admin}Controller`.
+- سجل معزول: `GET /api/v1/developer/tenants/{id}/logs` (طلبات مفاتيح وتطبيقات الـ Workspace وأحداث إدارته بس).
+- اختبارات: `DevTenantTest` (من غير DB) و`DevTenantFlowTest` (تدفق كامل على sqlite في الذاكرة).
+- فرونت: تبويب **Workspaces** في Developer Center: قائمة وإنشاء، Overview، Branding، Members، Domains (تعليمات DNS + فحص)، Keys & apps (إنشاء مفتاح بيظهر مرة واحدة)، Logs، وحذف بتأكيد الـ slug.
+
+## ضبط
+`TENANT_CNAME_TARGET` · `TENANT_ASK_SECRET` (لـ Caddy on-demand TLS) · `TENANT_RESERVED_DOMAINS` · `TENANT_MAX_*`.
+مميزات `white_label` و`custom_domain` بيفعّلها أدمن المنصة: `PUT /api/v1/dev-admin/tenants/{id}` بـ `{"features":["white_label","custom_domain"]}`. مفيش شاشة أدمن في الفرونت للخطوة دي.
+
+## لسه مش متعمل
+شاشة أدمن المنصة للـ Workspaces، رفع الشعار كملف (دلوقتي رابط https بس)، وإنشاء webhooks/تطبيقات من داخل الـ Workspace من الواجهة (الـ API موجود).
