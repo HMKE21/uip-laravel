@@ -49,7 +49,6 @@ class DevUsageService
     }
 
     /** @return array<string,mixed> */
-    /** @param ?int $tenantId null = الاستهلاك الشخصي (من غير الـ Workspaces). ومع tenantId = استهلاك الـ Workspace كله (كل أعضاؤه). */
     public function report(int $userId, string $range = '24h', ?int $tenantId = null): array
     {
         $range = isset(self::RANGES[$range]) ? $range : '24h';
@@ -59,8 +58,12 @@ class DevUsageService
         $policy = $this->apps->policyFor($userId);
         $cap = !empty($policy['rate_limit_per_min']) ? (int) $policy['rate_limit_per_min'] : null;
 
-        $mine = fn ($q, string $uc, string $tc) => $tenantId ? $q->where($tc, $tenantId) : $q->where($uc, $userId)->whereNull($tc);
-        $base = fn () => $mine(DB::table('dev_request_logs'), 'user_id', 'tenant_id')->whereIn('kind', ['api', 'sandbox'])->where('created_at', '>=', $from->toDateTimeString());
+        // $tenantId: استهلاك الـ Workspace كله (مفاتيحه وتطبيقاته بس) بدل استهلاك المستخدم الشخصي.
+        $scope = $tenantId
+            ? fn ($q) => $q->where(fn ($w) => $w->whereIn('api_key_id', DB::table('dev_api_keys')->where('tenant_id', $tenantId)->select('id'))
+                ->orWhereIn('app_id', DB::table('dev_apps')->where('tenant_id', $tenantId)->select('id')))
+            : fn ($q) => $q->where('user_id', $userId);
+        $base = fn () => $scope(DB::table('dev_request_logs'))->whereIn('kind', ['api', 'sandbox'])->where('created_at', '>=', $from->toDateTimeString());
         $agg = 'COUNT(*) AS requests, SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END) AS throttled, '
             . 'SUM(CASE WHEN status >= 400 AND status <> 429 THEN 1 ELSE 0 END) AS errors, AVG(duration_ms) AS avg_ms';
 
@@ -76,7 +79,8 @@ class DevUsageService
         }
 
         // المفاتيح: كل مفاتيح المستخدم (حتى الملغية لو ليها استهلاك في الفترة).
-        $keys = $mine(DB::table('dev_api_keys as k')->leftJoin('dev_apps as a', 'a.id', '=', 'k.app_id'), 'k.user_id', 'k.tenant_id')
+        $keys = DB::table('dev_api_keys as k')->leftJoin('dev_apps as a', 'a.id', '=', 'k.app_id')
+            ->when($tenantId, fn ($q) => $q->where('k.tenant_id', $tenantId), fn ($q) => $q->where('k.user_id', $userId))
             ->get(['k.id', 'k.name', 'k.prefix', 'k.mode', 'k.app_id', 'k.revoked_at', 'k.expires_at', 'k.last_used_at', 'a.name as app_name', 'a.rate_limit_per_min as app_limit']);
         $perKey = $base()->whereNotNull('api_key_id')->selectRaw('api_key_id AS id, ' . $agg)->groupBy('api_key_id')->get()->keyBy('id');
         $keyRows = [];
@@ -97,7 +101,7 @@ class DevUsageService
         usort($keyRows, fn ($a, $b) => [$b['requests'], $a['id']] <=> [$a['requests'], $b['id']]);
 
         // التطبيقات: تجميع طلبات المفاتيح + توكنز OAuth على مستوى التطبيق.
-        $apps = $mine(DB::table('dev_apps'), 'owner_user_id', 'tenant_id')->get(['id', 'name', 'status', 'rate_limit_per_min']);
+        $apps = DB::table('dev_apps')->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId), fn ($q) => $q->where('owner_user_id', $userId))->get(['id', 'name', 'status', 'rate_limit_per_min']);
         $perApp = $base()->whereNotNull('app_id')->selectRaw('app_id AS id, ' . $agg)->groupBy('app_id')->get()->keyBy('id');
         $appRows = $apps->map(fn ($a) => [
             'id' => (int) $a->id, 'name' => $a->name, 'status' => $a->status, 'limit_per_min' => self::effectiveLimit($a->rate_limit_per_min ? (int) $a->rate_limit_per_min : null, $cap),

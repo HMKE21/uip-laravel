@@ -240,6 +240,33 @@ class DevTenantFlowTest extends TestCase
     }
 
     #[Test]
+    public function a_duckdns_style_domain_verifies_with_an_apex_txt_and_an_a_record(): void
+    {
+        config(['tenancy.domains.cname_target' => '', 'tenancy.domains.edge_ips' => ['13.51.57.46']]);
+        $owner = $this->user('o@acme.test');
+        $id = $this->workspace($owner);
+        $this->svc->adminUpdate($owner, $id, ['features' => ['custom_domain']]);
+        $d = $this->svc->addDomain($owner, $id, 'my-meet.duckdns.org');
+        $this->assertSame('my-meet.duckdns.org', $d['dns']['txt_alt_name']);
+        $this->assertSame(['13.51.57.46'], $d['dns']['a_targets']);
+
+        $records = [];
+        TenantDomainService::$dns = function (string $host, string $type) use (&$records) { return $records[$type . ':' . $host] ?? []; };
+
+        $records['TXT:my-meet.duckdns.org'] = [$d['dns']['txt_value']];       // TXT على الدومين نفسه (مفيش _underscore في DuckDNS)
+        $this->assertSame('verified', $this->svc->verifyDomain($owner, $id, $d['id'])['status']);   // الملكية تمام، لسه مش متوجّه
+        $this->backdateCheck($d['id']);
+
+        $records['A:my-meet.duckdns.org'] = ['1.2.3.4'];                      // IP غلط
+        $this->assertSame('verified', $this->svc->verifyDomain($owner, $id, $d['id'])['status']);
+        $this->backdateCheck($d['id']);
+
+        $records['A:my-meet.duckdns.org'] = ['13.51.57.46'];
+        $this->assertSame('active', $this->svc->verifyDomain($owner, $id, $d['id'])['status']);
+        $this->assertSame($id, (int) TenantDomainService::resolve('my-meet.duckdns.org')->id);
+    }
+
+    #[Test]
     public function the_same_domain_cannot_be_claimed_by_two_workspaces(): void
     {
         $a = $this->user('a@one.test');

@@ -94,6 +94,7 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
         Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
         Route::delete('/apps/{appId}', [TenantController::class, 'deleteApp'])->whereNumber('appId')->middleware('throttle:20,1');
+        Route::get('/usage', [TenantController::class, 'usage'])->middleware('throttle:60,1');
         Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
         Route::get('/keys', [TenantController::class, 'keys'])->middleware('throttle:120,1');
         Route::post('/keys', [TenantController::class, 'createKey'])->middleware('throttle:20,1');

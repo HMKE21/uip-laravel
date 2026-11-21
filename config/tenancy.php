@@ -27,6 +27,8 @@ return [
         'txt_prefix' => '_uipe-challenge',
         /** هدف الـ CNAME (البروكسي بتاعنا: Cloudflare for SaaS / Caddy). فاضي = مفيش فحص CNAME والدومين بيبقى active بعد التحقق من الـ TXT. */
         'cname_target' => env('TENANT_CNAME_TARGET', ''),
+        /** IPs بتاعة سيرفرنا (مفصولة بفاصلة). الدومين اللي A/AAAA بتاعه بيشاور عليها بيعدّي كـ "متوجّه" — لدومينات DuckDNS وأي مزوّد مبيدعمش CNAME. */
+        'edge_ips' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_EDGE_IPS', ''))))),
         /** دومين محجوز بمطالبة pending أقدم من كده ممكن حد تاني ياخده. */
         'pending_ttl_hours' => (int) env('TENANT_DOMAIN_PENDING_HOURS', 48),
         /** نطاقات المنصة نفسها — مينفعش تتسجّل (بالإضافة لـ host بتاع APP_URL تلقائيًا). */

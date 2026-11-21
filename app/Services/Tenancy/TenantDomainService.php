@@ -79,18 +79,25 @@ final class TenantDomainService
             return (array) (self::$dns)($host, $type);
         }
         try {
-            $rows = @dns_get_record($host, $type === 'CNAME' ? DNS_CNAME : DNS_TXT);
+            $rows = @dns_get_record($host, ['CNAME' => DNS_CNAME, 'A' => DNS_A, 'AAAA' => DNS_AAAA][$type] ?? DNS_TXT);
         } catch (\Throwable) {
             return [];
         }
         $out = [];
         foreach ((array) $rows as $r) {
-            $v = $type === 'CNAME' ? ($r['target'] ?? null) : ($r['txt'] ?? null);
+            $v = ['CNAME' => 'target', 'A' => 'ip', 'AAAA' => 'ipv6'][$type] ?? 'txt';
+            $v = $r[$v] ?? null;
             if (is_string($v) && $v !== '') {
                 $out[] = $v;
             }
         }
         return $out;
+    }
+
+    /** @return string[] عناوين IP بتاعة سيرفر الـ edge (TENANT_EDGE_IPS) — لدومينات الـ A record (زي DuckDNS). */
+    public static function edgeIps(): array
+    {
+        return array_values(array_filter(array_map(fn ($v) => strtolower(trim((string) $v)), (array) config('tenancy.domains.edge_ips', []))));
     }
 
     public static function txtName(string $domain): string
@@ -101,12 +108,15 @@ final class TenantDomainService
     public static function payload(object $d): array
     {
         $target = trim((string) config('tenancy.domains.cname_target', ''));
+        $ips = self::edgeIps();
         return [
             'id' => (int) $d->id, 'domain' => $d->domain, 'status' => $d->status, 'is_primary' => (bool) $d->is_primary,
             'verified_at' => $d->verified_at, 'activated_at' => $d->activated_at, 'last_checked_at' => $d->last_checked_at, 'last_error' => $d->last_error,
             'dns' => [
                 'txt_name' => self::txtName($d->domain), 'txt_value' => 'uipe-verify=' . $d->verification_token,
-                'cname_name' => $d->domain, 'cname_target' => $target !== '' ? $target : null,
+                // بديل لمزوّدي DNS اللي مبيسمحوش بـ _underscore (زي DuckDNS): نفس القيمة كـ TXT على الدومين نفسه.
+                'txt_alt_name' => $d->domain,
+                'cname_name' => $d->domain, 'cname_target' => $target !== '' ? $target : null, 'a_targets' => $ips,
             ],
         ];
     }
@@ -159,10 +169,12 @@ final class TenantDomainService
         }
         $want = 'uipe-verify=' . $d->verification_token;
         $found = false;
-        foreach (self::lookup(self::txtName($d->domain), 'TXT') as $v) {
-            if (hash_equals($want, trim((string) $v))) {
-                $found = true;
-                break;
+        foreach ([self::txtName($d->domain), $d->domain] as $name) {   // _uipe-challenge.<domain> أو TXT على الدومين نفسه (DuckDNS)
+            foreach (self::lookup($name, 'TXT') as $v) {
+                if (hash_equals($want, trim((string) $v))) {
+                    $found = true;
+                    break 2;
+                }
             }
         }
         $upd = ['last_checked_at' => now(), 'updated_at' => now()];
@@ -171,10 +183,19 @@ final class TenantDomainService
         } else {
             $upd += ['verified_at' => $d->verified_at ?: now()];
             $target = strtolower(rtrim(trim((string) config('tenancy.domains.cname_target', '')), '.'));
-            $routed = $target === '';
-            if (!$routed) {
+            $ips = self::edgeIps();
+            $routed = $target === '' && !$ips;     // مفيش شرط توجيه متحدد: الـ TXT كفاية
+            if (!$routed && $target !== '') {
                 foreach (self::lookup($d->domain, 'CNAME') as $c) {
                     if (strtolower(rtrim(trim((string) $c), '.')) === $target) {
+                        $routed = true;
+                        break;
+                    }
+                }
+            }
+            if (!$routed && $ips) {                // A / AAAA بيشاور على سيرفرنا (DuckDNS وأي مزوّد من غير CNAME)
+                foreach (array_merge(self::lookup($d->domain, 'A'), self::lookup($d->domain, 'AAAA')) as $ip) {
+                    if (in_array(strtolower(trim((string) $ip)), $ips, true)) {
                         $routed = true;
                         break;
                     }
@@ -183,7 +204,10 @@ final class TenantDomainService
             if ($routed) {
                 $upd += ['status' => 'active', 'last_error' => null, 'activated_at' => $d->activated_at ?: now()];
             } else {
-                $upd += ['status' => 'verified', 'last_error' => 'Ownership verified. Point a CNAME record for this domain to ' . $target . '.', 'activated_at' => null];
+                $hint = $target !== '' ? "a CNAME record to {$target}" : '';
+                $hint .= $target !== '' && $ips ? ' or ' : '';
+                $hint .= $ips ? ('an A record to ' . implode(' / ', $ips)) : '';
+                $upd += ['status' => 'verified', 'last_error' => 'Ownership verified. Point this domain with ' . $hint . '.', 'activated_at' => null];
             }
         }
         DB::table('tenant_domains')->where('id', $d->id)->update($upd);

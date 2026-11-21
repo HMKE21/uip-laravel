@@ -17,6 +17,7 @@ class DevTenantTest extends TestCase
     {
         $this->assertSame('meet.example.com', TenantDomainService::normalize('  Meet.Example.COM. '));
         $this->assertSame('a-b.example.co.uk', TenantDomainService::normalize('a-b.example.co.uk'));
+        $this->assertSame('code-uipe.duckdns.org', TenantDomainService::normalize('Code-UIPE.duckdns.org'));   // دومينات DuckDNS مسموحة
     }
 
     #[Test]
@@ -83,7 +84,7 @@ class DevTenantTest extends TestCase
     public function the_public_tenant_routes_exist_but_are_not_documented_in_the_openapi_spec(): void
     {
         $uris = array_map(fn ($r) => $r->uri(), \Illuminate\Support\Facades\Route::getRoutes()->getRoutes());
-        foreach (['api/dev/v1/tenant/branding', 'api/dev/v1/tenant/domain-check', 'api/v1/developer/tenants', 'api/v1/developer/tenants/{id}/domains'] as $u) {
+        foreach (['api/dev/v1/tenant/branding', 'api/dev/v1/tenant/domain-check', 'api/v1/developer/tenants', 'api/v1/developer/tenants/{id}/domains', 'api/v1/developer/tenants/{id}/usage', 'api/v1/developer/tenants/{id}/logs'] as $u) {
             $this->assertContains($u, $uris, $u);
         }
         $spec = DevOpenApi::build(DevOpenApi::routesFromLaravel(), 'https://uipe.test');

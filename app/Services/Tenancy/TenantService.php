@@ -3,6 +3,7 @@
 namespace App\Services\Tenancy;
 
 use App\Services\Developer\DevLogService;
+use App\Services\Developer\DevUsageService;
 use App\Services\Developer\DeveloperAppService;
 use App\Services\Developer\WebhookService;
 use Illuminate\Support\Facades\Cache;
@@ -28,7 +29,7 @@ final class TenantService
         'delete' => ['owner'],
     ];
 
-    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs)
+    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs, private DevUsageService $usage)
     {
     }
 
@@ -438,6 +439,13 @@ final class TenantService
         $this->assertCanManage($role, $userId, (int) $h->user_id);
         $this->hooks->delete((int) $h->user_id, (int) $h->id);
         $this->audit($userId, (int) $t->id, 'webhook.delete', '#' . $hookId);
+    }
+
+    /** استهلاك الـ Workspace (Rate Limit Dashboard) بنفس شكل /developer/usage — مفاتيح وتطبيقات الـ tenant بس. ?range=1h|24h|7d */
+    public function usageReport(int $userId, int $tenantId, string $range): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return $this->usage->report($userId, $range, (int) $t->id);
     }
 
     /** سجل الـ Workspace المعزول: كل الأعضاء بيشوفوا طلبات tenant بتاعهم بس (مفاتيحه وتطبيقاته وأحداث إدارته). */

@@ -178,7 +178,13 @@ class TenantController extends Controller
         });
     }
 
-    /* ---- logs (isolated per tenant) */
+    /* ---- usage + logs (isolated per tenant) */
+    public function usage(Request $r, int $id)
+    {
+        $r->validate(['range' => 'nullable|string|in:' . implode(',', \App\Services\Developer\DevUsageService::ranges())]);
+        return $this->dom(fn () => $this->tenants->usageReport($this->uid($r), $id, (string) $r->query('range', '24h')));
+    }
+
     public function logs(Request $r, int $id)
     {
         $f = $r->validate(['kind' => 'nullable|in:api,oauth,admin,webhook,sandbox', 'status' => 'nullable|string|max:8', 'from' => 'nullable|string|max:40', 'to' => 'nullable|string|max:40',
