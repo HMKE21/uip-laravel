@@ -126,6 +126,17 @@ class UipAuthMiddleware
         $request->attributes->set('uip_user_id', (int) $claims['sub']);
         $request->attributes->set('uip_role', (string) ($claims['role'] ?? ''));
 
+        // مساحة مشتركة (/w/<slug> أو دومين عميل): حساب مش عضو فيها مبيستخدمهاش حتى لو معاه توكن صالح من المنصة.
+        if ($wsDeny = \App\Services\Tenancy\WorkspaceAccess::check($request, (int) $claims['sub'], (string) ($claims['role'] ?? ''))) {
+            return response()->json([
+                'success' => false,
+                'message' => $request->header('X-Locale', 'en') === 'ar' ? $wsDeny['message_ar'] : $wsDeny['message_en'],
+                'data'    => null,
+                'errors'  => ['code' => $wsDeny['code']],
+                'meta'    => (object) [],
+            ], 403);
+        }
+
         // MFA Requirements Policy — لو دور المستخدم ملزم بـ 2FA ومفعّلهوش وخلصت مهلة التسجيل،
         // كل الـ API بيتقفل ماعدا /auth/* (منها endpoints تفعيل 2FA + logout + permissions)
         // و /session/* (heartbeat/release) لحد ما يفعّل 2FA. بتتطبق على كل ريكوست محمي

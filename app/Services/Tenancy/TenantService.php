@@ -230,6 +230,7 @@ final class TenantService
             $this->fail('This person is already a member.', 409);
         }
         DB::table('tenant_members')->insert(['tenant_id' => $t->id, 'user_id' => $u->id, 'role' => $role, 'invited_by' => $actorId, 'created_at' => now(), 'updated_at' => now()]);
+        WorkspaceAccess::forget((int) $t->id, (int) $u->id);
         $this->audit($actorId, (int) $t->id, 'member.add', '#' . $u->id . ' ' . $role);
         return $this->members($actorId, $tenantId);
     }
@@ -276,6 +277,7 @@ final class TenantService
             $this->stopMemberResources((int) $t->id, $userId, 'Owner left the workspace');
         });
         Cache::forget("tenant:gate:{$t->id}:{$userId}");
+        WorkspaceAccess::forget((int) $t->id, $userId);
         $this->audit($actorId, (int) $t->id, $self ? 'member.leave' : 'member.remove', '#' . $userId);
     }
 

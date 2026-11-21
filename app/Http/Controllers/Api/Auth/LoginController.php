@@ -171,6 +171,19 @@ class LoginController extends Controller
             ], 422);
         }
 
+        // مساحة مشتركة (/w/<slug>): الدخول لأعضائها بس. بعد التحقق من الباسورد عشان مفيش حد يعرف إن الإيميل مسجّل من غير باسورده.
+        if ($wsDeny = \App\Services\Tenancy\WorkspaceAccess::check($request, (int) $user->id, (string) $this->roles->primaryRoleFor($user->id))) {
+            SecurityLog::write('Login blocked - not a workspace member', ['user_id' => $user->id, 'ip' => $request->ip()]);
+            $this->logLogin($request, $user, false, 'not_workspace_member');
+            return response()->json([
+                'success' => false,
+                'message' => $locale === 'ar' ? $wsDeny['message_ar'] : $wsDeny['message_en'],
+                'data'    => null,
+                'errors'  => ['code' => $wsDeny['code']],
+                'meta'    => (object) [],
+            ], 403);
+        }
+
         // حساب اتسجّل بالباسورد ولسه إيميله متأكدش ومحدش فعّله: مبيدخلش. (بعد التحقق من الباسورد
         // عشان مفيش حد يعرف إن الإيميل ده مسجّل من غير ما يعرف باسورده.)
         if (\App\Services\EmailVerificationService::blocksLogin($user)) {
