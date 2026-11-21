@@ -22,7 +22,7 @@ use Illuminate\Support\Str;
 final class TenantService
 {
     public const ABILITIES = [
-        'view' => ['owner', 'admin', 'developer', 'viewer'],
+        'view' => ['owner', 'admin', 'developer', 'viewer', 'employee'],
         'resources' => ['owner', 'admin', 'developer'],
         'branding' => ['owner', 'admin'],
         'members' => ['owner', 'admin'],

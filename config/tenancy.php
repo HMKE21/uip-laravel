@@ -4,8 +4,8 @@
  * UIPE Platform — Tenants (الخطوة 1): شركات / جامعات / مطورين بيستخدموا الـ API والـ SDK بهويتهم هما.
  */
 return [
-    /** الأدوار: owner (كل حاجة) · admin (أعضاء/branding/دومينات/موارد) · developer (تطبيقات ومفاتيح وwebhooks) · viewer (قراءة بس). */
-    'roles' => ['owner', 'admin', 'developer', 'viewer'],
+    /** الأدوار: owner (كل حاجة) · admin (أعضاء/branding/دومينات/موارد) · developer (تطبيقات ومفاتيح وwebhooks) · viewer (قراءة بس) · employee (موظف: بيدخل المساحة ويستخدمها من غير أي إدارة). */
+    'roles' => ['owner', 'admin', 'developer', 'viewer', 'employee'],
 
     /** الحد الأقصى لعدد الـ tenants اللي المستخدم الواحد يقدر يبقى owner لها (self-service). */
     'max_owned_per_user' => (int) env('TENANT_MAX_OWNED', 5),

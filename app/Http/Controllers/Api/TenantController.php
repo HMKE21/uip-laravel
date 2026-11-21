@@ -75,13 +75,13 @@ class TenantController extends Controller
 
     public function addMember(Request $r, int $id)
     {
-        $in = $r->validate(['email' => 'required|email|max:190', 'role' => 'required|in:owner,admin,developer,viewer']);
+        $in = $r->validate(['email' => 'required|email|max:190', 'role' => 'required|in:owner,admin,developer,viewer,employee']);
         return $this->dom(fn () => ['members' => $this->tenants->addMember($this->uid($r), $id, $in['email'], $in['role'])], 201);
     }
 
     public function setRole(Request $r, int $id, int $userId)
     {
-        $in = $r->validate(['role' => 'required|in:owner,admin,developer,viewer']);
+        $in = $r->validate(['role' => 'required|in:owner,admin,developer,viewer,employee']);
         return $this->dom(fn () => ['members' => $this->tenants->setRole($this->uid($r), $id, $userId, $in['role'])]);
     }
 
