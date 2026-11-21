@@ -205,6 +205,43 @@ final class TenantService
             ->map(fn ($m) => ['user_id' => (int) $m->user_id, 'role' => $m->role, 'email' => $m->email, 'name' => $m->full_name, 'joined_at' => $m->created_at])->all();
     }
 
+    /** @return array<string,array{0:?string,1:?string}> role => [English, Arabic] — الأدوار اللي ليها اسم مخصص بس. */
+    public function roleLabels(int $userId, int $tenantId): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        try {
+            return DB::table('tenant_role_labels')->where('tenant_id', $t->id)->get(['role', 'label_en', 'label_ar'])
+                ->mapWithKeys(fn ($r) => [$r->role => [$r->label_en, $r->label_ar]])->all();
+        } catch (\Throwable $e) {
+            return []; // الـ migration لسه متشغلتش
+        }
+    }
+
+    /** @param array<string,mixed> $labels role => ['en' => ..., 'ar' => ...]؛ الاتنين فاضيين = رجوع للاسم الافتراضي. */
+    public function saveRoleLabels(int $actorId, int $tenantId, array $labels): array
+    {
+        [$t] = $this->authorize($actorId, $tenantId, 'members');
+        foreach ((array) config('tenancy.roles') as $role) {
+            if (!isset($labels[$role]) || !is_array($labels[$role])) {
+                continue;
+            }
+            $en = trim(strip_tags((string) ($labels[$role]['en'] ?? '')));
+            $ar = trim(strip_tags((string) ($labels[$role]['ar'] ?? '')));
+            $en = mb_substr($en, 0, 40);
+            $ar = mb_substr($ar, 0, 40);
+            $q = DB::table('tenant_role_labels')->where('tenant_id', $t->id)->where('role', $role);
+            if ($en === '' && $ar === '') {
+                $q->delete();
+            } elseif ($q->exists()) {
+                $q->update(['label_en' => $en ?: null, 'label_ar' => $ar ?: null, 'updated_at' => now()]);
+            } else {
+                DB::table('tenant_role_labels')->insert(['tenant_id' => $t->id, 'role' => $role, 'label_en' => $en ?: null, 'label_ar' => $ar ?: null, 'created_at' => now(), 'updated_at' => now()]);
+            }
+        }
+        $this->audit($actorId, (int) $t->id, 'role.labels', '');
+        return $this->roleLabels($actorId, $tenantId);
+    }
+
     private function assertAssignable(string $actorRole, string $newRole, ?string $targetCurrent = null): void
     {
         if (!in_array($newRole, (array) config('tenancy.roles'), true)) {

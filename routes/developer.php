@@ -86,6 +86,8 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/branding', [TenantController::class, 'branding'])->middleware('throttle:120,1');
         Route::put('/branding', [TenantController::class, 'saveBranding'])->middleware('throttle:30,1');
         Route::get('/members', [TenantController::class, 'members'])->middleware('throttle:120,1');
+        Route::get('/role-labels', [TenantController::class, 'roleLabels'])->middleware('throttle:120,1');
+        Route::put('/role-labels', [TenantController::class, 'saveRoleLabels'])->middleware('throttle:30,1');
         Route::post('/members', [TenantController::class, 'addMember'])->middleware('throttle:30,1');
         Route::put('/members/{userId}', [TenantController::class, 'setRole'])->whereNumber('userId')->middleware('throttle:30,1');
         Route::delete('/members/{userId}', [TenantController::class, 'removeMember'])->whereNumber('userId')->middleware('throttle:30,1');

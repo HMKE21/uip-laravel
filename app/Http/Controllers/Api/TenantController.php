@@ -73,6 +73,17 @@ class TenantController extends Controller
         return $this->dom(fn () => ['members' => $this->tenants->members($this->uid($r), $id)]);
     }
 
+    public function roleLabels(Request $r, int $id)
+    {
+        return $this->dom(fn () => ['labels' => (object) $this->tenants->roleLabels($this->uid($r), $id)]);
+    }
+
+    public function saveRoleLabels(Request $r, int $id)
+    {
+        $in = $r->validate(['labels' => 'required|array', 'labels.*' => 'array', 'labels.*.en' => 'nullable|string|max:40', 'labels.*.ar' => 'nullable|string|max:40']);
+        return $this->dom(fn () => ['labels' => (object) $this->tenants->saveRoleLabels($this->uid($r), $id, $in['labels'])]);
+    }
+
     public function addMember(Request $r, int $id)
     {
         $in = $r->validate(['email' => 'required|email|max:190', 'role' => 'required|in:owner,admin,developer,viewer,employee']);
