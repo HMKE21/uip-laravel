@@ -31,6 +31,19 @@ class ResolveTenant
 
         $header = trim((string) $request->header('X-Tenant-Domain', ''));
         $fromHeader = $header !== '';
+
+        // رابط موقّع (ميديا/ملفات) بيتفتح من <img>/<video> أو تحميل مباشر: المتصفح مبيبعتش X-Tenant-Domain،
+        // فالرابط نفسه شايل tn=<tenant id> (TenantContext::signedParams) وبيتوقّع معاه. التوقيع بيتفحص بعدين في middleware `signed`.
+        if (!$fromHeader && $request->query('signature') !== null && ctype_digit((string) $request->query('tn', ''))) {
+            $t = TenantContext::findIsolated((int) $request->query('tn'));
+            if (!$t) {
+                return $this->reject($request, 404, 'unknown_workspace', 'This workspace does not exist.');
+            }
+            TenantContext::activate($t);
+            app()->terminating(static fn () => TenantContext::deactivate());
+            $request->attributes->set('tenant_id', (int) $t->id);
+            return $next($request);
+        }
         $host = TenantResolver::normalizeHost($fromHeader ? $header : $request->getHost());
 
         if ($host === null) {

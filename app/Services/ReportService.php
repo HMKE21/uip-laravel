@@ -79,7 +79,7 @@ class ReportService
 
         [$header, $rows] = $this->buildRows($type, $scopeId);
 
-        $relativeDir = 'uploads/reports';
+        $relativeDir = rtrim((string) config('upload.paths.reports', 'uploads/reports'), '/'); // معزول لكل عميل (TenantStorage)
         $dir = public_path($relativeDir);
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new \RuntimeException('Could not prepare the reports folder.');

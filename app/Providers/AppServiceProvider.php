@@ -29,6 +29,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // الخطوة 5: الجوبز تتخزّن في المنصة الأم وتشيل tenant_id، والـ worker يفعّل العميل حوالين كل جوب.
+        \App\Services\Tenancy\TenantQueue::register();
+
         Mail::extend('brevo', fn (array $config) => new BrevoTransport((string) ($config['key'] ?? '')));
 
         // Rate limiters لانضمام الاجتماعات والزيارات العامة. قبل كده كانت throttle:N,1 العادية بتتحسب على IP بس،

@@ -51,7 +51,7 @@ class SecurityLog
             // table missing / DB down — the file copy below still tries.
         }
 
-        $dir = storage_path('logs/security');
+        $dir = \App\Services\Tenancy\TenantStorage::storagePath('logs/security');
         if (!is_dir($dir)) {
             @mkdir($dir, 0775, true);
         }

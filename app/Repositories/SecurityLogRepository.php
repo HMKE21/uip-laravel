@@ -72,7 +72,7 @@ class SecurityLogRepository
     /** @return array<int,array{time:string,message:string,context:array}> */
     private function readFiles(int $days): array
     {
-        $dir = storage_path('logs/security');
+        $dir = \App\Services\Tenancy\TenantStorage::storagePath('logs/security');
         if (!is_dir($dir)) {
             return [];
         }

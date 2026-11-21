@@ -174,7 +174,7 @@ class StoryService
         return URL::temporarySignedRoute(
             'stories.media.signed',
             now()->addSeconds($ttl),
-            ['id' => $storyId, 'variant' => $variant, 'u' => $uid],
+            ['id' => $storyId, 'variant' => $variant, 'u' => $uid] + \App\Services\Tenancy\TenantContext::signedParams(),
             absolute: false
         );
     }

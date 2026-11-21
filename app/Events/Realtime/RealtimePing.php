@@ -34,7 +34,7 @@ class RealtimePing implements ShouldBroadcastNow
     public function broadcastOn(): array
     {
         return array_map(
-            fn (int $id) => new PrivateChannel('App.Models.User.' . $id),
+            fn (int $id) => new PrivateChannel(\App\Services\Tenancy\TenantContext::channelPrefix() . 'App.Models.User.' . $id),
             array_values(array_unique(array_map('intval', $this->userIds)))
         );
     }

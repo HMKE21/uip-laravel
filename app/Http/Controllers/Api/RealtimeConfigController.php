@@ -33,6 +33,8 @@ class RealtimeConfigController extends Controller
             'host'    => $host,
             'port'    => $port ?: ($scheme === 'https' ? 443 : 80),
             'scheme'  => $scheme,
-        ])->header('Cache-Control', 'public, max-age=300');
+            // الخطوة 5: بادئة أسماء القنوات للعميل ('t5.' أو ''). الفرونت: Echo.private(prefix + 'App.Models.User.' + id).
+            'channel_prefix' => \App\Services\Tenancy\TenantContext::channelPrefix(),
+        ])->header('Cache-Control', 'public, max-age=300'); // Vary: X-Tenant-Domain بيتحط في UipCorsMiddleware
     }
 }

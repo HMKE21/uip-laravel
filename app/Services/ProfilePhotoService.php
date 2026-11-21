@@ -46,7 +46,7 @@ class ProfilePhotoService
             return null;
         }
         $ext = strtolower(pathinfo($src, PATHINFO_EXTENSION)) ?: 'jpg';
-        $rel = 'uploads/avatar-originals/' . $userId . '/' . bin2hex(random_bytes(16)) . '.' . $ext;
+        $rel = rtrim((string) config('upload.paths.avatar_originals', 'uploads/avatar-originals'), '/') . '/' . $userId . '/' . bin2hex(random_bytes(16)) . '.' . $ext;
         $dst = FileUploadService::privateRoot() . '/' . $rel;
         if (!is_dir(dirname($dst)) && !@mkdir(dirname($dst), 0775, true) && !is_dir(dirname($dst))) {
             return null;
@@ -130,7 +130,7 @@ class ProfilePhotoService
 
     private function makeThumb(string $abs, int $userId): string
     {
-        $rel = 'uploads/avatars/' . $userId . '/' . bin2hex(random_bytes(12)) . '.jpg';
+        $rel = rtrim((string) config('upload.paths.avatars', 'uploads/avatars'), '/') . '/' . $userId . '/' . bin2hex(random_bytes(12)) . '.jpg';
         $dir = FileUploadService::diskDir(dirname($rel));
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new \RuntimeException('Could not prepare the upload destination.');

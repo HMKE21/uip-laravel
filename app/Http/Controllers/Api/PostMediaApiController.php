@@ -148,7 +148,7 @@ class PostMediaApiController extends Controller
             return $this->apiError('File not found.', null, 404);
         }
         $ttl = max(60, (int) config('upload.signed_media_ttl', 600));
-        $url = URL::temporarySignedRoute('posts.media.signed', now()->addSeconds($ttl), ['id' => (int) $id, 'variant' => $variant, 'u' => $uid], absolute: false);
+        $url = URL::temporarySignedRoute('posts.media.signed', now()->addSeconds($ttl), ['id' => (int) $id, 'variant' => $variant, 'u' => $uid] + \App\Services\Tenancy\TenantContext::signedParams(), absolute: false);
         return $this->apiSuccess(['url' => $url, 'expires_in' => $ttl], 'Link created.');
     }
 

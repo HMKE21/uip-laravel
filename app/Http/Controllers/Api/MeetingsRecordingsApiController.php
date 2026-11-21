@@ -56,7 +56,7 @@ class MeetingsRecordingsApiController extends Controller
         $path = URL::temporarySignedRoute(
             'meetings.recordings.download',
             now()->addMinutes(60),
-            ['uuid' => $meeting?->uuid, 'recordingId' => $recording->id],
+            ['uuid' => $meeting?->uuid, 'recordingId' => $recording->id] + \App\Services\Tenancy\TenantContext::signedParams(),
             false
         );
 

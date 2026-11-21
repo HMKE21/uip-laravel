@@ -119,7 +119,7 @@ class FormFileService
     {
         return URL::temporarySignedRoute('forms.file', now()->addSeconds((int) config('forms.signed_url_ttl', 600)), [
             'id' => $f->id, 'disp' => $inline ? 'inline' : 'attachment',
-        ], false);
+        ] + \App\Services\Tenancy\TenantContext::signedParams(), false);
     }
 
     public function previewType(FormFile $f): string

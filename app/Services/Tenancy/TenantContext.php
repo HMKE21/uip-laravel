@@ -30,6 +30,7 @@ class TenantContext
         self::$tenant = null;
         self::$central = null;
         self::$cacheOrig = null;
+        TenantStorage::reset();
     }
 
     public static function active(): bool
@@ -57,6 +58,41 @@ class TenantContext
     public static function ns(): string
     {
         return self::$tenant ? 't' . (int) self::$tenant->id . ':' : '';
+    }
+
+    /**
+     * بادئة قنوات الـ realtime (Reverb): 't5.' للعميل، '' للمنصة الأم.
+     * مهم: Pusher بيمنع ':' في أسماء القنوات، فبنستخدم '.'. الـ ids (مستخدم 5 عند عميل A = مستخدم 5 عند عميل B) بتتصادم من غيرها.
+     */
+    public static function channelPrefix(): string
+    {
+        return self::$tenant ? 't' . (int) self::$tenant->id . '.' : '';
+    }
+
+    /**
+     * بارامترات بتتضاف لأي رابط موقّع (temporarySignedRoute) بيتفتح من <img>/<video> من غير هيدر X-Tenant-Domain:
+     * ResolveTenant بيحدد العميل منها (والتوقيع بيحمي الرقم من التلاعب).
+     * @return array<string,int>
+     */
+    public static function signedParams(): array
+    {
+        return self::$tenant ? ['tn' => (int) self::$tenant->id] : [];
+    }
+
+    /** صف العميل (isolated + active + جاهز) من قاعدة المنصة الأم بالـ id، أو null. للـ queue والـ scheduler والروابط الموقّعة. */
+    public static function findIsolated(int $id): ?object
+    {
+        try {
+            $r = \Illuminate\Support\Facades\DB::connection(self::centralConnection())->table('tenants')
+                ->where('id', $id)->where('mode', 'isolated')
+                ->first(['id', 'public_id', 'name', 'mode', 'db_name', 'db_status', 'status as tenant_status']);
+        } catch (\Throwable $e) {
+            return null;
+        }
+        if (!$r || $r->tenant_status !== 'active' || $r->db_status !== 'ready' || empty($r->db_name)) {
+            return null;
+        }
+        return $r;
     }
 
     /** @return array<string,mixed> إعدادات connection العميل (من قالب connection المنصة، مع اسم قاعدة العميل). */
@@ -89,6 +125,7 @@ class TenantContext
         DB::setDefaultConnection(self::CONNECTION);
         self::$tenant = $tenant;
         self::isolateCache((int) $tenant->id);
+        TenantStorage::apply((int) $tenant->id);
         self::flushStaticMemos();
     }
 
@@ -101,6 +138,7 @@ class TenantContext
         DB::purge(self::CONNECTION);
         self::$tenant = null;
         self::isolateCache(null);
+        TenantStorage::apply(null);
         self::flushStaticMemos();
     }
 

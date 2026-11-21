@@ -49,7 +49,8 @@ class UipCorsMiddleware
         // ETag lets the front-end re-validate its local copy of a file (304) instead of downloading it again
         $response->headers->set('Access-Control-Expose-Headers', 'ETag, Content-Disposition, Retry-After, X-RateLimit-Limit, X-RateLimit-Remaining');
         $response->headers->set('Access-Control-Max-Age', '86400');
-        $response->headers->set('Vary', 'Origin');
+        // X-Tenant-Domain: أي رد (حتى المتكاشّى زي realtime/config) بيختلف من عميل لعميل — الكاش (متصفح/CDN) لازم يفصلهم.
+        $response->headers->set('Vary', 'Origin, X-Tenant-Domain');
 
         // الكوكي HttpOnly محتاج Allow-Credentials لو الـ API على origin تاني (SameSite=None).
         // بنسمح بيه بس لو الـ Origin مكتوب صراحةً في allowlist — أبدًا مع وضع "اعكس أي Origin".

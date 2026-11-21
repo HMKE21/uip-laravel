@@ -22,7 +22,7 @@ class PostsPing implements ShouldBroadcastNow
     /** @return array<int,PrivateChannel> */
     public function broadcastOn(): array
     {
-        return [new PrivateChannel('posts.feed')];
+        return [new PrivateChannel(\App\Services\Tenancy\TenantContext::channelPrefix() . 'posts.feed')];
     }
 
     public function broadcastAs(): string

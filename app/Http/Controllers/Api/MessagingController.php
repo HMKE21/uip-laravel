@@ -787,7 +787,7 @@ class MessagingController extends Controller
         $url = \Illuminate\Support\Facades\URL::temporarySignedRoute(
             'messaging.media.signed',
             now()->addSeconds($ttl),
-            ['id' => (int) $id, 'variant' => $variant, 'u' => $uid],
+            ['id' => (int) $id, 'variant' => $variant, 'u' => $uid] + \App\Services\Tenancy\TenantContext::signedParams(),
             absolute: false
         );
         return $this->apiSuccess(['url' => $url, 'expires_in' => $ttl], 'Link created.');

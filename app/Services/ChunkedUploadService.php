@@ -20,9 +20,15 @@ class ChunkedUploadService
     {
     }
 
+    /** storage/app/chunked (والعميل: .../chunked/t5) — ids المستخدمين بتتكرر بين العملاء. */
+    private function base(): string
+    {
+        return \App\Services\Tenancy\TenantStorage::storagePath('app/chunked');
+    }
+
     private function root(int $userId): string
     {
-        return storage_path('app/chunked/' . $userId);
+        return $this->base() . '/' . $userId;
     }
 
     private function dir(int $userId, string $id): string
@@ -178,7 +184,7 @@ class ChunkedUploadService
     private function prune(): void
     {
         $ttl = max(1, (int) $this->cfg('ttl_hours')) * 3600;
-        foreach (glob(storage_path('app/chunked/*/*'), GLOB_ONLYDIR) ?: [] as $d) {
+        foreach (glob($this->base() . '/[0-9]*/*', GLOB_ONLYDIR) ?: [] as $d) {
             if (filemtime($d) < time() - $ttl && (!is_file($d . '/meta.json') || filemtime($d . '/meta.json') < time() - $ttl)) {
                 foreach (glob($d . '/*') ?: [] as $f) {
                     @unlink($f);

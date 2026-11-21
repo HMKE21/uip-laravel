@@ -20,7 +20,9 @@ class RealtimeAuthController extends Controller
         $channel = (string) $request->input('channel_name', '');
 
         // قناتين بس: قناة الشخص نفسه، وقناة المنشورات العامة المشتركة (ids بس — شوف PostsPing).
-        $allowed = $channel === 'private-App.Models.User.' . $uid || $channel === 'private-posts.feed';
+        // الاسم لازم يشيل بادئة العميل الحالي (t5.) — فمستخدم 5 عند عميل مينفعش يدخل قناة مستخدم 5 عند عميل تاني.
+        $p = \App\Services\Tenancy\TenantContext::channelPrefix();
+        $allowed = $channel === 'private-' . $p . 'App.Models.User.' . $uid || $channel === 'private-' . $p . 'posts.feed';
         if (!$uid || !preg_match('/^\d+\.\d+$/', $socketId) || !$allowed) {
             return response()->json(['message' => 'Forbidden'], 403);
         }

@@ -64,7 +64,8 @@ class ExamExportsApiController extends ExamResultsHubApiController
             [$title, $meta, $sections] = $this->studentsPayload($staffId, trim((string) $request->input('q', '')), (int) $request->input('exam_id', 0));
         }
 
-        $dir = storage_path('app/exam-exports/' . $staffId);
+        $seg = \App\Services\Tenancy\TenantStorage::segment(); // t5 عند العميل، '' على المنصة
+        $dir = storage_path('app/exam-exports/' . ($seg !== '' ? $seg . '/' : '') . $staffId);
         if (!is_dir($dir)) {
             @mkdir($dir, 0775, true);
         }
@@ -94,7 +95,7 @@ class ExamExportsApiController extends ExamResultsHubApiController
             'exam_id'           => $examId,
             'title'             => mb_substr($title, 0, 255),
             'format'            => $format,
-            'file_path'         => 'exam-exports/' . $staffId . '/' . $name,
+            'file_path'         => 'exam-exports/' . ($seg !== '' ? $seg . '/' : '') . $staffId . '/' . $name,
             'file_size'         => (int) @filesize($path),
             'row_count'         => $total,
             'preview_json'      => json_encode($preview, JSON_UNESCAPED_UNICODE),

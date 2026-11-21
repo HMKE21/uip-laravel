@@ -103,3 +103,27 @@ Schedule::command('mail:retention')->dailyAt('04:40')->withoutOverlapping();
 // Lexicon Hub: مزامنة قوايم الدومينات/الكلمات المحظورة (هاشات موقّعة) يوميًا — بتشتغل بس لو CONTENT_SAFETY_REMOTE_URLS متظبط.
 // (بديل الـ crontab المنفصل: `30 3 * * * cd /var/www/uipe && php artisan lexicon:sync`. اختار واحد بس، التكرار مش بيضر لأن نفس الإصدار = no-op.)
 Schedule::command('lexicon:sync')->dailyAt('03:20')->withoutOverlapping()->when(fn () => !empty(config('content_safety.remote.urls')));
+
+/*
+ * ─── العملاء المعزولين (Multi-tenancy — الخطوة 5) ─────────────────────────────────────────────────────────────
+ * الأوامر اللي فوق بتشتغل على قاعدة المنصة الأم بس. كل أمر بيشتغل على بيانات (جدول) لازم يتشغّل كمان على كل عميل:
+ * tenants:run بيلف على العملاء الجاهزين ويفعّل قاعدة كل واحد. --feature بيتخطّى اللي الميزة مقفولة عنده.
+ * مش متكررين هنا (خاصين بالمنصة بس): mail:update-disposable-domains · lexicon:sync · dev:maintenance (جداول dev_* عند العميل فاضية).
+ */
+Schedule::command('tenants:run', ['exams:notify-upcoming', '--feature=exams'])->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('tenants:run', ['notifications:send-emails'])->everyMinute()->withoutOverlapping();
+Schedule::command('tenants:run', ['projects:send-deadline-reminders', '--feature=academic'])->hourly()->withoutOverlapping();
+Schedule::command('tenants:run', ['messaging:purge-trash', '--feature=messaging'])->dailyAt('03:30')->withoutOverlapping();
+Schedule::command('tenants:run', ['drive:purge-trash', '--feature=drive'])->dailyAt('04:00')->withoutOverlapping();
+Schedule::command('tenants:run', ['drive:purge-resets', '--feature=drive'])->hourly()->withoutOverlapping();
+Schedule::command('tenants:run', ['calls:prune', '--feature=messaging'])->dailyAt('04:30')->withoutOverlapping();
+Schedule::command('tenants:run', ['posts:publish-due', '--feature=feed'])->everyMinute()->withoutOverlapping();
+Schedule::command('tenants:run', ['posts:prune', '--feature=feed'])->dailyAt('04:45')->withoutOverlapping();
+Schedule::command('tenants:run', ['activity:prune'])->dailyAt('04:30')->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:process', '--feature=mail'])->everyMinute()->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:process --purge', '--feature=mail'])->dailyAt('04:10')->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:identity-sync --provision', '--feature=mail'])->everyTenMinutes()->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:identity-sync --membership', '--feature=mail'])->hourly()->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:identity-sync --prune', '--feature=mail'])->dailyAt('04:20')->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:security-scan', '--feature=mail'])->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('tenants:run', ['mail:retention', '--feature=mail'])->dailyAt('04:40')->withoutOverlapping();
