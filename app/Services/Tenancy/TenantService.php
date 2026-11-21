@@ -55,7 +55,7 @@ final class TenantService
             'id' => (int) $t->id, 'public_id' => $t->public_id, 'name' => $t->name, 'slug' => $t->slug, 'kind' => $t->kind,
             'university_id' => $t->university_id ? (int) $t->university_id : null, 'status' => $t->status, 'suspended_reason' => $t->suspended_reason,
             'plan' => $t->plan, 'features' => (array) json_decode((string) ($t->features ?? '[]'), true), 'limits' => $this->limits($t),
-            'role' => $role, 'created_at' => $t->created_at,
+            'role' => $role, 'mode' => $t->mode ?? 'shared', 'created_at' => $t->created_at,
         ];
     }
 
@@ -866,7 +866,7 @@ final class TenantService
 
     /* ------------------------------------------------------------------ audit */
 
-    private function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
+    public function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
     {
         $this->logs->record(['user_id' => $userId ?: null, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
             'note' => $note]);

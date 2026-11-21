@@ -65,6 +65,11 @@ return [
         'auto_features' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_AUTO_FEATURES', 'messaging,meetings,feed'))))),
     ],
 
+    /** حسابات مستخدمي المنصة المعزولة (اللي بيعملها المالك بباسورد): اسم العرض => slug الدور جوّه قاعدة المنصة. */
+    'platform_users' => [
+        'roles' => ['admin' => 'admin', 'employee' => env('TENANT_EMPLOYEE_ROLE', 'student')],
+    ],
+
     'isolation' => [
         'enabled' => filter_var(env('TENANCY_ISOLATION', true), FILTER_VALIDATE_BOOLEAN),
         /** اسم connection في config/database.php اللي بيتنسخ منه إعدادات قواعد العملاء. فاضي = الـ default بتاع المنصة. */

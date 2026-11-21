@@ -90,6 +90,10 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/members', [TenantController::class, 'members'])->middleware('throttle:120,1');
         Route::get('/features', [TenantController::class, 'features'])->middleware('throttle:120,1');
         Route::put('/features', [TenantController::class, 'setFeatures'])->middleware('throttle:20,1');
+        Route::get('/platform-users', [TenantController::class, 'platformUsers'])->middleware('throttle:120,1');
+        Route::post('/platform-users', [TenantController::class, 'createPlatformUser'])->middleware('throttle:30,1');
+        Route::post('/platform-users/{userId}/password', [TenantController::class, 'resetPlatformUser'])->whereNumber('userId')->middleware('throttle:20,1');
+        Route::put('/platform-users/{userId}/status', [TenantController::class, 'statusPlatformUser'])->whereNumber('userId')->middleware('throttle:30,1');
         Route::get('/role-labels', [TenantController::class, 'roleLabels'])->middleware('throttle:120,1');
         Route::put('/role-labels', [TenantController::class, 'saveRoleLabels'])->middleware('throttle:30,1');
         Route::post('/members', [TenantController::class, 'addMember'])->middleware('throttle:30,1');

@@ -41,6 +41,29 @@ class TenantController extends Controller
         return $this->dom(fn () => $this->tenants->setFeatures($this->uid($r), $id, $in['features']));
     }
 
+    public function platformUsers(Request $r, int $id)
+    {
+        return $this->dom(fn () => ['users' => app(\App\Services\Tenancy\PlatformUsers::class)->list($this->uid($r), $id)]);
+    }
+
+    public function createPlatformUser(Request $r, int $id)
+    {
+        $in = $r->validate(['name' => 'nullable|string|max:100', 'email' => 'required|email|max:190', 'role' => 'required|in:admin,employee', 'password' => 'nullable|string|min:8|max:100']);
+        return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->create($this->uid($r), $id, $in), 201);
+    }
+
+    public function resetPlatformUser(Request $r, int $id, int $userId)
+    {
+        $in = $r->validate(['password' => 'nullable|string|min:8|max:100']);
+        return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->resetPassword($this->uid($r), $id, $userId, $in['password'] ?? null));
+    }
+
+    public function statusPlatformUser(Request $r, int $id, int $userId)
+    {
+        $in = $r->validate(['active' => 'required|boolean']);
+        return $this->dom(fn () => ['users' => app(\App\Services\Tenancy\PlatformUsers::class)->setActive($this->uid($r), $id, $userId, (bool) $in['active'])]);
+    }
+
     public function launchOptions(Request $r)
     {
         return $this->dom(fn () => $this->tenants->launchOptions());
