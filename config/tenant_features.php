@@ -43,7 +43,8 @@ return [
         ],
         'drive' => [
             'label_ar' => 'التخزين والملفات (Drive)', 'label_en' => 'Drive & storage',
-            'prefixes' => ['drive', 'drive-share', 'admin/drive', 'library-lock', 'cloud/google', 'github', 'shares'],
+            // 'desktop' = جهازي (My PC) + الوضع الافتراضي، و terminal-token / vscode-token بيتطلبوا من Drive.
+            'prefixes' => ['drive', 'drive-share', 'admin/drive', 'library-lock', 'cloud/google', 'github', 'shares', 'desktop', 'terminal-token', 'vscode-token'],
         ],
         'mail' => [
             'label_ar' => 'البريد', 'label_en' => 'Mail',
@@ -84,7 +85,7 @@ return [
         ],
         'developer' => [
             'label_ar' => 'واجهة المطورين والتكامل', 'label_en' => 'Developer API & integrations',
-            'prefixes' => ['developer', 'dev-admin', 'dev/v1', 'oauth', 'scim/v2', 'identity', 'desktop', 'terminal-token', 'vscode-token'],
+            'prefixes' => ['developer', 'dev-admin', 'dev/v1', 'oauth', 'scim/v2', 'identity'],
         ],
     ],
 ];
