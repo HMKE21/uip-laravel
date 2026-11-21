@@ -155,14 +155,17 @@ class WebhookService
     }
 
     /** @param ?string $mode لو متحدد (live|sandbox) بيرجّع webhooks الـ mode ده بس — واجهة الـ API بتبعته دايمًا. */
-    public function list(int $userId, ?string $mode = null): array
+    public function list(int $userId, ?string $mode = null, ?int $tenantId = null): array
     {
-        return DB::table('dev_webhooks')->where('user_id', $userId)->when($mode, fn ($q) => $q->where('mode', $mode))->orderByDesc('id')->get()->map(fn ($h) => $this->payload($h))->values()->all();
+        return DB::table('dev_webhooks')->where('user_id', $userId)->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId), fn ($q) => $q->whereNull('tenant_id'))->when($mode, fn ($q) => $q->where('mode', $mode))->orderByDesc('id')->get()->map(fn ($h) => $this->payload($h))->values()->all();
     }
 
-    public function own(int $userId, int $id, ?string $mode = null): object
+    /** من غير $tenantId → webhook شخصي بس. ومع $tenantId → أي webhook جوه الـ tenant (الصلاحية من TenantService). */
+    public function own(int $userId, int $id, ?string $mode = null, ?int $tenantId = null, bool $mineOnly = false): object
     {
-        $h = DB::table('dev_webhooks')->where('id', $id)->where('user_id', $userId)->when($mode, fn ($q) => $q->where('mode', $mode))->first();
+        $h = DB::table('dev_webhooks')->where('id', $id)
+            ->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId)->when($mineOnly, fn ($w) => $w->where('user_id', $userId)), fn ($q) => $q->where('user_id', $userId)->whereNull('tenant_id'))
+            ->when($mode, fn ($q) => $q->where('mode', $mode))->first();
         if (!$h) {
             $this->fail('Webhook not found.', 404);
         }
@@ -185,10 +188,10 @@ class WebhookService
         return $ev;
     }
 
-    public function create(int $userId, array $in, ?int $appId = null): array
+    public function create(int $userId, array $in, ?int $appId = null, ?int $tenantId = null): array
     {
         $policy = $this->assertAllowed($userId);
-        if (DB::table('dev_webhooks')->where('user_id', $userId)->count() >= (int) $policy['max_webhooks_per_user']) {
+        if (!$tenantId && DB::table('dev_webhooks')->where('user_id', $userId)->whereNull('tenant_id')->count() >= (int) $policy['max_webhooks_per_user']) {
             $this->fail('You reached the maximum number of webhooks.', 403);
         }
         $this->assertSafeUrl((string) ($in['url'] ?? ''));
@@ -200,7 +203,7 @@ class WebhookService
             $this->fail('Your account can only create sandbox (test) webhooks.', 403);
         }
         $appId = $appId ?: (!empty($in['app_id']) ? (int) $in['app_id'] : null);
-        if ($appId && !DB::table('dev_apps')->where('id', $appId)->where('owner_user_id', $userId)->exists()) {
+        if ($appId && !DB::table('dev_apps')->where('id', $appId)->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId), fn ($q) => $q->where('owner_user_id', $userId)->whereNull('tenant_id'))->exists()) { // app خارج نطاق الـ tenant (أو شخصي) = 404
             $this->fail('App not found.', 404);
         }
         $accId = !empty($in['mail_account_id']) ? (int) $in['mail_account_id'] : null;
@@ -209,7 +212,7 @@ class WebhookService
         }
         $secret = DevTokens::make('whsec_', 40);
         $id = DB::table('dev_webhooks')->insertGetId([
-            'user_id' => $userId, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => isset($in['name']) ? Str::limit(trim((string) $in['name']), 80, '') : null,
+            'user_id' => $userId, 'tenant_id' => $tenantId ?: null, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => isset($in['name']) ? Str::limit(trim((string) $in['name']), 80, '') : null,
             'url' => trim((string) $in['url']), 'secret_enc' => Crypt::encryptString($secret), 'events' => json_encode($this->cleanEvents($in['events'] ?? [], $policy['allowed_events'])),
             'mode' => $mode, 'is_active' => 1, 'created_at' => now(), 'updated_at' => now(),
         ]);
@@ -266,9 +269,9 @@ class WebhookService
         return $this->payload(DB::table('dev_webhooks')->find($h->id), $secret);
     }
 
-    public function delete(int $userId, int $id, ?string $mode = null): void
+    public function delete(int $userId, int $id, ?string $mode = null, ?int $tenantId = null, bool $mineOnly = false): void
     {
-        $h = $this->own($userId, $id, $mode);
+        $h = $this->own($userId, $id, $mode, $tenantId, $mineOnly);
         DB::transaction(function () use ($h) {
             DB::table('dev_webhook_deliveries')->where('webhook_id', $h->id)->delete();
             DB::table('dev_webhooks')->where('id', $h->id)->delete();

@@ -2,6 +2,7 @@
 
 namespace App\Services\Developer;
 
+use App\Services\Tenancy\TenantService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -23,7 +24,7 @@ class DeveloperAuthService
         throw $e;
     }
 
-    /** @return array{kind:string,user_id:int,scopes:string[],app_id:?int,key_id:?int,token_id:?int,mode:string,mail_account_id:?int,limit:int,remaining:int,rate_key:string} */
+    /** @return array{kind:string,tenant_id:?int,user_id:int,scopes:string[],app_id:?int,key_id:?int,token_id:?int,mode:string,mail_account_id:?int,limit:int,remaining:int,rate_key:string} */
     public function authenticate(Request $r): array
     {
         if (!config('developer.enabled')) {
@@ -46,6 +47,12 @@ class DeveloperAuthService
         $acc = Cache::remember('dev:acct:' . $ctx['user_id'], 10, fn () => (array) (DB::table('users')->where('id', $ctx['user_id'])->first(['status', 'deleted_at']) ?: ['status' => 'gone', 'deleted_at' => 'x']));
         if ($acc['deleted_at'] !== null || in_array($acc['status'], ['suspended', 'banned', 'gone'], true)) {
             $this->deny('The account is no longer active.', 401, 'account_inactive');
+        }
+
+        // Workspace (Tenant): مفتاح/تطبيق تابع لـ tenant بيقف فورًا لو الـ tenant اتوقف/اتحذف أو صاحب المفتاح/التطبيق (مش المستخدم النهائي في OAuth) اتشال من الأعضاء أو بقى viewer.
+        $ctx['tenant_id'] = $ctx['tenant_id'] ?? null;
+        if ($ctx['tenant_id'] && ($tc = TenantService::gate((int) $ctx['tenant_id'], (int) ($ctx['tenant_owner_id'] ?? $ctx['user_id'])))) {
+            $this->deny($tc === 'tenant_suspended' ? 'This workspace is suspended.' : 'This credential no longer belongs to an active workspace member.', 403, $tc);
         }
 
         $policy = $this->apps->policyFor($ctx['user_id']);
@@ -114,13 +121,16 @@ class DeveloperAuthService
             if (!$app || $app->status !== 'active') {
                 $this->deny('The app of this key is suspended.', 403, 'app_suspended');
             }
+            if ((int) ($k->tenant_id ?? 0) !== (int) ($app->tenant_id ?? 0)) { // مفتاح tenant مينفعش يشتغل بتطبيق خارج نفس الـ tenant (ولا العكس)
+                $this->deny('The app of this key belongs to a different workspace.', 403, 'tenant_mismatch');
+            }
             $scopes = array_values(array_intersect($scopes, (array) json_decode((string) $app->scopes, true)));
             $limit = $app->rate_limit_per_min ? (int) $app->rate_limit_per_min : $limit;
         }
         if (Cache::add('dev:lu:key:' . $k->id, 1, 60)) {
             DB::table('dev_api_keys')->where('id', $k->id)->update(['last_used_at' => now(), 'last_used_ip' => substr($ip, 0, 45)]);
         }
-        return ['kind' => 'key', 'user_id' => (int) $k->user_id, 'scopes' => $scopes, 'app_id' => $k->app_id ? (int) $k->app_id : null, 'key_id' => (int) $k->id, 'token_id' => null,
+        return ['kind' => 'key', 'tenant_id' => ($k->tenant_id ?? null) ? (int) $k->tenant_id : null, 'tenant_owner_id' => (int) $k->user_id, 'user_id' => (int) $k->user_id, 'scopes' => $scopes, 'app_id' => $k->app_id ? (int) $k->app_id : null, 'key_id' => (int) $k->id, 'token_id' => null,
             'mode' => $k->mode === 'sandbox' ? 'sandbox' : 'live', 'mail_account_id' => $k->mail_account_id ? (int) $k->mail_account_id : null, 'limit' => max(1, $limit), 'remaining' => 0, 'rate_key' => 'key:' . $k->id];
     }
 
@@ -162,7 +172,7 @@ class DeveloperAuthService
             DB::table('dev_oauth_tokens')->where('id', $t->id)->update(['last_used_at' => now()]);
         }
         $limit = $app->rate_limit_per_min ? (int) $app->rate_limit_per_min : (int) config('developer.limits.rate_per_min', 300);
-        return ['kind' => 'oauth', 'user_id' => (int) $t->user_id, 'scopes' => $scopes, 'app_id' => (int) $app->id, 'key_id' => null, 'token_id' => (int) $t->id, 'mode' => 'live',
+        return ['kind' => 'oauth', 'tenant_id' => ($app->tenant_id ?? null) ? (int) $app->tenant_id : null, 'tenant_owner_id' => (int) $app->owner_user_id, 'user_id' => (int) $t->user_id, 'scopes' => $scopes, 'app_id' => (int) $app->id, 'key_id' => null, 'token_id' => (int) $t->id, 'mode' => 'live',
             'mail_account_id' => $t->mail_account_id ? (int) $t->mail_account_id : null, 'limit' => max(1, $limit), 'remaining' => 0, 'rate_key' => 'tok:' . $t->id];
     }
 

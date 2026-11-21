@@ -4,6 +4,9 @@ use App\Http\Controllers\Api\DevAdminController;
 use App\Http\Controllers\Api\DevApiController;
 use App\Http\Controllers\Api\DevDocsController;
 use App\Http\Controllers\Api\DevSdkDownloadController;
+use App\Http\Controllers\Api\TenantAdminController;
+use App\Http\Controllers\Api\TenantController;
+use App\Http\Controllers\Api\TenantPublicController;
 use App\Http\Controllers\Api\DeveloperCenterController;
 use App\Http\Controllers\Api\OAuthTokenController;
 use Illuminate\Support\Facades\Route;
@@ -69,6 +72,37 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::post('/sandbox/reset', [DeveloperCenterController::class, 'sandboxReset'])->middleware('throttle:10,1');
 
     Route::get('/logs', [DeveloperCenterController::class, 'logs'])->middleware('throttle:120,1');
+
+    // Workspaces (Tenants) — الخطوة 1 من منصة Meeting/White Label: أعضاء وأدوار + branding + دومينات مخصصة + موارد API معزولة بـ tenant_id.
+    Route::get('/tenants', [TenantController::class, 'index'])->middleware('throttle:120,1');
+    Route::post('/tenants', [TenantController::class, 'store'])->middleware('throttle:10,1');
+    Route::prefix('/tenants/{id}')->where(['id' => '[0-9]+'])->group(function () {
+        Route::get('/', [TenantController::class, 'show'])->middleware('throttle:120,1');
+        Route::put('/', [TenantController::class, 'update'])->middleware('throttle:30,1');
+        Route::delete('/', [TenantController::class, 'destroy'])->middleware('throttle:5,1');
+        Route::get('/branding', [TenantController::class, 'branding'])->middleware('throttle:120,1');
+        Route::put('/branding', [TenantController::class, 'saveBranding'])->middleware('throttle:30,1');
+        Route::get('/members', [TenantController::class, 'members'])->middleware('throttle:120,1');
+        Route::post('/members', [TenantController::class, 'addMember'])->middleware('throttle:30,1');
+        Route::put('/members/{userId}', [TenantController::class, 'setRole'])->whereNumber('userId')->middleware('throttle:30,1');
+        Route::delete('/members/{userId}', [TenantController::class, 'removeMember'])->whereNumber('userId')->middleware('throttle:30,1');
+        Route::get('/domains', [TenantController::class, 'domains'])->middleware('throttle:120,1');
+        Route::post('/domains', [TenantController::class, 'addDomain'])->middleware('throttle:20,1');
+        Route::post('/domains/{domainId}/verify', [TenantController::class, 'verifyDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
+        Route::post('/domains/{domainId}/primary', [TenantController::class, 'primaryDomain'])->whereNumber('domainId')->middleware('throttle:30,1');
+        Route::delete('/domains/{domainId}', [TenantController::class, 'removeDomain'])->whereNumber('domainId')->middleware('throttle:20,1');
+        Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
+        Route::get('/usage', [TenantController::class, 'usage'])->middleware('throttle:60,1');
+        Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
+        Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
+        Route::delete('/apps/{appId}', [TenantController::class, 'deleteApp'])->whereNumber('appId')->middleware('throttle:20,1');
+        Route::get('/keys', [TenantController::class, 'keys'])->middleware('throttle:120,1');
+        Route::post('/keys', [TenantController::class, 'createKey'])->middleware('throttle:20,1');
+        Route::delete('/keys/{keyId}', [TenantController::class, 'revokeKey'])->whereNumber('keyId')->middleware('throttle:30,1');
+        Route::get('/webhooks', [TenantController::class, 'webhooks'])->middleware('throttle:120,1');
+        Route::post('/webhooks', [TenantController::class, 'createWebhook'])->middleware('throttle:20,1');
+        Route::delete('/webhooks/{hookId}', [TenantController::class, 'deleteWebhook'])->whereNumber('hookId')->middleware('throttle:20,1');
+    });
 });
 
 // 3) إدارة الجامعة / المنصة — تحكم كامل (السياسة، القواعد، المطورين، التطبيقات، المفاتيح، الـ webhooks، السجل)
@@ -108,6 +142,10 @@ Route::prefix('v1/dev-admin')->middleware('uip.auth')->group(function () {
     Route::post('/webhooks/{id}/active', [DevAdminController::class, 'setWebhookActive'])->whereNumber('id')->middleware('throttle:30,1');
 
     Route::get('/logs', [DevAdminController::class, 'logs'])->middleware('throttle:120,1');
+
+    Route::get('/tenants', [TenantAdminController::class, 'index'])->middleware('throttle:120,1');
+    Route::get('/tenants/{id}', [TenantAdminController::class, 'show'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::put('/tenants/{id}', [TenantAdminController::class, 'update'])->whereNumber('id')->middleware('throttle:30,1');
 });
 
 // 4) Developer API العام: Bearer uipk_… / uipo_… (+ scope). الـ middleware dev.auth بيتحط على كل route (مرة واحدة) والـ rate limit جواه لكل مفتاح/توكن.
@@ -117,6 +155,9 @@ Route::prefix('dev/v1')->group(function () {
     // شرح التحقق من توقيع الـ Webhook + test vector + كود جاهز للمستقبِل (عام، من غير اعتماد، بنفس منطق openapi.json).
     Route::get('/docs/webhook-verification', [DevDocsController::class, 'webhookVerification'])->middleware('throttle:60,1');
     // تنزيل الـ SDKs جاهزة (zip لكل لغة) من Developer Center — عام، من غير اعتماد، مش جوه الـ OpenAPI (من غير dev.auth).
+    // White Label: هوية الجهة اللي بتخدم الدومين + نقطة `ask` بتاعة Caddy on-demand TLS. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
+    Route::get('/tenant/branding', [TenantPublicController::class, 'branding'])->middleware('throttle:120,1');
+    Route::get('/tenant/domain-check', [TenantPublicController::class, 'domainCheck'])->middleware('throttle:300,1');
     Route::get('/sdks/{lang}.zip', [DevSdkDownloadController::class, 'download'])->whereIn('lang', ['php', 'js', 'python'])->middleware('throttle:30,1');
 
     Route::get('/me', [DevApiController::class, 'me'])->middleware('dev.auth:profile.read');

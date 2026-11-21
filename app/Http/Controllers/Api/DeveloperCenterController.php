@@ -64,9 +64,9 @@ class DeveloperCenterController extends Controller
                 'scopes' => DevScopes::catalog(), 'events' => config('developer.events'),
                 'sandbox_address' => $this->sandbox->address($u),
                 'counts' => [
-                    'apps' => DB::table('dev_apps')->where('owner_user_id', $u)->count(),
-                    'keys' => DB::table('dev_api_keys')->where('user_id', $u)->whereNull('revoked_at')->count(),
-                    'webhooks' => DB::table('dev_webhooks')->where('user_id', $u)->count(),
+                    'apps' => DB::table('dev_apps')->where('owner_user_id', $u)->whereNull('tenant_id')->count(),
+                    'keys' => DB::table('dev_api_keys')->where('user_id', $u)->whereNull('tenant_id')->whereNull('revoked_at')->count(),
+                    'webhooks' => DB::table('dev_webhooks')->where('user_id', $u)->whereNull('tenant_id')->count(),
                     'grants' => DB::table('dev_oauth_grants')->where('user_id', $u)->whereNull('revoked_at')->count(),
                 ],
             ];
@@ -333,6 +333,6 @@ class DeveloperCenterController extends Controller
 
     public function logs(Request $r)
     {
-        return $this->dom(fn () => $this->logs->search(['user_id' => $this->uid($r)] + $r->only(['app_id', 'api_key_id', 'kind', 'status', 'from', 'to', 'q']), (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
+        return $this->dom(fn () => $this->logs->search(['user_id' => $this->uid($r), 'personal' => true] + $r->only(['app_id', 'api_key_id', 'kind', 'status', 'from', 'to', 'q']), (int) $r->query('page', 1), (int) $r->query('per_page', 30)));
     }
 }

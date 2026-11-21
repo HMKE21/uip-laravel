@@ -150,6 +150,7 @@ class DeveloperAppService
             'rate_limit_per_min' => $a->rate_limit_per_min !== null ? (int) $a->rate_limit_per_min : null,
             'authorized_users' => $users, 'last_used_at' => DevTokens::iso($a->last_used_at), 'created_at' => DevTokens::iso($a->created_at),
             'owner_user_id' => (int) $a->owner_user_id, 'university_id' => $a->university_id ? (int) $a->university_id : null,
+            'tenant_id' => ($a->tenant_id ?? null) ? (int) $a->tenant_id : null,
             'review' => $this->reviewInfo($a),
         ];
         if ($secret !== null) {
@@ -158,14 +159,20 @@ class DeveloperAppService
         return $out;
     }
 
+    /** القايمة الشخصية بس (tenant_id = null). تطبيقات الـ Workspaces بتتعرض من TenantService بـ tenant_id. */
     public function listApps(int $userId): array
     {
-        return DB::table('dev_apps')->where('owner_user_id', $userId)->orderByDesc('id')->get()->map(fn ($a) => $this->appPayload($a))->values()->all();
+        return DB::table('dev_apps')->where('owner_user_id', $userId)->whereNull('tenant_id')->orderByDesc('id')->get()->map(fn ($a) => $this->appPayload($a))->values()->all();
     }
 
-    public function ownApp(int $userId, int $id): object
+    /**
+     * العزل: من غير $tenantId → تطبيق شخصي بس (صاحبه $userId و tenant_id = null)، فمفيش endpoint شخصي يقدر يلمس تطبيق tenant.
+     * ومع $tenantId → أي تطبيق جوه الـ tenant ده (الصلاحية بتتحقق من TenantService قبل النداء).
+     */
+    public function ownApp(int $userId, int $id, ?int $tenantId = null): object
     {
-        $a = DB::table('dev_apps')->where('id', $id)->where('owner_user_id', $userId)->first();
+        $a = DB::table('dev_apps')->where('id', $id)
+            ->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId), fn ($q) => $q->where('owner_user_id', $userId)->whereNull('tenant_id'))->first();
         if (!$a) {
             $this->fail('App not found.', 404);
         }
@@ -178,7 +185,7 @@ class DeveloperAppService
     }
 
     /** @return array{app:array} + client_secret مرة واحدة للـ confidential */
-    public function createApp(int $userId, array $in): array
+    public function createApp(int $userId, array $in, ?int $tenantId = null): array
     {
         $policy = $this->assertDevAllowed($userId);
         $name = trim((string) ($in['name'] ?? ''));
@@ -190,14 +197,14 @@ class DeveloperAppService
             $this->fail('Invalid client type.');
         }
         $max = (int) $policy['max_apps_per_user'];
-        if (DB::table('dev_apps')->where('owner_user_id', $userId)->count() >= $max) {
+        if (!$tenantId && DB::table('dev_apps')->where('owner_user_id', $userId)->whereNull('tenant_id')->count() >= $max) { // حد الـ tenant بيتطبّق في TenantService
             $this->fail('You reached the maximum number of apps.', 403);
         }
         $scopes = $this->cleanScopes($userId, $in['scopes'] ?? ['profile.read']);
         $redirects = $this->cleanRedirects($in['redirect_uris'] ?? []);
         $secret = $type === 'confidential' ? DevTokens::make('uips_', 40) : null;
         $id = DB::table('dev_apps')->insertGetId([
-            'owner_user_id' => $userId, 'university_id' => $policy['university_id'], 'name' => $name,
+            'owner_user_id' => $userId, 'tenant_id' => $tenantId ?: null, 'university_id' => $policy['university_id'], 'name' => $name,
             'description' => isset($in['description']) ? Str::limit(trim((string) $in['description']), 500, '') : null,
             'homepage_url' => $this->cleanHomepage($in['homepage_url'] ?? null), 'client_id' => 'uipc_' . Str::lower(Str::random(24)),
             'client_secret_hash' => $secret ? DevTokens::hash($secret) : null, 'client_secret_hint' => $secret ? substr($secret, 0, 9) : null,
@@ -263,9 +270,9 @@ class DeveloperAppService
         return $this->appPayload(DB::table('dev_apps')->find($a->id));
     }
 
-    public function deleteApp(int $userId, int $id): void
+    public function deleteApp(int $userId, int $id, ?int $tenantId = null): void
     {
-        $a = $this->ownApp($userId, $id);
+        $a = $this->ownApp($userId, $id, $tenantId);
         DB::transaction(function () use ($a) {
             DB::table('dev_oauth_tokens')->where('app_id', $a->id)->delete();
             DB::table('dev_oauth_codes')->where('app_id', $a->id)->delete();
@@ -519,7 +526,7 @@ class DeveloperAppService
             'app_id' => $k->app_id ? (int) $k->app_id : null, 'mail_account_id' => $k->mail_account_id ? (int) $k->mail_account_id : null,
             'ip_allowlist' => (array) json_decode((string) ($k->ip_allowlist ?? '[]'), true), 'expires_at' => DevTokens::iso($k->expires_at),
             'last_used_at' => DevTokens::iso($k->last_used_at), 'last_used_ip' => $k->last_used_ip, 'revoked_at' => DevTokens::iso($k->revoked_at),
-            'created_at' => DevTokens::iso($k->created_at),
+            'created_at' => DevTokens::iso($k->created_at), 'tenant_id' => ($k->tenant_id ?? null) ? (int) $k->tenant_id : null,
             'rotated_from_id' => ($k->rotated_from_id ?? null) ? (int) $k->rotated_from_id : null, 'rotated_at' => DevTokens::iso($k->rotated_at ?? null),
             'status' => $this->keyStatus($k),
         ];
@@ -543,7 +550,7 @@ class DeveloperAppService
 
     public function listKeys(int $userId): array
     {
-        return DB::table('dev_api_keys')->where('user_id', $userId)->orderByDesc('id')->get()->map(fn ($k) => $this->keyPayload($k))->values()->all();
+        return DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('tenant_id')->orderByDesc('id')->get()->map(fn ($k) => $this->keyPayload($k))->values()->all();
     }
 
     private function cleanIpList($in): array
@@ -564,7 +571,7 @@ class DeveloperAppService
         return array_values(array_unique($out));
     }
 
-    public function createKey(int $userId, array $in): array
+    public function createKey(int $userId, array $in, ?int $tenantId = null): array
     {
         $policy = $this->assertDevAllowed($userId);
         $name = trim((string) ($in['name'] ?? ''));
@@ -579,13 +586,13 @@ class DeveloperAppService
             $this->fail('Your account can only create sandbox (test) keys.', 403);
         }
         $this->revokeRotatedExpired($userId);
-        if (DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
+        if (!$tenantId && DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('tenant_id')->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) { // حد الـ tenant في TenantService
             $this->fail('You reached the maximum number of API keys.', 403);
         }
         $scopes = $this->cleanScopes($userId, $in['scopes'] ?? []);
         $appId = !empty($in['app_id']) ? (int) $in['app_id'] : null;
         if ($appId) {
-            $app = $this->ownApp($userId, $appId);
+            $app = $this->ownApp($userId, $appId, $tenantId);
             if ($extra = array_diff($scopes, (array) json_decode((string) $app->scopes, true))) {
                 $this->fail('The app does not have these scopes: ' . implode(', ', $extra));
             }
@@ -604,16 +611,17 @@ class DeveloperAppService
         }
         $raw = DevTokens::make($mode === 'sandbox' ? 'uipk_test_' : 'uipk_live_', 40);
         $id = DB::table('dev_api_keys')->insertGetId([
-            'user_id' => $userId, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => $name, 'mode' => $mode, 'prefix' => substr($raw, 0, 18),
+            'user_id' => $userId, 'tenant_id' => $tenantId ?: null, 'app_id' => $appId, 'mail_account_id' => $accId, 'name' => $name, 'mode' => $mode, 'prefix' => substr($raw, 0, 18),
             'key_hash' => DevTokens::hash($raw), 'scopes' => json_encode($scopes), 'ip_allowlist' => json_encode($this->cleanIpList($in['ip_allowlist'] ?? [])),
             'expires_at' => $expires, 'created_at' => now(), 'updated_at' => now(),
         ]);
         return $this->keyPayload(DB::table('dev_api_keys')->find($id), $raw);
     }
 
-    private function ownKey(int $userId, int $id): object
+    private function ownKey(int $userId, int $id, ?int $tenantId = null): object
     {
-        $k = DB::table('dev_api_keys')->where('id', $id)->where('user_id', $userId)->first();
+        $k = DB::table('dev_api_keys')->where('id', $id)
+            ->when($tenantId, fn ($q) => $q->where('tenant_id', $tenantId), fn ($q) => $q->where('user_id', $userId)->whereNull('tenant_id'))->first();
         if (!$k) {
             $this->fail('API key not found.', 404);
         }
@@ -638,9 +646,9 @@ class DeveloperAppService
         return $this->keyPayload(DB::table('dev_api_keys')->find($k->id));
     }
 
-    public function revokeKey(int $userId, int $id): void
+    public function revokeKey(int $userId, int $id, ?int $tenantId = null): void
     {
-        $k = $this->ownKey($userId, $id);
+        $k = $this->ownKey($userId, $id, $tenantId);
         DB::table('dev_api_keys')->where('id', $k->id)->whereNull('revoked_at')->update(['revoked_at' => now(), 'updated_at' => now()]);
     }
 
@@ -689,7 +697,7 @@ class DeveloperAppService
         if ($grace < 0 || $grace > self::ROTATE_MAX_GRACE_HOURS) {
             $this->fail('grace_hours must be between 0 and ' . self::ROTATE_MAX_GRACE_HOURS . '.');
         }
-        if ($grace > 0 && DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
+        if ($grace > 0 && DB::table('dev_api_keys')->where('user_id', $userId)->whereNull('tenant_id')->whereNull('revoked_at')->count() >= (int) $policy['max_keys_per_user']) {
             $this->fail('Rotating with a grace period needs one free key slot. Revoke an unused key, or rotate with grace_hours = 0.', 403);
         }
 

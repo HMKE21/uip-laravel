@@ -236,12 +236,18 @@ class DevApiController extends Controller
         return $this->apiSuccess(['delivered' => true]);
     }
 
+    /** مفتاح تابع لـ tenant بيشتغل جوه الـ tenant بس. توكن OAuth (المستخدم النهائي مش عضو) بيفضل شخصي. */
+    private function tenantOf(array $c): ?int
+    {
+        return ($c['kind'] ?? '') === 'key' && !empty($c['tenant_id']) ? (int) $c['tenant_id'] : null;
+    }
+
     /* ------------------------------------------------------------ webhooks (scope webhooks.manage) */
 
     public function webhooks(Request $r)
     {
         $c = $this->ctx($r);
-        return $this->dom(fn () => ['webhooks' => $this->hooks->list((int) $c['user_id'], (string) $c['mode'])]); // بس webhooks نفس الـ mode
+        return $this->dom(fn () => ['webhooks' => $this->hooks->list((int) $c['user_id'], (string) $c['mode'], $this->tenantOf($c))]); // بس webhooks نفس الـ mode ونفس الـ tenant
     }
 
     public function createWebhook(Request $r)
@@ -250,13 +256,13 @@ class DevApiController extends Controller
         $c = $this->ctx($r);
         $in['mode'] = $c['mode'];                         // الـ webhook بياخد mode الاعتماد نفسه
         $in['mail_account_id'] = $c['mail_account_id'];
-        return $this->dom(fn () => $this->hooks->create((int) $c['user_id'], $in, $c['app_id']), 201);
+        return $this->dom(fn () => $this->hooks->create((int) $c['user_id'], $in, $c['app_id'], $this->tenantOf($c)), 201);
     }
 
     public function deleteWebhook(Request $r, int $id)
     {
         $c = $this->ctx($r);
-        return $this->dom(function () use ($c, $id) { $this->hooks->delete((int) $c['user_id'], $id, (string) $c['mode']); return null; }); // webhook من mode تاني = 404
+        return $this->dom(function () use ($c, $id) { $this->hooks->delete((int) $c['user_id'], $id, (string) $c['mode'], $this->tenantOf($c), true); return null; }); // webhook من mode أو tenant تاني = 404
     }
 
     /* ------------------------------------------------------------ sandbox helpers */
