@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\DevAdminController;
 use App\Http\Controllers\Api\DevApiController;
 use App\Http\Controllers\Api\DevDocsController;
+use App\Http\Controllers\Api\DevSdkDownloadController;
 use App\Http\Controllers\Api\DeveloperCenterController;
 use App\Http\Controllers\Api\OAuthTokenController;
 use Illuminate\Support\Facades\Route;
@@ -115,6 +116,8 @@ Route::prefix('dev/v1')->group(function () {
     Route::get('/openapi.json', [DevDocsController::class, 'openapi'])->middleware('throttle:60,1');
     // شرح التحقق من توقيع الـ Webhook + test vector + كود جاهز للمستقبِل (عام، من غير اعتماد، بنفس منطق openapi.json).
     Route::get('/docs/webhook-verification', [DevDocsController::class, 'webhookVerification'])->middleware('throttle:60,1');
+    // تنزيل الـ SDKs جاهزة (zip لكل لغة) من Developer Center — عام، من غير اعتماد، مش جوه الـ OpenAPI (من غير dev.auth).
+    Route::get('/sdks/{lang}.zip', [DevSdkDownloadController::class, 'download'])->whereIn('lang', ['php', 'js', 'python'])->middleware('throttle:30,1');
 
     Route::get('/me', [DevApiController::class, 'me'])->middleware('dev.auth:profile.read');
     Route::get('/scopes', [DevApiController::class, 'scopes'])->middleware('dev.auth');
