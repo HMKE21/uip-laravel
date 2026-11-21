@@ -55,4 +55,26 @@ return [
         /** سر نقطة الـ "ask" بتاعة Caddy on-demand TLS (GET /api/dev/v1/tenant/domain-check?domain=…&token=…). فاضي = النقطة مقفولة (404). */
         'ask_secret' => env('TENANT_ASK_SECRET', ''),
     ],
+
+    /**
+     * العزل الكامل (white-label): كل عميل بقاعدة بيانات خاصة (tenants.mode = isolated).
+     */
+    'isolation' => [
+        'enabled' => filter_var(env('TENANCY_ISOLATION', true), FILTER_VALIDATE_BOOLEAN),
+        /** اسم connection في config/database.php اللي بيتنسخ منه إعدادات قواعد العملاء. فاضي = الـ default بتاع المنصة. */
+        'template' => env('TENANCY_DB_TEMPLATE', ''),
+        /** connection بيعمل CREATE DATABASE (محتاج الصلاحية). فاضي = الـ default بتاع المنصة. */
+        'admin_connection' => env('TENANCY_ADMIN_CONNECTION', ''),
+        /** مستخدم MySQL لقواعد العملاء (اختياري: لو فاضي بيستخدم نفس مستخدم المنصة). */
+        'username' => env('TENANCY_DB_USERNAME', ''),
+        'password' => env('TENANCY_DB_PASSWORD', ''),
+        /** بادئة أسماء قواعد العملاء. */
+        'db_prefix' => env('TENANCY_DB_PREFIX', 'uipt_'),
+        /** دومينات المنصة الأم (مفصولة بفاصلة) بالإضافة لـ APP_URL: لو الفرونت بتاعها بعت X-Tenant-Domain بأي منها نعتبره المنصة. */
+        'platform_hosts' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_PLATFORM_HOSTS', ''))))),
+        /** جداول بتتنسخ كما هي من قاعدة المنصة لقاعدة العميل الجديد (الأدوار والصلاحيات) — بالترتيب. */
+        'copy_tables' => ['roles', 'permissions', 'role_permission'],
+        /** دور أول أدمن عند العميل. */
+        'admin_role' => 'admin',
+    ],
 ];

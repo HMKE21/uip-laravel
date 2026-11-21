@@ -61,6 +61,9 @@ return Application::configure(basePath: dirname(__DIR__))
             at: $trusted === '*' ? '*' : array_values(array_filter(array_map('trim', explode(',', $trusted))))
         );
 
+        // Multi-tenancy: يحدد العميل من الدومين ويبدّل قاعدة البيانات. global (بعد TrustProxies) عشان يسبق كل middleware بيقرا الـ DB.
+        $middleware->append(\App\Http\Middleware\ResolveTenant::class);
+
         $middleware->alias([
             // يستبدل throttle الافتراضي: عدّاد مستقل لكل روت/شخص + بيحترم إيقاف الـ Rate Limit من داشبورد الأدمن.
             'throttle'  => \App\Http\Middleware\UipThrottleRequests::class,

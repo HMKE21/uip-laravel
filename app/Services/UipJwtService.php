@@ -16,6 +16,10 @@ class UipJwtService
         if (!$secret) {
             throw new \RuntimeException('JWT_SECRET is not configured.');
         }
+        // عميل معزول: سر توقيع مشتق خاص بيه، فتوكن منصة/عميل تاني مينفعش يعدّي التحقق من التوقيع.
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            return hash_hmac('sha256', 'uip-tenant-jwt|' . \App\Services\Tenancy\TenantContext::id(), (string) $secret);
+        }
         return (string) $secret;
     }
 
@@ -36,6 +40,9 @@ class UipJwtService
         $header = ['typ' => 'JWT', 'alg' => 'HS256'];
         $now = time();
         $payload = array_merge($claims, ['iat' => $now, 'exp' => $now + $ttlSeconds]);
+        if (\App\Services\Tenancy\TenantContext::active()) {
+            $payload['tid'] = \App\Services\Tenancy\TenantContext::id();
+        }
 
         $segments = [
             self::b64UrlEncode(json_encode($header, JSON_UNESCAPED_SLASHES)),
@@ -83,7 +90,8 @@ class UipJwtService
 
         $keys = [];
         foreach ($bases as $base) {
-            $key = hash_hkdf('sha256', $base, 32, 'uip-access-token-v1');
+            $info = 'uip-access-token-v1' . (\App\Services\Tenancy\TenantContext::active() ? '|t' . \App\Services\Tenancy\TenantContext::id() : '');
+            $key = hash_hkdf('sha256', $base, 32, $info);
             $keys[substr(hash('sha256', 'kid|' . $key), 0, 8)] = $key;
         }
         return $keys;
@@ -164,6 +172,12 @@ class UipJwtService
 
         $payload = json_decode(self::b64UrlDecode($payloadB64), true);
         if (!is_array($payload) || !isset($payload['exp']) || $payload['exp'] < time()) {
+            return null;
+        }
+
+        // التوكن مربوط بالـ tenant: claim tid لازم يطابق العميل الحالي (والمنصة الأم من غير tid).
+        $claimTid = isset($payload['tid']) ? (int) $payload['tid'] : null;
+        if ($claimTid !== \App\Services\Tenancy\TenantContext::id()) {
             return null;
         }
 

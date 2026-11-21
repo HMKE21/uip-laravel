@@ -93,7 +93,7 @@ class UipAuthMiddleware
         // كاش 10 ثواني لحالة الحساب: كان استعلام users في كل ريكويست محمي (مع 10k مستخدم = آلاف الاستعلامات/ثانية).
         $uid = (int) $claims['sub'];
         try {
-            $acc = \Illuminate\Support\Facades\Cache::remember('acct:status:' . $uid, 10, function () use ($uid) {
+            $acc = \Illuminate\Support\Facades\Cache::remember('acct:status:' . \App\Services\Tenancy\TenantContext::ns() . $uid, 10, function () use ($uid) {
                 // first() من غير قايمة أعمدة: tokens_valid_after (المرحلة 5) تتجاب لو العمود موجود، ومن غير ما الكود يقع قبل الـ migration.
                 $r = \Illuminate\Support\Facades\DB::table('users')->where('id', $uid)->first();
                 return $r ? ['status' => $r->status, 'deleted_at' => $r->deleted_at, 'tokens_valid_after' => $r->tokens_valid_after ?? null] : false;

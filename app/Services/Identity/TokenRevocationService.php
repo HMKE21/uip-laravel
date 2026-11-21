@@ -49,7 +49,7 @@ class TokenRevocationService
         if (Schema::hasColumn('users', 'tokens_valid_after')) {
             DB::table('users')->where('id', $userId)->update(['tokens_valid_after' => now()]);
         }
-        Cache::forget('acct:status:' . $userId);
+        Cache::forget('acct:status:' . \App\Services\Tenancy\TenantContext::ns() . $userId);
         $this->audit->record($by ?? $userId, 'identity.revoke_all_tokens', 'User', $userId, null, ['reason' => $reason, 'sessions' => $res['sessions']]);
         return $res;
     }
