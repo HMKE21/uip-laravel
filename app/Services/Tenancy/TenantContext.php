@@ -24,12 +24,19 @@ class TenantContext
     /** القيم الأصلية للـ cache قبل العزل. @var array<string,mixed>|null */
     private static ?array $cacheOrig = null;
 
+    /** FRONTEND_URL الأصلي قبل ما نبدّله برابط العميل (الخطوة 6: روابط الإيميلات تروح على دومين العميل). */
+    private static ?string $frontOrig = null;
+    private static bool $frontSaved = false;
+
     /** للاختبارات بس: يرجّع الحالة الساكنة لأصلها. */
     public static function resetForTests(): void
     {
         self::$tenant = null;
         self::$central = null;
         self::$cacheOrig = null;
+        self::$frontOrig = null;
+        self::$frontSaved = false;
+        TenantMailBrand::flush();
         TenantStorage::reset();
     }
 
@@ -120,6 +127,8 @@ class TenantContext
         if (self::$central === null) {
             self::$central = DB::getDefaultConnection();
         }
+        // دومين العميل لازم يتقرا من قاعدة المنصة الأم قبل ما الـ default connection يتحوّل.
+        $front = TenantMailBrand::frontendUrl((int) $tenant->id);
         config(['database.connections.' . self::CONNECTION => self::connectionConfig((string) $tenant->db_name)]);
         DB::purge(self::CONNECTION);
         DB::setDefaultConnection(self::CONNECTION);
@@ -127,6 +136,11 @@ class TenantContext
         self::isolateCache((int) $tenant->id);
         TenantStorage::apply((int) $tenant->id);
         self::flushStaticMemos();
+        if (!self::$frontSaved) {
+            self::$frontOrig = (string) config('app.frontend_url', '');
+            self::$frontSaved = true;
+        }
+        config(['app.frontend_url' => $front ?: self::$frontOrig]);
     }
 
     public static function deactivate(): void
@@ -140,6 +154,9 @@ class TenantContext
         self::isolateCache(null);
         TenantStorage::apply(null);
         self::flushStaticMemos();
+        if (self::$frontSaved) {
+            config(['app.frontend_url' => self::$frontOrig]);
+        }
     }
 
     /** ذاكرة مؤقتة جوه الـ process (إعدادات المنصة...) لازم تتفضى مع كل تبديل، عشان إعدادات عميل متتسربش لعميل تاني. */
@@ -147,6 +164,7 @@ class TenantContext
     {
         try {
             \App\Support\PlatformPolicy::flush();
+            TenantMailBrand::flush(); // الهوية ممكن تتغيّر؛ الـ worker طويل العمر
         } catch (\Throwable $e) {
             // مش حرج
         }

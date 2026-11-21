@@ -8,6 +8,7 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
+use App\Services\Tenancy\TenantMailBrand;
 
 /**
  * Mailable عام واحد لكل إيميلات المشروع (دعوات، إعادة تعيين باسورد،
@@ -51,7 +52,8 @@ class GenericMail extends Mailable
 
     public function envelope(): Envelope
     {
-        $replyTo = config('mail.reply_to_address');
+        $tb = TenantMailBrand::current(); // White Label: workspace e-mails go out under the workspace's name
+        $replyTo = $tb['support_email'] ?? config('mail.reply_to_address');
 
         if ($this->replyToEmail) {
             $replyToList = [new Address($this->replyToEmail, (string) $this->replyToName)];
@@ -59,8 +61,11 @@ class GenericMail extends Mailable
             $replyToList = $replyTo ? [new Address($replyTo)] : [];
         }
 
+        $from = ($tb && config('mail.from.address')) ? new Address((string) config('mail.from.address'), $tb['name']) : null;
+
         return new Envelope(
-            subject: $this->mailSubject,
+            from: $from,
+            subject: $this->tenantText($this->mailSubject, $tb),
             replyTo: $replyToList,
         );
     }
@@ -154,35 +159,60 @@ class GenericMail extends Mailable
         ];
 
         $theme = $themes[$this->variant] ?? $themes['info'];
+        // White Label: the workspace's colour on the neutral / brand-coloured kinds (security, reset, success keep their meaning colours).
+        $tb = TenantMailBrand::current();
+        if ($tb && $tb['color'] && in_array($this->variant, ['invite', 'meeting', 'notification', 'info', 'test'], true)) {
+            $theme['from'] = $tb['color'];
+            $theme['to'] = $tb['color_dark'] ?: $tb['color'];
+            $theme['accent'] = $tb['color'];
+        }
+        if ($tb && $this->variant === 'info') {
+            $theme['badge'] = $ar ? 'رسالة' : 'Message';
+        }
         $theme['ring'] = 'rgba(255,255,255,0.22)';
 
         return $theme;
+    }
+
+    /** White Label: the exact word UIPE becomes the workspace's name in subject / heading / lines (no-op on the platform). */
+    private function tenantText(string $s, ?array $tb): string
+    {
+        if (!$tb || $s === '' || stripos($tb['name'], 'UIPE') !== false) {
+            return $s;
+        }
+        return preg_replace('/\bUIPE\b/u', $tb['name'], $s) ?? $s;
     }
 
     public function content(): Content
     {
         $ar      = $this->mailLocale === 'ar';
         $appName = (string) \App\Support\PlatformPolicy::value('platform_name');
+        $tb = TenantMailBrand::current();
+        $logo = env('MAIL_LOGO_URL');
+        if ($tb) {
+            $appName = $tb['name'];
+            $logo = $tb['logo_url']; // never the platform's logo on a workspace e-mail
+        }
 
         return new Content(
             view: 'emails.generic',
             with: [
-                'heading'   => $this->heading,
-                'lines'     => $this->lines,
+                'heading'   => $this->tenantText($this->heading, $tb),
+                'lines'     => array_map(fn ($l) => is_string($l) ? $this->tenantText($l, $tb) : $l, $this->lines),
                 'button'    => $this->button,
                 'locale'    => $this->mailLocale,
                 'meta'      => $this->meta ?? [],
                 'dir'       => $ar ? 'rtl' : 'ltr',
                 'align'     => $ar ? 'right' : 'left',
                 'theme'     => $this->theme(),
-                'preheader' => $this->lines[0] ?? $this->heading,
+                'preheader' => $this->tenantText((string) ($this->lines[0] ?? $this->heading), $tb),
                 // اسم المنصة من APP_NAME في .env (مش hardcoded).
                 'appName'   => $appName,
                 'initial'   => mb_substr($appName, 0, 1),
                 'year'      => date('Y'),
                 // لوجو اختياري (رابط https لصورة PNG/JPG، ارتفاع ~34px) — لو
                 // MAIL_LOGO_URL مش معرّف بيعرض حرف أول الاسم جوه مربع أبيض.
-                'logoUrl'   => env('MAIL_LOGO_URL'),
+                'logoUrl'   => $logo,
                 't'         => [
                     'arrow'    => $ar ? '←' : '→',
                     'copyLink' => $ar ? 'لو الزرار مش شغال، انسخ الرابط ده وافتحه في المتصفح:' : 'If the button doesn\'t work, copy and paste this link into your browser:',
