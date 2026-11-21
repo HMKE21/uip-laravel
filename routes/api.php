@@ -2875,3 +2875,6 @@ require __DIR__ . '/identity.php';
 
 // UIPE Mail (المرحلة 6) — Developer Center / OAuth / Developer API
 require __DIR__ . '/developer.php';
+
+// White-label tenancy (الخطوة 4) — ميزات كل عميل: طلب من العميل + موافقة أدمن المنصة
+require __DIR__ . '/tenant_features.php';

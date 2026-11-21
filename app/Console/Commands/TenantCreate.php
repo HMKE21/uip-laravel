@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Services\Tenancy\TenantFeatures;
 use App\Services\Tenancy\TenantProvisioner;
 use Illuminate\Console\Command;
 
@@ -14,7 +15,8 @@ class TenantCreate extends Command
         {--admin-name=Admin : اسم الأدمن}
         {--admin-password= : لو فاضي بيتولّد تلقائيًا ويتطبع مرة واحدة}
         {--slug= : اختياري}
-        {--kind=company : company|university|developer}';
+        {--kind=company : company|university|developer}
+        {--features= : ميزات تتفعّل من البداية، مفصولة بفاصلة (الافتراضي: ولا واحدة — الأساسيات بس)}';
 
     protected $description = 'ينشئ عميل معزول: قاعدة بيانات + migrations + أدوار وصلاحيات + أول أدمن + الدومين.';
 
@@ -40,6 +42,17 @@ class TenantCreate extends Command
         }
 
         $this->info('Tenant created.');
+
+        if ($list = trim((string) $this->option('features'))) {
+            $keys = $list === 'all' ? array_keys(TenantFeatures::catalog()) : array_values(array_filter(array_map('trim', explode(',', $list))));
+            foreach ($keys as $f) {
+                if (!array_key_exists($f, TenantFeatures::catalog())) {
+                    $this->warn("ميزة مش معروفة اتخطّت: {$f}");
+                    continue;
+                }
+                TenantFeatures::decide((int) $r['tenant_id'], $f, 'enabled', null, 'enabled at creation');
+            }
+        }
         $this->table(['Field', 'Value'], [
             ['id', $r['tenant_id']], ['public_id', $r['public_id']], ['database', $r['db_name']],
             ['domain', $r['domain']], ['admin email', $r['admin_email']],

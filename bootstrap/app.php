@@ -63,6 +63,8 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Multi-tenancy: يحدد العميل من الدومين ويبدّل قاعدة البيانات. global (بعد TrustProxies) عشان يسبق كل middleware بيقرا الـ DB.
         $middleware->append(\App\Http\Middleware\ResolveTenant::class);
+        // الخطوة 4: يقفل الميزات اللي مش مفعّلة للعميل (403). لازم بعد ResolveTenant مباشرة.
+        $middleware->append(\App\Http\Middleware\TenantFeatureGate::class);
 
         $middleware->alias([
             // يستبدل throttle الافتراضي: عدّاد مستقل لكل روت/شخص + بيحترم إيقاف الـ Rate Limit من داشبورد الأدمن.
@@ -100,6 +102,8 @@ return Application::configure(basePath: dirname(__DIR__))
             // UIPE Mail (المرحلة 7): قواعد IP (block/allow) على /api/v1/mail/*. بعد uip.auth.
             'mail.ip' => \App\Http\Middleware\UipMailIpMiddleware::class,
             'mail.access' => \App\Http\Middleware\UipMailAccessMiddleware::class,
+            // uip.scope:tenant (جوه عميل بس) | uip.scope:platform (المنصة الأم بس) — شوف docblock الميدلوير.
+            'uip.scope' => \App\Http\Middleware\UipTenantScopeMiddleware::class,
         ]);
 
         // المكالمات: الـ SDP لازم ينتهي بـ \r\n. TrimStrings الافتراضي كان بيشيله فالمستلم يرفض الـ offer
