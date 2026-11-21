@@ -8,6 +8,7 @@ use App\Services\Developer\DeveloperAppService;
 use App\Services\Developer\WebhookService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -26,10 +27,11 @@ final class TenantService
         'branding' => ['owner', 'admin'],
         'members' => ['owner', 'admin'],
         'domains' => ['owner', 'admin'],
+        'embed' => ['owner', 'admin'],
         'delete' => ['owner'],
     ];
 
-    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs, private DevUsageService $usage)
+    public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs, private DevUsageService $usage, private TenantParticipantService $participants, private TenantEmbedService $embed)
     {
     }
 
@@ -87,6 +89,8 @@ final class TenantService
             'apps' => DB::table('dev_apps')->where('tenant_id', $t->id)->count(),
             'keys' => DB::table('dev_api_keys')->where('tenant_id', $t->id)->whereNull('revoked_at')->count(),
             'webhooks' => DB::table('dev_webhooks')->where('tenant_id', $t->id)->count(),
+            'participants' => Schema::hasTable('tenant_participants') ? DB::table('tenant_participants')->where('tenant_id', $t->id)->count() : 0,
+            'embed_origins' => Schema::hasTable('tenant_embed_origins') ? DB::table('tenant_embed_origins')->where('tenant_id', $t->id)->count() : 0,
         ];
         return ['tenant' => $this->payload($t, $role), 'branding' => TenantBranding::get((int) $t->id), 'counts' => $counts, 'abilities' => array_keys(array_filter(self::ABILITIES, fn ($r) => in_array($role, $r, true)))];
     }
@@ -181,6 +185,11 @@ final class TenantService
             $this->apps->deleteApp((int) $a->owner_user_id, (int) $a->id);
         }
         DB::table('dev_api_keys')->where('tenant_id', $t->id)->update(['tenant_id' => null]);   // الصفوف الملغاة بتفضل في السجل من غير ربط
+        foreach (['tenant_embed_sessions', 'tenant_participants', 'tenant_embed_origins'] as $tbl) {   // من غير الاعتماد على cascade
+            if (Schema::hasTable($tbl)) {
+                DB::table($tbl)->where('tenant_id', $t->id)->delete();
+            }
+        }
         DB::table('tenants')->where('id', $t->id)->delete();                                      // members / branding / domains cascade
         $this->audit($userId, null, 'delete', $t->slug);
     }
@@ -441,6 +450,97 @@ final class TenantService
         $this->audit($userId, (int) $t->id, 'webhook.delete', '#' . $hookId);
     }
 
+    /* ------------------------------------------------------------------ participants (المستخدمين النهائيين للعميل — من غير حساب UIPE) */
+
+    public function listParticipants(int $userId, int $tenantId, array $f = []): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return $this->participants->list((int) $t->id, $f);
+    }
+
+    public function saveParticipant(int $userId, int $tenantId, array $in): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'resources');
+        $out = $this->participants->upsert((int) $t->id, $in, (int) $this->limits($t)['participants']);
+        $this->audit($userId, (int) $t->id, 'participant.' . ($out['created'] ? 'create' : 'update'), (string) $out['participant']['external_id']);
+        return ['participant' => $out['participant'], 'created' => $out['created']];
+    }
+
+    public function deleteParticipant(int $userId, int $tenantId, string $externalId): void
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'resources');
+        $this->participants->delete((int) $t->id, $externalId);
+        $this->audit($userId, (int) $t->id, 'participant.delete', $externalId);
+    }
+
+    /* ------------------------------------------------------------------ embed: النطاقات المسموحة */
+
+    public function embedOrigins(int $userId, int $tenantId): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return ['origins' => $this->embed->listOrigins((int) $t->id), 'frame_ancestors' => $this->embed->frameAncestors((int) $t->id)];
+    }
+
+    public function addEmbedOrigin(int $userId, int $tenantId, string $origin): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'embed');
+        $o = $this->embed->addOrigin((int) $t->id, $origin, (int) $this->limits($t)['embed_origins']);
+        $this->audit($userId, (int) $t->id, 'embed.origin.add', $o['origin']);
+        return $o;
+    }
+
+    public function removeEmbedOrigin(int $userId, int $tenantId, int $id): void
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'embed');
+        $this->embed->removeOrigin((int) $t->id, $id);
+        $this->audit($userId, (int) $t->id, 'embed.origin.remove', '#' . $id);
+    }
+
+    /* ------------------------------------------------------------------ نفس العمليات لمفتاح Developer API تابع لـ tenant (من غير عضو) */
+
+    private function activeTenant(int $tenantId): object
+    {
+        $t = DB::table('tenants')->where('id', $tenantId)->first();
+        if (!$t || $t->status !== 'active') {
+            $this->fail('This workspace is not available.', 403);
+        }
+        return $t;
+    }
+
+    public function apiListParticipants(int $tenantId, array $f): array
+    {
+        return $this->participants->list((int) $this->activeTenant($tenantId)->id, $f);
+    }
+
+    public function apiGetParticipant(int $tenantId, string $externalId): array
+    {
+        return $this->participants->get((int) $this->activeTenant($tenantId)->id, $externalId);
+    }
+
+    public function apiSaveParticipant(int $tenantId, array $in): array
+    {
+        $t = $this->activeTenant($tenantId);
+        $out = $this->participants->upsert((int) $t->id, $in, (int) $this->limits($t)['participants']);
+        $this->audit(0, (int) $t->id, 'participant.' . ($out['created'] ? 'create' : 'update'), (string) $out['participant']['external_id']);
+        return ['participant' => $out['participant'], 'created' => $out['created']];
+    }
+
+    public function apiDeleteParticipant(int $tenantId, string $externalId): void
+    {
+        $t = $this->activeTenant($tenantId);
+        $this->participants->delete((int) $t->id, $externalId);
+        $this->audit(0, (int) $t->id, 'participant.delete', $externalId);
+    }
+
+    /** توكن دخول Embed لمشارك (upsert في نفس الطلب). */
+    public function apiCreateEmbedSession(int $tenantId, array $in): array
+    {
+        $t = $this->activeTenant($tenantId);
+        $out = $this->embed->createSession($t, $in, (int) $this->limits($t)['participants']);
+        $this->audit(0, (int) $t->id, 'embed.session', (string) $out['participant']['external_id']);
+        return $out;
+    }
+
     /** استهلاك الـ Workspace (Rate Limit Dashboard) بنفس شكل /developer/usage — مفاتيح وتطبيقات الـ tenant بس. ?range=1h|24h|7d */
     public function usageReport(int $userId, int $tenantId, string $range): array
     {
@@ -554,7 +654,7 @@ final class TenantService
 
     private function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
     {
-        $this->logs->record(['user_id' => $userId, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
+        $this->logs->record(['user_id' => $userId ?: null, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
             'note' => $note]);
     }
 }

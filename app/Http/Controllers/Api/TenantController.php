@@ -178,6 +178,50 @@ class TenantController extends Controller
         });
     }
 
+    /* ---- participants (المستخدم النهائي عند العميل) */
+    public function participants(Request $r, int $id)
+    {
+        $f = $r->validate(['q' => 'nullable|string|max:100', 'role' => 'nullable|string|max:12', 'page' => 'nullable|integer|min:1', 'per_page' => 'nullable|integer|min:1|max:100']);
+        return $this->dom(fn () => $this->tenants->listParticipants($this->uid($r), $id, $f));
+    }
+
+    public function saveParticipant(Request $r, int $id)
+    {
+        $in = $r->validate(['external_id' => 'required|string|max:128', 'name' => 'nullable|string|max:160', 'email' => 'nullable|string|max:190', 'role' => 'nullable|string|max:12', 'meta' => 'nullable|array']);
+        $in = array_intersect_key($in, $r->all());   // الحقل اللي ماتبعتش مايتغيرش (upsert جزئي)
+        return $this->dom(function () use ($r, $id, $in) {
+            return $this->tenants->saveParticipant($this->uid($r), $id, $in);
+        });
+    }
+
+    public function deleteParticipant(Request $r, int $id, string $externalId)
+    {
+        return $this->dom(function () use ($r, $id, $externalId) {
+            $this->tenants->deleteParticipant($this->uid($r), $id, $externalId);
+            return null;
+        });
+    }
+
+    /* ---- embed: النطاقات المسموح تضمّن فيها الـ iframe */
+    public function embedOrigins(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->tenants->embedOrigins($this->uid($r), $id));
+    }
+
+    public function addEmbedOrigin(Request $r, int $id)
+    {
+        $in = $r->validate(['origin' => 'required|string|max:190']);
+        return $this->dom(fn () => ['origin' => $this->tenants->addEmbedOrigin($this->uid($r), $id, $in['origin'])] + $this->tenants->embedOrigins($this->uid($r), $id), 201);
+    }
+
+    public function removeEmbedOrigin(Request $r, int $id, int $originId)
+    {
+        return $this->dom(function () use ($r, $id, $originId) {
+            $this->tenants->removeEmbedOrigin($this->uid($r), $id, $originId);
+            return null;
+        });
+    }
+
     /* ---- usage + logs (isolated per tenant) */
     public function usage(Request $r, int $id)
     {

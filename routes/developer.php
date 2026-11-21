@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\DevAdminController;
 use App\Http\Controllers\Api\DevApiController;
+use App\Http\Controllers\Api\DevParticipantController;
+use App\Http\Controllers\Api\EmbedPublicController;
 use App\Http\Controllers\Api\DevDocsController;
 use App\Http\Controllers\Api\DevSdkDownloadController;
 use App\Http\Controllers\Api\TenantAdminController;
@@ -94,6 +96,12 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
         Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
         Route::delete('/apps/{appId}', [TenantController::class, 'deleteApp'])->whereNumber('appId')->middleware('throttle:20,1');
+        Route::get('/participants', [TenantController::class, 'participants'])->middleware('throttle:120,1');
+        Route::post('/participants', [TenantController::class, 'saveParticipant'])->middleware('throttle:120,1');
+        Route::delete('/participants/{externalId}', [TenantController::class, 'deleteParticipant'])->where('externalId', '[A-Za-z0-9._:@\-]+')->middleware('throttle:60,1');
+        Route::get('/embed-origins', [TenantController::class, 'embedOrigins'])->middleware('throttle:120,1');
+        Route::post('/embed-origins', [TenantController::class, 'addEmbedOrigin'])->middleware('throttle:30,1');
+        Route::delete('/embed-origins/{originId}', [TenantController::class, 'removeEmbedOrigin'])->whereNumber('originId')->middleware('throttle:30,1');
         Route::get('/usage', [TenantController::class, 'usage'])->middleware('throttle:60,1');
         Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
         Route::get('/keys', [TenantController::class, 'keys'])->middleware('throttle:120,1');
@@ -157,6 +165,12 @@ Route::prefix('dev/v1')->group(function () {
     // White Label: هوية الجهة اللي بتخدم الدومين + نقطة `ask` بتاعة Caddy on-demand TLS. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
     Route::get('/tenant/branding', [TenantPublicController::class, 'branding'])->middleware('throttle:120,1');
     Route::get('/tenant/domain-check', [TenantPublicController::class, 'domainCheck'])->middleware('throttle:300,1');
+    // Embed SDK (الخطوة 2): صفحة الـ iframe + تبديل التوكن + جلسة الـ iframe + الـ loader. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
+    Route::get('/embed/loader.js', [EmbedPublicController::class, 'loader'])->middleware('throttle:120,1');
+    Route::get('/embed/frame', [EmbedPublicController::class, 'frame'])->middleware('throttle:120,1');
+    Route::post('/embed/exchange', [EmbedPublicController::class, 'exchange'])->middleware('throttle:60,1');
+    Route::get('/embed/session', [EmbedPublicController::class, 'session'])->middleware('throttle:120,1');
+    Route::delete('/embed/session', [EmbedPublicController::class, 'endSession'])->middleware('throttle:60,1');
     Route::get('/sdks/{lang}.zip', [DevSdkDownloadController::class, 'download'])->whereIn('lang', ['php', 'js', 'python'])->middleware('throttle:30,1');
 
     Route::get('/me', [DevApiController::class, 'me'])->middleware('dev.auth:profile.read');
@@ -187,6 +201,13 @@ Route::prefix('dev/v1')->group(function () {
     Route::get('/webhooks', [DevApiController::class, 'webhooks'])->middleware('dev.auth:webhooks.manage');
     Route::post('/webhooks', [DevApiController::class, 'createWebhook'])->middleware('dev.auth:webhooks.manage');
     Route::delete('/webhooks/{id}', [DevApiController::class, 'deleteWebhook'])->whereNumber('id')->middleware('dev.auth:webhooks.manage');
+
+    // المشاركين الخارجيين (المستخدم النهائي عند العميل) + توكن دخول الـ Embed — مفتاح tenant بس، live بس.
+    Route::get('/participants', [DevParticipantController::class, 'index'])->middleware('dev.auth:participants.manage');
+    Route::get('/participants/{external_id}', [DevParticipantController::class, 'show'])->where('external_id', '[A-Za-z0-9._:@\-]+')->middleware('dev.auth:participants.manage');
+    Route::put('/participants/{external_id}', [DevParticipantController::class, 'upsert'])->where('external_id', '[A-Za-z0-9._:@\-]+')->middleware('dev.auth:participants.manage');
+    Route::delete('/participants/{external_id}', [DevParticipantController::class, 'destroy'])->where('external_id', '[A-Za-z0-9._:@\-]+')->middleware('dev.auth:participants.manage');
+    Route::post('/embed/sessions', [DevParticipantController::class, 'embedSession'])->middleware('dev.auth:embed.sessions');
 
     Route::post('/sandbox/simulate-incoming', [DevApiController::class, 'sandboxSimulate'])->middleware('dev.auth:mail.read');
     Route::post('/sandbox/reset', [DevApiController::class, 'sandboxReset'])->middleware('dev.auth:mail.read');

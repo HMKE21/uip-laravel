@@ -17,6 +17,25 @@ return [
         'apps'    => (int) env('TENANT_MAX_APPS', 20),
         'keys'    => (int) env('TENANT_MAX_KEYS', 50),
         'webhooks' => (int) env('TENANT_MAX_WEBHOOKS', 20),
+        'participants' => (int) env('TENANT_MAX_PARTICIPANTS', 1000),
+        'embed_origins' => (int) env('TENANT_MAX_EMBED_ORIGINS', 20),
+    ],
+
+    /** أدوار المشاركين الخارجيين (المستخدم النهائي عند العميل — من غير حساب UIPE). */
+    'participant_roles' => ['participant', 'host', 'moderator', 'viewer'],
+
+    /** الخطوة 2: Embed SDK. */
+    'embed' => [
+        /** عمر توكن الدخول (مرة واحدة) بالثواني: الافتراضي والحد الأقصى. */
+        'join_ttl' => (int) env('TENANT_EMBED_JOIN_TTL', 120),
+        'join_ttl_max' => (int) env('TENANT_EMBED_JOIN_TTL_MAX', 900),
+        /** عمر جلسة الـ iframe بعد تبديل التوكن (ثواني). */
+        'session_ttl' => (int) env('TENANT_EMBED_SESSION_TTL', 7200),
+        /** اسم الـ global في الـ loader وبادئة رسائل postMessage (قابلة للتخصيص للـ white label). */
+        'global' => env('TENANT_EMBED_GLOBAL', 'UIPE'),
+        'namespace' => env('TENANT_EMBED_NAMESPACE', 'uipe'),
+        /** مصادر إضافية مسموحة في connect-src لصفحة الـ iframe (مثلًا wss://media.example.com للـ media server في الخطوة 3). مفصولة بمسافة. */
+        'connect_extra' => (string) env('TENANT_EMBED_CONNECT_EXTRA', ''),
     ],
 
     /** Features اللي أدمن المنصة بس يقدر يديها لـ tenant. */

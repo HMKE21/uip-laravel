@@ -16,7 +16,13 @@ class UipSecurityHeadersMiddleware
     {
         $response = $next($request);
 
+        // Embed iframe page (EmbedPublicController::frame): it sets its own CSP frame-ancestors (the tenant's allowed origins), Permissions-Policy
+        // and Referrer-Policy, and must NOT carry X-Frame-Options: DENY. Every other header still applies.
+        $ownHeaders = $request->attributes->get('uip_embed_frame') ? ['X-Frame-Options', 'Content-Security-Policy', 'Permissions-Policy', 'Referrer-Policy'] : [];
         foreach ((array) config('security.security_headers', []) as $name => $value) {
+            if (in_array($name, $ownHeaders, true)) {
+                continue;
+            }
             $response->headers->set($name, $value);
         }
 

@@ -79,6 +79,7 @@ final class DevOpenApi
             'in_reply_to_item_id' => self::int('Reply to this message id.'), 'schedule_at' => self::str('Send later (ISO 8601).', ['format' => 'date-time']),
         ]);
         $label = self::obj(['name' => self::str(null, ['maxLength' => 60]), 'color' => self::str('Hex color, e.g. #1a73e8.', ['maxLength' => 9])], ['name']);
+        $extParam = ['name' => 'external_id', 'in' => 'path', 'required' => true, 'schema' => self::str('Your own id for the user (letters, digits and . _ : @ -).', ['maxLength' => 128])];
         $idParam = ['name' => 'id', 'in' => 'path', 'required' => true, 'schema' => self::int()];
 
         return [
@@ -152,6 +153,36 @@ final class DevOpenApi
                 'data' => self::ref('WebhookWithSecret')],
             'DELETE /webhooks/{id}' => ['id' => 'deleteWebhook', 'tag' => 'Webhooks', 'summary' => 'Delete a webhook', 'modes' => 'both', 'path' => [$idParam],
                 'description' => 'Only webhooks of the credential\'s own mode can be deleted (`404` otherwise).', 'data' => null],
+
+            'GET /participants' => ['id' => 'listParticipants', 'tag' => 'Participants', 'summary' => 'List participants', 'modes' => 'live',
+                'description' => 'The end users of your workspace (employees, students…), identified by your own `external_id`. They do not need a UIPE account. Needs an API key that belongs to a workspace (`403 tenant_required` otherwise).',
+                'query' => [
+                    ['name' => 'q', 'schema' => self::str(null, ['maxLength' => 100]), 'description' => 'Search name, external_id or email.'],
+                    ['name' => 'role', 'schema' => self::str(null, ['enum' => array_values((array) config('tenancy.participant_roles'))])],
+                    ['name' => 'page', 'schema' => self::int(null, ['minimum' => 1, 'default' => 1])],
+                    ['name' => 'per_page', 'schema' => self::int(null, ['minimum' => 1, 'maximum' => 100, 'default' => 25])],
+                ], 'data' => self::ref('ParticipantPage')],
+            'GET /participants/{external_id}' => ['id' => 'getParticipant', 'tag' => 'Participants', 'summary' => 'Get a participant', 'modes' => 'live', 'path' => [$extParam],
+                'description' => 'Look a participant up by the id you use in your own system (`404` if unknown).', 'data' => self::ref('Participant')],
+            'PUT /participants/{external_id}' => ['id' => 'upsertParticipant', 'tag' => 'Participants', 'summary' => 'Create or update a participant', 'modes' => 'live', 'path' => [$extParam],
+                'description' => 'Idempotent upsert keyed by `external_id`. Returns `201` when created and `200` when updated. On update only the fields you send change. `name` is required on create.',
+                'body' => self::obj(['name' => self::str(null, ['maxLength' => 160]), 'email' => ['type' => ['string', 'null'], 'format' => 'email'],
+                    'role' => self::str(null, ['enum' => array_values((array) config('tenancy.participant_roles'))]), 'meta' => ['type' => ['object', 'null'], 'description' => 'Free-form JSON, at most 4 KB.']]),
+                'data' => self::ref('Participant')],
+            'DELETE /participants/{external_id}' => ['id' => 'deleteParticipant', 'tag' => 'Participants', 'summary' => 'Delete a participant', 'modes' => 'live', 'path' => [$extParam],
+                'description' => 'Deletes the participant and ends every embed session they hold.', 'data' => null],
+
+            'POST /embed/sessions' => ['id' => 'createEmbedSession', 'tag' => 'Embed', 'summary' => 'Create a join token for a participant', 'modes' => 'live', 'ok' => 201,
+                'description' => "Call this from **your server** (never from the browser) when one of your users opens a meeting page. It creates the participant if needed (send `name` the first time) and returns a short-lived, single-use `token` plus a ready `embed_url`.\n\n"
+                    . "Pass the result to `meetings.embed({ getToken })` in the browser, or open `embed_url` directly. The token is stored hashed, expires after `ttl` seconds (default " . (int) config('tenancy.embed.join_ttl', 120) . ", at most " . (int) config('tenancy.embed.join_ttl_max', 900) . ") and stops working after its first use.\n\n"
+                    . "The page that shows the iframe must be in the workspace's allowed origins, otherwise the browser refuses to display it. Send `origin` to also lock this token to one site.",
+                'body' => self::obj([
+                    'external_id' => self::str('Your id for the user.', ['maxLength' => 128]), 'name' => self::str('Required the first time this `external_id` is seen.', ['maxLength' => 160]),
+                    'email' => ['type' => ['string', 'null'], 'format' => 'email'], 'role' => self::str(null, ['enum' => array_values((array) config('tenancy.participant_roles'))]),
+                    'meta' => ['type' => ['object', 'null']], 'room' => self::str('Your meeting reference.', ['maxLength' => 128]),
+                    'origin' => self::str('Lock the token to this site, e.g. `https://app.example.com`. Must be an allowed origin.', ['maxLength' => 190]),
+                    'ttl' => self::int('Seconds the token stays valid.', ['minimum' => 15, 'maximum' => 3600]),
+                ], ['external_id']), 'bodyRequired' => true, 'data' => self::ref('EmbedSession')],
 
             'POST /sandbox/simulate-incoming' => ['id' => 'sandboxSimulateIncoming', 'tag' => 'Sandbox', 'summary' => 'Simulate an incoming message', 'modes' => 'sandbox', 'ok' => 201,
                 'description' => 'Drops a message in the sandbox inbox and fires `mail.message.received` to your sandbox webhooks. Sandbox credentials only.',
@@ -427,7 +458,7 @@ final class DevOpenApi
             ], ['success', 'data']),
             'ErrorEnvelope' => self::obj([
                 'success' => ['const' => false], 'message' => self::str('Human-readable, English.'), 'data' => ['type' => 'null'],
-                'errors' => self::obj(['code' => self::str('Stable machine-readable code.', ['enum' => ['missing_credentials', 'invalid_token', 'invalid_key', 'key_expired', 'token_expired', 'account_inactive', 'insufficient_scope', 'ip_not_allowed', 'app_suspended', 'app_not_approved', 'sandbox_only', 'sandbox_unsupported', 'rate_limited', 'disabled'] ])], [], true),
+                'errors' => self::obj(['code' => self::str('Stable machine-readable code.', ['enum' => ['missing_credentials', 'invalid_token', 'invalid_key', 'key_expired', 'token_expired', 'account_inactive', 'insufficient_scope', 'ip_not_allowed', 'app_suspended', 'app_not_approved', 'sandbox_only', 'sandbox_unsupported', 'tenant_required', 'origin_not_allowed', 'rate_limited', 'disabled'] ])], [], true),
                 'meta' => ['type' => 'object'],
             ], ['success', 'message']),
             'OAuthError' => self::obj(['error' => self::str(null, ['enum' => ['invalid_request', 'invalid_client', 'invalid_grant', 'invalid_scope', 'unsupported_grant_type', 'temporarily_unavailable']]), 'error_description' => self::str()], ['error']),
@@ -457,6 +488,17 @@ final class DevOpenApi
                 'last_status' => ['type' => ['string', 'null']], 'last_delivery_at' => ['type' => ['string', 'null'], 'format' => 'date-time'],
                 'disabled_at' => ['type' => ['string', 'null'], 'format' => 'date-time'], 'disabled_reason' => ['type' => ['string', 'null']], 'created_at' => ['type' => ['string', 'null'], 'format' => 'date-time'],
             ], ['id', 'url', 'events', 'mode', 'is_active']),
+            'Participant' => self::obj([
+                'external_id' => self::str(), 'name' => self::str(), 'email' => ['type' => ['string', 'null']], 'role' => self::str(null, ['enum' => array_values((array) config('tenancy.participant_roles'))]),
+                'meta' => ['type' => ['object', 'null'], 'additionalProperties' => true], 'last_seen_at' => ['type' => ['string', 'null'], 'format' => 'date-time'],
+                'created_at' => ['type' => ['string', 'null'], 'format' => 'date-time'], 'updated_at' => ['type' => ['string', 'null'], 'format' => 'date-time'],
+            ], ['external_id', 'name', 'role']),
+            'ParticipantPage' => self::obj(['items' => self::arr(self::ref('Participant')), 'meta' => self::obj(['total' => self::int(), 'page' => self::int(), 'per_page' => self::int(), 'pages' => self::int()])], ['items']),
+            'EmbedSession' => self::obj([
+                'token' => self::str('Single-use join token (`ejt_…`). Shown once.'), 'expires_at' => self::str(null, ['format' => 'date-time']),
+                'embed_url' => self::str('Open this in an iframe (or let the loader do it). Uses the workspace primary domain when it has one.'),
+                'participant' => self::ref('Participant'), 'room' => ['type' => ['string', 'null']], 'origin' => ['type' => ['string', 'null']],
+            ], ['token', 'expires_at', 'embed_url', 'participant']),
             'WebhookWithSecret' => ['allOf' => [self::ref('Webhook'), self::obj(['secret' => self::str('Signing secret. Shown once — store it now.')], ['secret'])]],
             'WebhookEvent' => self::obj([
                 'id' => self::str('Event id, same as `X-UIPE-Event-Id`. Stable across retries.'), 'type' => self::str(null, ['enum' => array_keys((array) config('developer.events', []))]),

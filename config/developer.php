@@ -57,6 +57,8 @@ return [
         'drive.write'         => ['sensitive' => true,  'en' => 'Save mail and attachments to your Drive',     'ar' => 'حفظ الرسائل والمرفقات في Drive'],
         'ai.use'              => ['sensitive' => false, 'en' => 'Use the AI assistant on your mail',           'ar' => 'استخدام المساعد الذكي على بريدك'],
         'notifications.write' => ['sensitive' => false, 'en' => 'Send you notifications',                      'ar' => 'إرسال إشعارات لك'],
+        'participants.manage' => ['sensitive' => true,  'en' => 'Manage your workspace participants',          'ar' => 'إدارة مشاركي مساحة العمل'],
+        'embed.sessions'      => ['sensitive' => true,  'en' => 'Create meeting join links for participants',  'ar' => 'إنشاء روابط دخول الاجتماعات للمشاركين'],
         'webhooks.manage'     => ['sensitive' => false, 'en' => 'Manage webhooks',                             'ar' => 'إدارة الـ Webhooks'],
     ],
 
