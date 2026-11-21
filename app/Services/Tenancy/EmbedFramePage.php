@@ -44,7 +44,7 @@ final class EmbedFramePage
     {
         $lang = ($brand['locale'] ?? 'en') === 'ar' ? 'ar' : 'en';
         $t = self::STR[$lang];
-        $theme = in_array($brand['theme'] ?? 'auto', ['light', 'dark', 'auto'], true) ? $brand['theme'] : 'auto';
+        $theme = in_array($brand['theme'] ?? 'auto', ['light', 'dark', 'auto'], true) ? ($brand['theme'] ?? 'auto') : 'auto';
         $p = self::color($brand['colors']['primary'] ?? null, '#2563eb');
         $a = self::color($brand['colors']['accent'] ?? null, '#7c3aed');
         $name = htmlspecialchars((string) ($brand['name'] ?? ''), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
