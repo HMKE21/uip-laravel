@@ -59,6 +59,12 @@ return [
     /**
      * العزل الكامل (white-label): كل عميل بقاعدة بيانات خاصة (tenants.mode = isolated).
      */
+    /** Launch (إنشاء منصة جاهزة بنفسه من مركز المطورين). الميزات دي بتتفعّل فورًا؛ أي ميزة تانية بتتبعت كطلب للأدمن. */
+    'launch' => [
+        'enabled' => filter_var(env('TENANT_LAUNCH_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'auto_features' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_AUTO_FEATURES', 'messaging,meetings,feed'))))),
+    ],
+
     'isolation' => [
         'enabled' => filter_var(env('TENANCY_ISOLATION', true), FILTER_VALIDATE_BOOLEAN),
         /** اسم connection في config/database.php اللي بيتنسخ منه إعدادات قواعد العملاء. فاضي = الـ default بتاع المنصة. */

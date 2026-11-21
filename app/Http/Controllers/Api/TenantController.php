@@ -30,6 +30,21 @@ class TenantController extends Controller
         return $this->dom(fn () => $this->tenants->create($this->uid($r), $in), 201);
     }
 
+    public function launchOptions(Request $r)
+    {
+        return $this->dom(fn () => $this->tenants->launchOptions());
+    }
+
+    public function launch(Request $r)
+    {
+        $in = $r->validate([
+            'name' => 'required|string|min:3|max:100', 'kind' => 'nullable|in:company,developer',
+            'template' => 'nullable|string|max:60', 'features' => 'nullable|array|max:40', 'features.*' => 'string|max:60',
+            'admin_name' => 'nullable|string|max:100', 'admin_email' => 'required|email|max:190', 'admin_password' => 'nullable|string|min:8|max:100',
+        ]);
+        return $this->dom(fn () => $this->tenants->launch($this->uid($r), $in), 201);
+    }
+
     public function show(Request $r, int $id)
     {
         return $this->dom(fn () => $this->tenants->show($this->uid($r), $id));

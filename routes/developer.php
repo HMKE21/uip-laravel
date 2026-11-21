@@ -79,6 +79,8 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     // Workspaces (Tenants) — الخطوة 1 من منصة Meeting/White Label: أعضاء وأدوار + branding + دومينات مخصصة + موارد API معزولة بـ tenant_id.
     Route::get('/tenants', [TenantController::class, 'index'])->middleware('throttle:120,1');
     Route::post('/tenants', [TenantController::class, 'store'])->middleware('throttle:10,1');
+    Route::get('/tenants/launch-options', [TenantController::class, 'launchOptions'])->middleware('throttle:60,1');
+    Route::post('/tenants/launch', [TenantController::class, 'launch'])->middleware('throttle:3,60');
     Route::prefix('/tenants/{id}')->where(['id' => '[0-9]+'])->group(function () {
         Route::get('/', [TenantController::class, 'show'])->middleware('throttle:120,1');
         Route::put('/', [TenantController::class, 'update'])->middleware('throttle:30,1');

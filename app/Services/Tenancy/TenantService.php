@@ -149,6 +149,111 @@ final class TenantService
         return $this->show($userId, (int) $id);
     }
 
+    /** الاختيارات المتاحة في معالج الإطلاق: القوالب والميزات (وأنهي بتتفعّل فورًا). */
+    public function launchOptions(): array
+    {
+        $auto = (array) config('tenancy.launch.auto_features', []);
+        $features = [];
+        foreach (TenantFeatures::catalog() as $key => $f) {
+            $features[] = ['key' => $key, 'label_en' => $f['label_en'] ?? $key, 'label_ar' => $f['label_ar'] ?? $key, 'instant' => in_array($key, $auto, true)];
+        }
+        return [
+            'enabled' => (bool) config('tenancy.launch.enabled', true) && (bool) config('tenancy.isolation.enabled', true) && TenantAddress::enabled(),
+            'templates' => array_values(array_map([TenantSiteTemplates::class, 'card'], TenantSiteTemplates::builtin())),
+            'features' => $features,
+        ];
+    }
+
+    /**
+     * إطلاق منصة معزولة بالكامل (Shopify-style): قاعدة بيانات + أدمن أول + قالب الموقع منشور + الميزات المختارة، والرابط /w/<slug> جاهز.
+     * المنشئ بيبقى owner في tenant_members (يدير المنصة من مركز المطورين). أدمن المنصة نفسها حساب منفصل جوّه قاعدتها.
+     * @return array{tenant:array,launch:array}
+     */
+    public function launch(int $userId, array $in): array
+    {
+        if (!$this->launchOptions()['enabled']) {
+            $this->fail('Launching platforms is not enabled.', 403);
+        }
+        $u = DB::table('users')->where('id', $userId)->first(['status', 'deleted_at']);
+        if (!$u || $u->deleted_at !== null || in_array($u->status, ['suspended', 'banned'], true)) {
+            $this->fail('Your account cannot launch a platform.', 403);
+        }
+        $name = trim((string) ($in['name'] ?? ''));
+        if (mb_strlen($name) < 3 || mb_strlen($name) > 100) {
+            $this->fail('The platform name must be 3 to 100 characters.');
+        }
+        $kind = (string) ($in['kind'] ?? 'company');
+        if (!in_array($kind, ['company', 'developer'], true)) {
+            $this->fail('Invalid platform type.');
+        }
+        if (DB::table('tenant_members')->where('user_id', $userId)->where('role', 'owner')->count() >= (int) config('tenancy.max_owned_per_user', 5)) {
+            $this->fail('You reached the maximum number of workspaces you can own.', 403);
+        }
+        $adminEmail = strtolower(trim((string) ($in['admin_email'] ?? '')));
+        if (filter_var($adminEmail, FILTER_VALIDATE_EMAIL) === false) {
+            $this->fail('Enter a valid email for the first admin.');
+        }
+        $adminPass = (string) ($in['admin_password'] ?? '');
+        if ($adminPass !== '' && strlen($adminPass) < 8) {
+            $this->fail('The admin password must be at least 8 characters.');
+        }
+        $catalog = array_keys(TenantFeatures::catalog());
+        $wanted = array_values(array_unique(array_map('strval', (array) ($in['features'] ?? []))));
+        foreach ($wanted as $f) {
+            if (!in_array($f, $catalog, true)) {
+                $this->fail("Unknown feature '{$f}'.");
+            }
+        }
+        $templateKey = (string) ($in['template'] ?? '');
+        if ($templateKey !== '' && !TenantSiteTemplates::find($templateKey)) {
+            $this->fail('Template not found.', 404);
+        }
+
+        @set_time_limit(300); // الـ migrations كلها بتتشغّل لقاعدة العميل الجديدة
+        @ignore_user_abort(true);
+        try {
+            $r = app(TenantProvisioner::class)->create([
+                'name' => $name, 'domain' => null, 'slug' => null, 'kind' => $kind, 'owner_user_id' => $userId,
+                'admin_email' => $adminEmail, 'admin_name' => trim((string) ($in['admin_name'] ?? '')) ?: 'Admin', 'admin_password' => $adminPass,
+            ]);
+        } catch (\InvalidArgumentException $e) {
+            $this->fail($e->getMessage());
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('Platform launch failed', ['user' => $userId, 'error' => $e->getMessage()]);
+            $this->fail('Could not create the platform right now. Please try again in a minute.', 500);
+        }
+        $id = (int) $r['tenant_id'];
+        DB::table('tenant_members')->insert(['tenant_id' => $id, 'user_id' => $userId, 'role' => 'owner', 'created_at' => now(), 'updated_at' => now()]);
+        $this->audit($userId, $id, 'launch', $kind);
+
+        $auto = array_values(array_intersect($wanted, (array) config('tenancy.launch.auto_features', [])));
+        $pending = array_values(array_diff($wanted, $auto));
+        foreach ($auto as $f) {
+            TenantFeatures::decide($id, $f, 'enabled', null, 'enabled at launch');
+        }
+        if ($pending) {
+            TenantFeatures::request($id, $pending, $userId, 'requested at launch');
+        }
+        if ($templateKey !== '') {
+            try { // فشل الموقع مينفعش يبوّظ الإطلاق: يختار القالب بعدين من منشئ الموقع
+                $site = app(TenantSiteService::class);
+                $site->applyTemplate($userId, $id, ['key' => $templateKey]);
+                $site->publish($userId, $id);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('Launch: site template not applied', ['tenant' => $id, 'error' => $e->getMessage()]);
+            }
+        }
+        $url = TenantAddress::urlFor($id);
+        return [
+            'tenant' => $this->show($userId, $id)['tenant'],
+            'launch' => [
+                'slug' => $r['slug'], 'url' => $url, 'login_url' => $url ? $url . '/login' : null,
+                'admin_email' => $adminEmail, 'admin_password' => $r['admin_password'], // مولّد وبيظهر مرة واحدة بس لو المستخدم مكتبش باسورد
+                'features_enabled' => $auto, 'features_pending' => $pending,
+            ],
+        ];
+    }
+
     public function rename(int $userId, int $tenantId, string $name): array
     {
         [$t] = $this->authorize($userId, $tenantId, 'branding');

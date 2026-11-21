@@ -24,8 +24,8 @@ class TenantProvisioner
         if (mb_strlen($name) < 3 || mb_strlen($name) > 100) {
             throw new \InvalidArgumentException('Name must be 3 to 100 characters.');
         }
-        $domain = TenantDomainService::normalize($in['domain']);
-        if ($db->table('tenant_domains')->where('domain', $domain)->exists()) {
+        $domain = !empty($in['domain']) ? TenantDomainService::normalize($in['domain']) : null; // من غير دومين: العميل بيدخل من رابط /w/<slug>
+        if ($domain !== null && $db->table('tenant_domains')->where('domain', $domain)->exists()) {
             throw new \InvalidArgumentException("Domain {$domain} is already registered.");
         }
         $email = strtolower(trim($in['admin_email']));
@@ -52,18 +52,20 @@ class TenantProvisioner
 
         $tenantId = (int) $db->table('tenants')->insertGetId([
             'public_id' => 'tnt_' . Str::lower(Str::random(20)), 'name' => $name, 'slug' => $slug, 'kind' => $kind,
-            'owner_user_id' => 0, 'status' => 'active', 'plan' => 'free',
+            'owner_user_id' => (int) ($in['owner_user_id'] ?? 0), 'status' => 'active', 'plan' => 'free',
             'mode' => 'isolated', 'db_name' => $dbName, 'db_status' => 'provisioning',
             'created_at' => now(), 'updated_at' => now(),
         ]);
         $createdDb = false;
         try {
             $db->table('tenant_branding')->insert(['tenant_id' => $tenantId, 'display_name' => $name, 'created_at' => now(), 'updated_at' => now()]);
-            $db->table('tenant_domains')->insert([
-                'tenant_id' => $tenantId, 'domain' => $domain, 'is_primary' => 1, 'status' => 'active',
-                'verification_token' => Str::random(32), 'verified_at' => now(), 'activated_at' => now(),
-                'created_at' => now(), 'updated_at' => now(),
-            ]);
+            if ($domain !== null) {
+                $db->table('tenant_domains')->insert([
+                    'tenant_id' => $tenantId, 'domain' => $domain, 'is_primary' => 1, 'status' => 'active',
+                    'verification_token' => Str::random(32), 'verified_at' => now(), 'activated_at' => now(),
+                    'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
 
             $log("Creating database {$dbName} ...");
             $this->createDatabase($dbName);
@@ -80,7 +82,9 @@ class TenantProvisioner
             });
 
             $db->table('tenants')->where('id', $tenantId)->update(['db_status' => 'ready', 'provisioned_at' => now(), 'updated_at' => now()]);
-            TenantResolver::forget($domain);
+            if ($domain !== null) {
+                TenantResolver::forget($domain);
+            }
         } catch (\Throwable $e) {
             // نرجّع كل حاجة زي ما كانت عشان الأمر يتعاد من غير بقايا.
             try {
@@ -98,7 +102,7 @@ class TenantProvisioner
         return [
             'tenant_id' => $tenantId,
             'public_id' => (string) $db->table('tenants')->where('id', $tenantId)->value('public_id'),
-            'db_name' => $dbName, 'domain' => $domain, 'admin_email' => $email, 'admin_password' => $plainPassword,
+            'db_name' => $dbName, 'slug' => $slug, 'domain' => $domain, 'admin_email' => $email, 'admin_password' => $plainPassword,
         ];
     }
 
@@ -150,7 +154,10 @@ class TenantProvisioner
     private function uniqueSlug($db, string $base): string
     {
         $slug = Str::slug($base) ?: 'tenant';
-        $slug = substr($slug, 0, 40);
+        $slug = rtrim(substr($slug, 0, 36), '-');
+        if (strlen($slug) < 3) {
+            $slug .= '-hub'; // الـ slug لازم 3 حروف على الأقل (TenantAddress::PATTERN)
+        }
         $try = $slug;
         for ($i = 2; $db->table('tenants')->where('slug', $try)->exists(); $i++) {
             $try = $slug . '-' . $i;
