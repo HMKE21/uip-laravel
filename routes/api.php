@@ -215,6 +215,12 @@ Route::prefix('v1')->group(function () {
         Route::post('/magic-link/verify', [\App\Http\Controllers\Api\Auth\MagicLinkController::class, 'verify'])->middleware('throttle:20,1');
         Route::get('/tenant-oidc/config', [\App\Http\Controllers\Api\Auth\TenantOidcController::class, 'config'])->middleware('throttle:60,1');
         Route::post('/tenant-oidc', [\App\Http\Controllers\Api\Auth\TenantOidcController::class, 'submit'])->middleware('throttle:20,1');
+        // SSO بـ SAML 2.0 (SP-initiated). الـ acs بيستقبل POST من الـ IdP نفسه (من غير X-Tenant-Domain؛ المنصة من الـ id).
+        Route::get('/tenant-saml/config', [\App\Http\Controllers\Api\Auth\TenantSamlController::class, 'config'])->middleware('throttle:60,1');
+        Route::post('/tenant-saml/start', [\App\Http\Controllers\Api\Auth\TenantSamlController::class, 'start'])->middleware('throttle:20,1');
+        Route::post('/tenant-saml/exchange', [\App\Http\Controllers\Api\Auth\TenantSamlController::class, 'exchange'])->middleware('throttle:20,1');
+        Route::post('/tenant-saml/acs/{tenantId}', [\App\Http\Controllers\Api\Auth\TenantSamlController::class, 'acs'])->whereNumber('tenantId')->middleware('throttle:60,1');
+        Route::get('/tenant-saml/metadata/{tenantId}', [\App\Http\Controllers\Api\Auth\TenantSamlController::class, 'metadata'])->whereNumber('tenantId')->middleware('throttle:60,1');
 
         // Sign in / sign up with GitHub (ويب بس). نافذة OAuth + polling بـ nonce؛ بعد التحقق نفس مسار جوجل (/google/complete و /google/restore).
         Route::get('/github/config', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'config']);

@@ -107,6 +107,7 @@ class TenantController extends Controller
             'password.require_special' => 'nullable|boolean', 'password.expire_days' => 'nullable|integer|min:0|max:3650',
             'magic_link' => 'nullable|boolean', 'passkeys' => 'nullable|boolean',
             'oidc' => 'nullable|array', 'oidc.enabled' => 'nullable|boolean', 'oidc.issuer' => 'nullable|string|max:300', 'oidc.client_id' => 'nullable|string|max:200', 'oidc.label' => 'nullable|string|max:40',
+            'saml' => 'nullable|array', 'saml.enabled' => 'nullable|boolean', 'saml.idp_entity_id' => 'nullable|string|max:300', 'saml.sso_url' => 'nullable|string|max:500', 'saml.certificate' => 'nullable|string|max:30000', 'saml.label' => 'nullable|string|max:40',
             'mail' => 'nullable|array', 'mail.from_enabled' => 'nullable|boolean', 'mail.from_address' => 'nullable|string|max:190',
         ]);
         return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->save($this->uid($r), $id, $in));
@@ -116,6 +117,12 @@ class TenantController extends Controller
     {
         $in = $r->validate(['issuer' => 'required|string|max:300']);
         return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->testOidc($this->uid($r), $id, $in['issuer']));
+    }
+
+    public function testSaml(Request $r, int $id)
+    {
+        $in = $r->validate(['metadata_url' => 'nullable|string|max:500', 'metadata_xml' => 'nullable|string|max:600000']);
+        return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->testSaml($this->uid($r), $id, $in['metadata_url'] ?? null, $in['metadata_xml'] ?? null));
     }
 
     public function launchOptions(Request $r)

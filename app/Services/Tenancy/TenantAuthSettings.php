@@ -37,6 +37,7 @@ final class TenantAuthSettings
             'magic_link' => false,
             'passkeys' => false,
             'oidc' => ['enabled' => false, 'issuer' => '', 'client_id' => '', 'label' => ''],
+            'saml' => ['enabled' => false, 'idp_entity_id' => '', 'sso_url' => '', 'certificate' => '', 'label' => ''],
             'mail' => ['from_enabled' => false, 'from_address' => ''],
         ];
     }
@@ -93,6 +94,13 @@ final class TenantAuthSettings
         $cid = trim((string) ($o['client_id'] ?? ''));
         $issuerOk = $issuer !== '' && strlen($issuer) <= 300 && TenantOidc::issuerSafe($issuer, false);
         $cidOk = $cid !== '' && preg_match('/^[\x21-\x7e]{3,200}$/', $cid) === 1;
+        $sm = is_array($in['saml'] ?? null) ? $in['saml'] : [];
+        $samlEid = trim((string) ($sm['idp_entity_id'] ?? ''));
+        $samlEidOk = $samlEid !== '' && strlen($samlEid) <= 300 && preg_match('/[\x00-\x1f<>"]/', $samlEid) !== 1;
+        $samlSso = trim((string) ($sm['sso_url'] ?? ''));
+        $samlSsoOk = TenantSaml::ssoUrlSafe($samlSso);
+        $samlCerts = TenantSaml::certificates((string) ($sm['certificate'] ?? ''));
+        $samlOk = $samlEidOk && $samlSsoOk && $samlCerts !== [];
         $m = is_array($in['mail'] ?? null) ? $in['mail'] : [];
         $from = strtolower(trim((string) ($m['from_address'] ?? '')));
         $fromOk = $from !== '' && strlen($from) <= 190 && filter_var($from, FILTER_VALIDATE_EMAIL) !== false;
@@ -124,6 +132,13 @@ final class TenantAuthSettings
                 'issuer' => $issuerOk ? $issuer : '',
                 'client_id' => $cidOk ? $cid : '',
                 'label' => mb_substr(trim(strip_tags((string) ($o['label'] ?? ''))), 0, 40),
+            ],
+            'saml' => [
+                'enabled' => $bool($sm['enabled'] ?? null, false) && $samlOk,
+                'idp_entity_id' => $samlEidOk ? $samlEid : '',
+                'sso_url' => $samlSsoOk ? $samlSso : '',
+                'certificate' => $samlCerts !== [] ? implode('', $samlCerts) : '',
+                'label' => mb_substr(trim(strip_tags((string) ($sm['label'] ?? ''))), 0, 40),
             ],
             'mail' => [
                 'from_enabled' => $bool($m['from_enabled'] ?? null, false) && $fromOk,
@@ -171,6 +186,22 @@ final class TenantAuthSettings
         }
         if (!empty($o['enabled']) && ($issuer === '' || trim((string) ($o['client_id'] ?? '')) === '')) {
             throw new \InvalidArgumentException('Enter the SSO issuer URL and client ID before turning SSO on.');
+        }
+        $sm = is_array($in['saml'] ?? null) ? $in['saml'] : [];
+        $sEid = trim((string) ($sm['idp_entity_id'] ?? ''));
+        $sSso = trim((string) ($sm['sso_url'] ?? ''));
+        $sCert = trim((string) ($sm['certificate'] ?? ''));
+        if ($sSso !== '' && !TenantSaml::ssoUrlSafe($sSso)) {
+            throw new \InvalidArgumentException('The SAML sign-in URL must be an https:// address from your identity provider.');
+        }
+        if ($sCert !== '' && TenantSaml::certificates($sCert) === []) {
+            throw new \InvalidArgumentException('The SAML signing certificate is not valid. Paste the X.509 certificate (PEM) of your identity provider — RSA 2048-bit or stronger.');
+        }
+        if ($sEid !== '' && (strlen($sEid) > 300 || preg_match('/[\x00-\x1f<>"]/', $sEid) === 1)) {
+            throw new \InvalidArgumentException('The SAML identity provider ID (entity ID) is not valid.');
+        }
+        if (!empty($sm['enabled']) && ($sEid === '' || $sSso === '' || $sCert === '')) {
+            throw new \InvalidArgumentException('Enter the SAML identity provider ID, sign-in URL and signing certificate before turning SAML on (or import your provider metadata).');
         }
         $m = is_array($in['mail'] ?? null) ? $in['mail'] : [];
         $from = trim((string) ($m['from_address'] ?? ''));

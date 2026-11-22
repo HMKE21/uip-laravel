@@ -109,6 +109,8 @@ class TenantSignInController extends Controller
                     'passkeys' => !empty($sec['passkeys']),
                     'sso' => !empty($sec['oidc']['enabled']),
                     'sso_label' => ($sec['oidc']['label'] ?? '') !== '' ? $sec['oidc']['label'] : null,
+                    'saml' => !empty($sec['saml']['enabled']),
+                    'saml_label' => ($sec['saml']['label'] ?? '') !== '' ? $sec['saml']['label'] : null,
                 ],
                 'allowed_domains' => (array) ($sec['allowed_domains'] ?? []),
                 'password_rules' => [

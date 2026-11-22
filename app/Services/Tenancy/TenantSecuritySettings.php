@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Cache;
  */
 final class TenantSecuritySettings
 {
-    private const ISOLATED_ONLY = ['session_hours', 'password', 'magic_link', 'passkeys', 'oidc', 'mail'];
+    private const ISOLATED_ONLY = ['session_hours', 'password', 'magic_link', 'passkeys', 'oidc', 'saml', 'mail'];
 
     public function __construct(private TenantService $tenants)
     {
@@ -48,7 +48,15 @@ final class TenantSecuritySettings
             'redirect_uri' => $redirects[0] ?? ($base ? $base . '/sso/callback' : null),
             'active_domains' => $domains,
             'passkeys_ready' => $this->passkeysReady($tid),
-            'sso' => ['protocols' => ['oidc'], 'saml' => false],
+            'sso' => ['protocols' => ['oidc', 'saml'], 'saml' => true],
+            // بيانات الـ SP اللي المالك بيدّيها لمسؤول الـ IdP (المنصات المعزولة بس).
+            'saml_sp' => $isolated ? [
+                'entity_id' => TenantSaml::entityId($tid),
+                'acs_url' => TenantSaml::acsUrl($tid),
+                'metadata_url' => TenantSaml::entityId($tid),
+                'nameid_format' => 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress',
+            ] : null,
+            'saml_certificates' => TenantSaml::certInfo((string) ($sec['saml']['certificate'] ?? '')),
         ];
     }
 
@@ -72,7 +80,7 @@ final class TenantSecuritySettings
                 $next[$k] = $in[$k];
             }
         }
-        foreach (['password', 'oidc', 'mail'] as $k) {
+        foreach (['password', 'oidc', 'saml', 'mail'] as $k) {
             if (array_key_exists($k, $in) && is_array($in[$k])) {
                 $next[$k] = array_merge((array) ($cur[$k] ?? []), $in[$k]);
             }
@@ -125,6 +133,31 @@ final class TenantSecuritySettings
         }
         $this->tenants->audit($userId, $tid, 'security');
         return $this->payload($t);
+    }
+
+    /**
+     * استيراد إعدادات SAML من metadata الـ IdP (رابط https أو XML ملصوق) من غير ما يحفظ حاجة:
+     * بيرجّع entity_id و sso_url و certificate عشان الفرونت يملا بيهم الخانات.
+     */
+    public function testSaml(int $userId, int $tenantId, ?string $url, ?string $xml): array
+    {
+        $this->tenants->authorize($userId, $tenantId, 'site');
+        $url = trim((string) $url);
+        $xml = trim((string) $xml);
+        if ($url === '' && $xml === '') {
+            $this->fail('Provide the metadata URL or paste the metadata XML.');
+        }
+        if ($xml === '') {
+            $xml = (string) TenantSaml::fetchMetadata($url);
+            if ($xml === '') {
+                $this->fail('We could not download the metadata from that address. It must be a public https:// URL that returns the SAML metadata XML.');
+            }
+        }
+        $m = TenantSaml::parseIdpMetadata($xml);
+        if ($m === null) {
+            $this->fail('We could not read a SAML identity provider (entity ID, HTTP-Redirect sign-in URL and RSA signing certificate) from that metadata.');
+        }
+        return ['ok' => true] + $m + ['certificates' => TenantSaml::certInfo($m['certificate'])];
     }
 
     /** اختبار اتصال SSO: بيقرا الـ discovery من الـ issuer ويرجّع النتيجة من غير ما يحفظ حاجة. */
