@@ -9,7 +9,45 @@ namespace App\Services\Tenancy;
 final class TenantSiteTemplates
 {
     public const ICONS = ['video', 'message', 'shield', 'users', 'calendar', 'file', 'chart', 'bolt', 'globe', 'lock', 'star', 'heart', 'book', 'cap'];
-    public const FONTS = ['system', 'inter', 'cairo', 'tajawal', 'poppins', 'ibm-plex-sans-arabic', 'merriweather'];
+    /** الخطوط المسموحة: المفتاح => [الاسم، المجموعة، يدعم عربي، اسم العائلة في Google Fonts (null = خط النظام)]. الفرونت بيحمّل العائلة من Google Fonts. */
+    public const FONT_META = [
+        'system' => ['System default', 'sans', true, null],
+        'inter' => ['Inter', 'sans', false, 'Inter'],
+        'cairo' => ['Cairo', 'sans', true, 'Cairo'],
+        'tajawal' => ['Tajawal', 'sans', true, 'Tajawal'],
+        'poppins' => ['Poppins', 'sans', false, 'Poppins'],
+        'ibm-plex-sans-arabic' => ['IBM Plex Sans Arabic', 'sans', true, 'IBM Plex Sans Arabic'],
+        'merriweather' => ['Merriweather', 'serif', false, 'Merriweather'],
+        'almarai' => ['Almarai', 'sans', true, 'Almarai'],
+        'noto-sans-arabic' => ['Noto Sans Arabic', 'sans', true, 'Noto Sans Arabic'],
+        'noto-kufi-arabic' => ['Noto Kufi Arabic', 'display', true, 'Noto Kufi Arabic'],
+        'readex-pro' => ['Readex Pro', 'sans', true, 'Readex Pro'],
+        'changa' => ['Changa', 'display', true, 'Changa'],
+        'el-messiri' => ['El Messiri', 'display', true, 'El Messiri'],
+        'amiri' => ['Amiri', 'serif', true, 'Amiri'],
+        'montserrat' => ['Montserrat', 'sans', false, 'Montserrat'],
+        'open-sans' => ['Open Sans', 'sans', false, 'Open Sans'],
+        'roboto' => ['Roboto', 'sans', false, 'Roboto'],
+        'lato' => ['Lato', 'sans', false, 'Lato'],
+        'nunito' => ['Nunito', 'sans', false, 'Nunito'],
+        'dm-sans' => ['DM Sans', 'sans', false, 'DM Sans'],
+        'space-grotesk' => ['Space Grotesk', 'display', false, 'Space Grotesk'],
+        'playfair-display' => ['Playfair Display', 'serif', false, 'Playfair Display'],
+        'lora' => ['Lora', 'serif', false, 'Lora'],
+    ];
+    public const FONTS = ['system', 'inter', 'cairo', 'tajawal', 'poppins', 'ibm-plex-sans-arabic', 'merriweather', 'almarai', 'noto-sans-arabic', 'noto-kufi-arabic', 'readex-pro', 'changa', 'el-messiri', 'amiri', 'montserrat', 'open-sans', 'roboto', 'lato', 'nunito', 'dm-sans', 'space-grotesk', 'playfair-display', 'lora'];
+    public const PAGE_KINDS = ['custom', 'about', 'contact'];
+    /** slugs صفحات محجوزة لمسارات الموقع نفسها. */
+    public const RESERVED_PAGE_SLUGS = ['login', 'blog', 'p', 'w', 'api', 'admin', 'register', 'signup', 'preview', 'sitemap', 'robots'];
+
+    public static function fontCatalog(): array
+    {
+        $out = [];
+        foreach (self::FONT_META as $key => [$label, $group, $arabic, $family]) {
+            $out[] = ['key' => $key, 'label' => $label, 'group' => $group, 'arabic' => $arabic, 'family' => $family];
+        }
+        return $out;
+    }
 
     /** نوع القسم => مخطط props. */
     public static function sectionSpecs(): array
@@ -23,7 +61,9 @@ final class TenantSiteTemplates
             'cta' => ['title' => 'i18n:90', 'text' => 'i18n:220', 'button_label' => 'i18n:30', 'button_url' => 'link'],
             'text' => ['title' => 'i18n:80', 'body' => 'i18n:1500'],
             'faq' => ['title' => 'i18n:80', 'items' => ['list', 10, ['q' => 'i18n:140', 'a' => 'i18n:500']]],
-            'contact' => ['title' => 'i18n:80', 'email' => 'email', 'phone' => 't:30', 'address' => 'i18n:160'],
+            'contact' => ['title' => 'i18n:80', 'email' => 'email', 'phone' => 't:30', 'address' => 'i18n:160', 'form' => 'bool'],
+            'team' => ['title' => 'i18n:80', 'items' => ['list', 8, ['name' => 't:60', 'role' => 'i18n:60', 'image_url' => 'img']]],
+            'gallery' => ['title' => 'i18n:80', 'items' => ['list', 12, ['image_url' => 'img', 'caption' => 'i18n:80']]],
             'logos' => ['title' => 'i18n:80', 'items' => ['list', 8, ['name' => 't:40', 'image_url' => 'img', 'url' => 'link']]],
         ];
     }
@@ -36,23 +76,49 @@ final class TenantSiteTemplates
                 'primary' => 'color', 'accent' => 'color', 'background' => 'color', 'surface' => 'color', 'text' => 'color',
                 'font' => 'enum:' . implode('|', self::FONTS), 'radius' => 'enum:none|sm|md|lg|xl', 'mode' => 'enum:light|dark|auto',
                 'density' => 'enum:compact|comfortable|spacious',
+                // الخطوط: font = خط النص. font_heading = خط العناوين (same = نفس خط النص).
+                'font_heading' => 'enum:same|' . implode('|', self::FONTS), 'font_scale' => 'enum:md|sm|lg|xl', 'heading_weight' => 'enum:bold|medium|semibold|extrabold',
             ],
             'layout' => ['login_style' => 'enum:split|centered|card', 'nav_style' => 'enum:top|side', 'show_footer' => 'bool', 'hero_image_url' => 'img'],
             'texts' => ['login_title' => 'i18n:80', 'login_subtitle' => 'i18n:160', 'welcome' => 'i18n:120'],
             'nav' => ['list', (int) config('tenancy.site.max_nav', 8), ['label' => 'i18n:30', 'url' => 'link', 'new_tab' => 'bool']],
             'footer' => ['text' => 'i18n:200', 'links' => ['list', 6, ['label' => 'i18n:30', 'url' => 'link']]],
+            'seo' => self::seoSpec() + ['favicon' => 'img', 'robots' => 'enum:index|noindex'],
+            'blog' => ['enabled' => 'bool', 'title' => 'i18n:60', 'intro' => 'i18n:220', 'show_in_nav' => 'bool'],
         ];
+    }
+
+    /** SEO: عنوان (≤70) ووصف (≤160) وصورة مشاركة (https). بتتكرر على مستوى الموقع والصفحة والمقال. */
+    public static function seoSpec(): array
+    {
+        return ['title' => 'i18n:70', 'description' => 'i18n:160', 'share_image' => 'img'];
+    }
+
+    /** مخطط صفحة إضافية (من نحن / تواصل / مخصصة). sections حسب sectionSpecs. */
+    public static function pageSpec(): array
+    {
+        return ['kind' => 'enum:' . implode('|', self::PAGE_KINDS), 'enabled' => 'bool', 'show_in_nav' => 'bool', 'title' => 'i18n:60', 'seo' => self::seoSpec()];
+    }
+
+    /** مخطط مقال المدونة. */
+    public static function postSpec(): array
+    {
+        return ['published' => 'bool', 'title' => 'i18n:120', 'excerpt' => 'i18n:240', 'body' => 'i18n:4000', 'cover' => 'img', 'author' => 't:60', 'seo' => self::seoSpec()];
     }
 
     public static function emptySettings(): array
     {
         return [
-            'theme' => ['primary' => null, 'accent' => null, 'background' => null, 'surface' => null, 'text' => null, 'font' => 'system', 'radius' => 'md', 'mode' => 'auto', 'density' => 'comfortable'],
+            'theme' => ['primary' => null, 'accent' => null, 'background' => null, 'surface' => null, 'text' => null, 'font' => 'system', 'radius' => 'md', 'mode' => 'auto', 'density' => 'comfortable', 'font_heading' => 'same', 'font_scale' => 'md', 'heading_weight' => 'bold'],
             'layout' => ['login_style' => 'split', 'nav_style' => 'top', 'show_footer' => true, 'hero_image_url' => null],
             'texts' => ['login_title' => ['en' => '', 'ar' => ''], 'login_subtitle' => ['en' => '', 'ar' => ''], 'welcome' => ['en' => '', 'ar' => '']],
             'home' => ['sections' => []],
             'nav' => [],
             'footer' => ['text' => ['en' => '', 'ar' => ''], 'links' => []],
+            'seo' => ['title' => ['en' => '', 'ar' => ''], 'description' => ['en' => '', 'ar' => ''], 'share_image' => null, 'favicon' => null, 'robots' => 'index'],
+            'blog' => ['enabled' => false, 'title' => ['en' => 'Blog', 'ar' => 'المدونة'], 'intro' => ['en' => '', 'ar' => ''], 'show_in_nav' => true],
+            'pages' => [],
+            'posts' => [],
         ];
     }
 
@@ -135,6 +201,56 @@ final class TenantSiteTemplates
                     ]]]),
             ],
         ];
+        // صفحات جاهزة (من نحن / تواصل) بتتضاف لبعض القوالب. العميل يعدّلها أو يحذفها.
+        $about = fn () => ['id' => 'about', 'slug' => 'about', 'kind' => 'about', 'enabled' => true, 'show_in_nav' => true, 'title' => self::i('About us', 'من نحن'), 'seo' => [],
+            'sections' => [
+                self::sec('intro', 'text', ['title' => self::i('Who we are', 'احنا مين'), 'body' => self::i('Tell visitors about your story, mission and values.', 'احكي لزوارك عن قصتكم ورسالتكم وقيمكم.')]),
+                self::sec('team', 'team', ['title' => self::i('Our team', 'فريقنا'), 'items' => []]),
+            ]];
+        $contact = fn () => ['id' => 'contact', 'slug' => 'contact', 'kind' => 'contact', 'enabled' => true, 'show_in_nav' => true, 'title' => self::i('Contact', 'تواصل معنا'), 'seo' => [],
+            'sections' => [self::sec('contact', 'contact', ['title' => self::i('Send us a message', 'ابعتلنا رسالة'), 'email' => '', 'phone' => '', 'form' => true])]];
+        foreach (['classic', 'bold', 'campus', 'business'] as $k) {
+            $list[$k]['settings']['pages'] = [$about(), $contact()];
+        }
+
+        $list['startup'] = [
+            'name' => self::i('Startup', 'ستارت أب'), 'description' => self::i('Modern product landing with steps and logos.', 'صفحة منتج عصرية مع خطوات وشعارات.'), 'kind' => 'company',
+            'preview' => ['primary' => '#0EA5E9', 'accent' => '#F97316', 'background' => '#FFFFFF'],
+            'settings' => self::make(['theme' => ['primary' => '#0EA5E9', 'accent' => '#F97316', 'font' => 'dm-sans', 'font_heading' => 'space-grotesk', 'radius' => 'lg', 'heading_weight' => 'extrabold'], 'layout' => ['login_style' => 'card'],
+                'home' => ['sections' => [
+                    self::sec('hero', 'hero', ['title' => self::i('Ship faster together', 'اشتغلوا أسرع مع بعض'), 'subtitle' => self::i('Meetings, chat and files without the clutter.', 'اجتماعات ومحادثات وملفات من غير زحمة.'), 'cta_label' => self::i('Get started', 'ابدأ دلوقتي'), 'cta_url' => '/login', 'align' => 'center']),
+                    self::sec('logos', 'logos', ['title' => self::i('Teams that trust us', 'فرق بتثق فينا'), 'items' => []]),
+                    $features(),
+                    self::sec('steps', 'steps', ['title' => self::i('Up and running in minutes', 'شغّال في دقايق'), 'items' => [['title' => self::i('Sign in', 'سجّل دخولك'), 'text' => self::i('Use your work account.', 'بحساب الشغل.')], ['title' => self::i('Invite your team', 'ادعي فريقك'), 'text' => self::i('Everyone joins in one click.', 'الكل ينضم بضغطة.')]]]),
+                    self::sec('cta', 'cta', ['title' => self::i('Ready to start?', 'جاهز تبدأ؟'), 'button_label' => self::i('Sign in', 'تسجيل الدخول'), 'button_url' => '/login']),
+                ]], 'pages' => [$about(), $contact()]]),
+        ];
+        $list['academy'] = [
+            'name' => self::i('Academy', 'أكاديمية'), 'description' => self::i('Training centres and schools: numbers, questions and contact.', 'مراكز التدريب والمدارس: أرقام وأسئلة وتواصل.'), 'kind' => 'university',
+            'preview' => ['primary' => '#1D4ED8', 'accent' => '#F59E0B', 'background' => '#F8FAFC'],
+            'settings' => self::make(['theme' => ['primary' => '#1D4ED8', 'accent' => '#F59E0B', 'background' => '#F8FAFC', 'font' => 'almarai', 'font_heading' => 'el-messiri', 'radius' => 'lg'], 'layout' => ['login_style' => 'split'],
+                'texts' => ['login_title' => self::i('Learner portal', 'بوابة الدارسين'), 'login_subtitle' => self::i('Sign in with your academy account', 'سجّل بحساب الأكاديمية')],
+                'home' => ['sections' => [
+                    self::sec('hero', 'hero', ['title' => self::i('Learn at your own pace', 'اتعلّم بسرعتك'), 'subtitle' => self::i('Live classes, recordings and assignments in one place.', 'حصص مباشرة وتسجيلات وتكليفات في مكان واحد.'), 'cta_label' => self::i('Sign in', 'تسجيل الدخول'), 'cta_url' => '/login', 'align' => 'start']),
+                    self::sec('stats', 'stats', ['items' => [['value' => '50+', 'label' => self::i('Courses', 'كورس')], ['value' => '5k', 'label' => self::i('Learners', 'دارس')], ['value' => '4.8', 'label' => self::i('Rating', 'تقييم')]]]),
+                    $features(),
+                    self::sec('faq', 'faq', ['title' => self::i('Questions', 'أسئلة شائعة'), 'items' => [['q' => self::i('How do I join a class?', 'إزاي أدخل الحصة؟'), 'a' => self::i('Open your schedule and press Join.', 'افتح جدولك واضغط انضمام.')]]]),
+                    self::sec('contact', 'contact', ['title' => self::i('Need help?', 'محتاج مساعدة؟'), 'email' => '', 'phone' => '', 'form' => true]),
+                ]], 'pages' => [$about(), $contact()], 'blog' => ['enabled' => true]]),
+        ];
+        $list['elegant'] = [
+            'name' => self::i('Elegant', 'أنيق'), 'description' => self::i('Warm serif look for clinics, studios and boutiques.', 'شكل دافئ بخطوط serif للعيادات والاستوديوهات والبوتيكات.'), 'kind' => 'any',
+            'preview' => ['primary' => '#7C2D12', 'accent' => '#B45309', 'background' => '#FFFBEB'],
+            'settings' => self::make(['theme' => ['primary' => '#7C2D12', 'accent' => '#B45309', 'background' => '#FFFBEB', 'surface' => '#FFFFFF', 'text' => '#1C1917', 'font' => 'lora', 'font_heading' => 'playfair-display', 'radius' => 'sm', 'density' => 'spacious', 'mode' => 'light'],
+                'layout' => ['login_style' => 'centered'],
+                'home' => ['sections' => [
+                    self::sec('hero', 'hero', ['title' => self::i('Quietly better', 'أهدى وأحسن'), 'subtitle' => self::i('A calm workspace for people who value details.', 'مساحة هادية لناس بتهتم بالتفاصيل.'), 'cta_label' => self::i('Sign in', 'تسجيل الدخول'), 'cta_url' => '/login', 'align' => 'center']),
+                    self::sec('text', 'text', ['title' => self::i('Our story', 'قصتنا'), 'body' => self::i('Share what makes you different.', 'احكي إيه اللي مميزك.')]),
+                    self::sec('gallery', 'gallery', ['title' => self::i('Gallery', 'معرض الصور'), 'items' => []]),
+                    self::sec('contact', 'contact', ['title' => self::i('Visit or write to us', 'زورنا أو اكتبلنا'), 'email' => '', 'phone' => '', 'form' => true]),
+                ]], 'pages' => [$about()]]),
+        ];
+
         foreach ($list as $k => &$t) {
             $t['key'] = $k;
         }

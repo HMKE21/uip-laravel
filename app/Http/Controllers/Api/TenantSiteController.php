@@ -26,7 +26,8 @@ class TenantSiteController extends Controller
 
     public function saveDraft(Request $r, int $id)
     {
-        $in = $r->validate(['theme' => 'sometimes|array', 'layout' => 'sometimes|array', 'texts' => 'sometimes|array', 'home' => 'sometimes|array', 'nav' => 'sometimes|array', 'footer' => 'sometimes|array']);
+        $in = $r->validate(['theme' => 'sometimes|array', 'layout' => 'sometimes|array', 'texts' => 'sometimes|array', 'home' => 'sometimes|array', 'nav' => 'sometimes|array', 'footer' => 'sometimes|array',
+            'seo' => 'sometimes|array', 'blog' => 'sometimes|array', 'pages' => 'sometimes|array', 'posts' => 'sometimes|array']);
         return $this->dom(fn () => $this->site->saveDraft($this->uid($r), $id, $in));
     }
 
@@ -76,6 +77,23 @@ class TenantSiteController extends Controller
     public function deleteTemplate(Request $r, int $id, int $templateId)
     {
         return $this->dom(fn () => $this->site->deleteTemplate($this->uid($r), $id, $templateId));
+    }
+
+    public function messages(Request $r, int $id)
+    {
+        $in = $r->validate(['status' => 'nullable|string|in:new,read,archived', 'page' => 'nullable|integer|min:1']);
+        return $this->dom(fn () => $this->site->messages($this->uid($r), $id, $in['status'] ?? null, (int) ($in['page'] ?? 1)));
+    }
+
+    public function setMessageStatus(Request $r, int $id, int $messageId)
+    {
+        $in = $r->validate(['status' => 'required|string|in:new,read,archived']);
+        return $this->dom(fn () => $this->site->setMessageStatus($this->uid($r), $id, $messageId, $in['status']));
+    }
+
+    public function deleteMessage(Request $r, int $id, int $messageId)
+    {
+        return $this->dom(fn () => $this->site->deleteMessage($this->uid($r), $id, $messageId));
     }
 
     public function setSlug(Request $r, int $id)

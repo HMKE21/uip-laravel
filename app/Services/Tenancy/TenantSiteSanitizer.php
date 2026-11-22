@@ -103,9 +103,9 @@ final class TenantSiteSanitizer
     }
 
     /** sections: بالترتيب، id فريد، النوع من القايمة المسموحة، props حسب مخطط النوع. */
-    public static function sections($in): array
+    public static function sections($in, ?int $limit = null): array
     {
-        $max = (int) config('tenancy.site.max_sections', 12);
+        $max = $limit ?? (int) config('tenancy.site.max_sections', 12);
         $specs = TenantSiteTemplates::sectionSpecs();
         $out = [];
         $seen = [];
@@ -126,6 +126,99 @@ final class TenantSiteSanitizer
             $seen[$id] = true;
             $out[] = ['id' => $id, 'type' => $type, 'enabled' => !array_key_exists('enabled', $row) || filter_var($row['enabled'], FILTER_VALIDATE_BOOLEAN),
                 'props' => self::object($specs[$type], is_array($row['props'] ?? null) ? $row['props'] : [])];
+        }
+        return $out;
+    }
+
+    /** slug سليم (a-z 0-9 -) من نص حر. بيرجّع '' لو مفيش حاجة صالحة. */
+    public static function slugify($v, int $max = 40): string
+    {
+        $s = strtolower(self::text($v, 200));
+        $s = preg_replace('/[^a-z0-9]+/', '-', $s) ?? '';
+        return substr(trim($s, '-'), 0, $max);
+    }
+
+    /** يضمن slug فريد جوه المجموعة (بيضيف -2 -3…) ومش محجوز. */
+    private static function uniqueSlug(string $slug, array &$seen, array $reserved, string $fallback): string
+    {
+        $slug = $slug !== '' ? $slug : $fallback;
+        $base = substr($slug, 0, 36);
+        $n = 1;
+        while (isset($seen[$slug]) || in_array($slug, $reserved, true)) {
+            $n++;
+            $slug = $base . '-' . $n;
+        }
+        $seen[$slug] = true;
+        return $slug;
+    }
+
+    private static function itemId($v, string $prefix, array &$seen): string
+    {
+        $id = substr(preg_replace('/[^a-z0-9_-]/', '', strtolower((string) (is_string($v) ? $v : ''))) ?: '', 0, 20);
+        if ($id === '' || isset($seen[$id])) {
+            $id = $prefix . '-' . Str::lower(Str::random(5));
+        }
+        $seen[$id] = true;
+        return $id;
+    }
+
+    /** صفحات إضافية (من نحن / تواصل / مخصصة): id وslug فريدين، kind، عنوان، SEO، وأقسام بنفس مخطط الصفحة الرئيسية. */
+    public static function pages($in): array
+    {
+        $max = (int) config('tenancy.site.max_pages', 8);
+        $maxSections = (int) config('tenancy.site.max_page_sections', 10);
+        $spec = TenantSiteTemplates::pageSpec();
+        $out = [];
+        $ids = [];
+        $slugs = [];
+        foreach (array_slice(is_array($in) ? array_values($in) : [], 0, $max * 3) as $row) {
+            if (count($out) >= $max) {
+                break;
+            }
+            if (!is_array($row)) {
+                continue;
+            }
+            $page = self::object($spec, $row);
+            foreach (['enabled', 'show_in_nav'] as $flag) {
+                if (!array_key_exists($flag, $row)) {
+                    $page[$flag] = true;                         // الصفحة الجديدة شغّالة وظاهرة في القايمة إلا لو العميل قفلها
+                }
+            }
+            $title = $page['title']['en'] ?: $page['title']['ar'];
+            $kind = $page['kind'];
+            $slug = self::uniqueSlug(self::slugify($row['slug'] ?? '') ?: self::slugify($title), $slugs, TenantSiteTemplates::RESERVED_PAGE_SLUGS, $kind === 'custom' ? 'page' : $kind);
+            $out[] = ['id' => self::itemId($row['id'] ?? '', 'page', $ids), 'slug' => $slug] + $page + ['sections' => self::sections($row['sections'] ?? [], $maxSections)];
+        }
+        return $out;
+    }
+
+    private static function date($v): string
+    {
+        if (is_string($v) && preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $v, $m) && checkdate((int) $m[2], (int) $m[3], (int) $m[1])) {
+            return $v;
+        }
+        return now()->format('Y-m-d');
+    }
+
+    /** مقالات المدونة: slug فريد، تاريخ Y-m-d، عنوان/ملخص/محتوى ثنائي اللغة، غلاف https، SEO. */
+    public static function posts($in): array
+    {
+        $max = (int) config('tenancy.site.max_posts', 30);
+        $spec = TenantSiteTemplates::postSpec();
+        $out = [];
+        $ids = [];
+        $slugs = [];
+        foreach (array_slice(is_array($in) ? array_values($in) : [], 0, $max * 2) as $row) {
+            if (count($out) >= $max) {
+                break;
+            }
+            if (!is_array($row)) {
+                continue;
+            }
+            $post = self::object($spec, $row);
+            $title = $post['title']['en'] ?: $post['title']['ar'];
+            $slug = self::uniqueSlug(self::slugify($row['slug'] ?? '') ?: self::slugify($title), $slugs, [], 'post');
+            $out[] = ['id' => self::itemId($row['id'] ?? '', 'post', $ids), 'slug' => $slug, 'date' => self::date($row['date'] ?? null)] + $post;
         }
         return $out;
     }
@@ -152,6 +245,12 @@ final class TenantSiteSanitizer
         }
         if (array_key_exists('home', $in) && is_array($in['home'])) {
             $out['home'] = ['sections' => self::sections($in['home']['sections'] ?? [])];
+        }
+        if (array_key_exists('pages', $in)) {
+            $out['pages'] = self::pages($in['pages']);
+        }
+        if (array_key_exists('posts', $in)) {
+            $out['posts'] = self::posts($in['posts']);
         }
         $out = array_intersect_key($out, TenantSiteTemplates::emptySettings());
         if (strlen((string) json_encode($out, JSON_UNESCAPED_UNICODE)) > (int) config('tenancy.site.max_bytes', 32768)) {

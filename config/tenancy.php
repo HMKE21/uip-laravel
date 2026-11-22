@@ -54,6 +54,15 @@ return [
         'reserved' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_RESERVED_DOMAINS', ''))))),
         /** سر نقطة الـ "ask" بتاعة Caddy on-demand TLS (GET /api/dev/v1/tenant/domain-check?domain=…&token=…). فاضي = النقطة مقفولة (404). */
         'ask_secret' => env('TENANT_ASK_SECRET', ''),
+        /** true (الافتراضي، الأكثر أمانًا): لازم TXT يثبت الملكية. false: لو TENANT_CNAME_TARGET أو TENANT_EDGE_IPS متضبطين، التوجيه الصح وحده بيفعّل الدومين. */
+        'require_txt' => filter_var(env('TENANT_DOMAIN_REQUIRE_TXT', true), FILTER_VALIDATE_BOOLEAN),
+        /** التفعيل التلقائي: أمر tenant:domains-check (كل دقيقة بالـ scheduler) بيفحص الـ DNS ويفعّل الدومين ويطلب/يفحص شهادة SSL بدون ضغط زرار. */
+        'auto' => filter_var(env('TENANT_DOMAIN_AUTO', true), FILTER_VALIDATE_BOOLEAN),
+        /** أقصى عدد دومينات بيتفحصوا في الدورة الواحدة. */
+        'auto_batch' => (int) env('TENANT_DOMAIN_AUTO_BATCH', 50),
+        /** فحص شهادة SSL: بعد التفعيل بنفتح اتصال TLS على الدومين:443 (ده كمان بيحفّز Caddy on-demand يصدر الشهادة). */
+        'ssl_probe' => filter_var(env('TENANT_DOMAIN_SSL_PROBE', true), FILTER_VALIDATE_BOOLEAN),
+        'ssl_renew_days' => (int) env('TENANT_DOMAIN_SSL_RENEW_DAYS', 14),
     ],
 
     /**
@@ -109,8 +118,14 @@ return [
 
     /** موقع العميل (قوالب/تخصيص/نشر). */
     'site' => [
-        'max_bytes' => (int) env('TENANT_SITE_MAX_BYTES', 32768),
+        'max_bytes' => (int) env('TENANT_SITE_MAX_BYTES', 262144),
         'max_sections' => 12,
+        'max_pages' => (int) env('TENANT_SITE_MAX_PAGES', 8),
+        'max_page_sections' => 10,
+        'max_posts' => (int) env('TENANT_SITE_MAX_POSTS', 30),
+        /** رسائل نموذج التواصل: أقصى عدد محفوظ لكل عميل، وأقصى عدد يومي (حماية من السبام). */
+        'max_messages' => (int) env('TENANT_SITE_MAX_MESSAGES', 1000),
+        'messages_per_day' => (int) env('TENANT_SITE_MESSAGES_PER_DAY', 200),
         'max_nav' => 8,
         'max_custom_templates' => (int) env('TENANT_SITE_MAX_TEMPLATES', 20),
         'keep_versions' => (int) env('TENANT_SITE_KEEP_VERSIONS', 10),

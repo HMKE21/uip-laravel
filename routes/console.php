@@ -127,3 +127,6 @@ Schedule::command('tenants:run', ['mail:identity-sync --membership', '--feature=
 Schedule::command('tenants:run', ['mail:identity-sync --prune', '--feature=mail'])->dailyAt('04:20')->withoutOverlapping();
 Schedule::command('tenants:run', ['mail:security-scan', '--feature=mail'])->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('tenants:run', ['mail:retention', '--feature=mail'])->dailyAt('04:40')->withoutOverlapping();
+
+// دومينات العملاء: تفعيل تلقائي (فحص DNS) + طلب/فحص شهادة SSL بدون تدخل يدوي. بيحتاج schedule:run كل دقيقة.
+Schedule::command('tenant:domains-check')->everyMinute()->withoutOverlapping();

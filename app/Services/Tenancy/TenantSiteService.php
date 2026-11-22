@@ -99,6 +99,7 @@ final class TenantSiteService
             'preview' => $this->previewInfo($t, $row),
             'templates' => $this->templateList((int) $t->id),
             'catalog' => $this->catalog(),
+            'messages' => ['unread' => TenantSiteMessages::unread((int) $t->id)],
         ];
     }
 
@@ -109,7 +110,12 @@ final class TenantSiteService
             'sections' => array_keys(TenantSiteTemplates::sectionSpecs()), 'icons' => TenantSiteTemplates::ICONS, 'fonts' => TenantSiteTemplates::FONTS,
             'radius' => ['none', 'sm', 'md', 'lg', 'xl'], 'modes' => ['light', 'dark', 'auto'], 'density' => ['compact', 'comfortable', 'spacious'],
             'login_styles' => ['split', 'centered', 'card'], 'nav_styles' => ['top', 'side'],
-            'limits' => ['sections' => (int) config('tenancy.site.max_sections', 12), 'nav' => (int) config('tenancy.site.max_nav', 8)],
+            // الخطوط: كل عنصر {key,label,group(sans|serif|display),arabic,family}. family = اسم Google Fonts (null = خط النظام). font_heading بيقبل كمان 'same'.
+            'font_catalog' => TenantSiteTemplates::fontCatalog(), 'font_scales' => ['sm', 'md', 'lg', 'xl'], 'heading_weights' => ['medium', 'semibold', 'bold', 'extrabold'],
+            'page_kinds' => TenantSiteTemplates::PAGE_KINDS, 'reserved_page_slugs' => TenantSiteTemplates::RESERVED_PAGE_SLUGS,
+            'limits' => ['sections' => (int) config('tenancy.site.max_sections', 12), 'nav' => (int) config('tenancy.site.max_nav', 8),
+                'pages' => (int) config('tenancy.site.max_pages', 8), 'page_sections' => (int) config('tenancy.site.max_page_sections', 10), 'posts' => (int) config('tenancy.site.max_posts', 30),
+                'bytes' => (int) config('tenancy.site.max_bytes', 262144), 'seo_title' => 70, 'seo_description' => 160],
         ];
     }
 
@@ -312,10 +318,12 @@ final class TenantSiteService
     {
         $row = $this->db()->table('tenant_sites')->where('tenant_id', $tenant->id)->first();
         $pub = $row ? $this->decode($row->published) : null;
+        $full = $pub ? TenantSiteSanitizer::full($pub) : null;
         return [
             'tenant' => $tenant->public_id,
-            'site' => $pub ? ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => TenantSiteSanitizer::full($pub), 'preview' => false] : null,
+            'site' => $pub ? ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => $full, 'preview' => false] : null,
             'branding' => TenantBranding::publicPayload($tenant),
+            'canonical_base' => TenantSiteSeo::base($tenant), 'contact_form' => $full ? TenantSiteMessages::hasForm($full) : false,
         ];
     }
 
@@ -326,7 +334,71 @@ final class TenantSiteService
         if (!$row || !$row->preview_token || $token === '' || !hash_equals((string) $row->preview_token, $token)) {
             return null;
         }
-        return ['tenant' => $tenant->public_id, 'site' => ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => $this->draftOf($row), 'preview' => true],
-            'branding' => TenantBranding::publicPayload($tenant)];
+        $draft = $this->draftOf($row);
+        return ['tenant' => $tenant->public_id, 'site' => ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => $draft, 'preview' => true],
+            'branding' => TenantBranding::publicPayload($tenant), 'canonical_base' => TenantSiteSeo::base($tenant), 'contact_form' => TenantSiteMessages::hasForm($draft)];
+    }
+
+    /** الإعدادات المنشورة (سليمة) أو null لو لسه مفيش نشر. */
+    private function publishedSettings(object $tenant): ?array
+    {
+        $row = $this->db()->table('tenant_sites')->where('tenant_id', $tenant->id)->first();
+        $pub = $row ? $this->decode($row->published) : null;
+        return $pub ? TenantSiteSanitizer::full($pub) : null;
+    }
+
+    /** SEO لمسار معيّن (للـ <head> وكروت المشاركة). بتوكن معاينة صالح بيتحسب من المسودة وبـ noindex. null لو التوكن غلط. */
+    public function publicSeo(object $tenant, string $path, string $preview = ''): ?array
+    {
+        $branding = TenantBranding::publicPayload($tenant);
+        if ($preview !== '') {
+            $p = $this->previewPayload($tenant, $preview);
+            return $p === null ? null : TenantSiteSeo::resolve($tenant, $p['site']['settings'], $branding, $path, true);
+        }
+        $settings = $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]);
+        return TenantSiteSeo::resolve($tenant, $settings, $branding, $path, false);
+    }
+
+    public function publicSitemap(object $tenant): string
+    {
+        return TenantSiteSeo::sitemap($tenant, $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]));
+    }
+
+    public function publicRobots(object $tenant): string
+    {
+        return TenantSiteSeo::robots($tenant, $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]));
+    }
+
+    /** رسالة من نموذج التواصل في الموقع المنشور. */
+    public function contact(object $tenant, array $in, string $ip): array
+    {
+        $pub = $this->publishedSettings($tenant);
+        if ($pub === null) {
+            $this->fail('This site does not accept messages.', 404);
+        }
+        return TenantSiteMessages::submit($tenant, $pub, $in, $ip);
+    }
+
+    /* ------------------------------------------------------------------ contact inbox (owner/admin) */
+
+    public function messages(int $userId, int $tenantId, ?string $status, int $page): array
+    {
+        [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
+        return TenantSiteMessages::list((int) $t->id, $status, $page);
+    }
+
+    public function setMessageStatus(int $userId, int $tenantId, int $messageId, string $status): array
+    {
+        [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
+        TenantSiteMessages::setStatus((int) $t->id, $messageId, $status);
+        return ['unread' => TenantSiteMessages::unread((int) $t->id)];
+    }
+
+    public function deleteMessage(int $userId, int $tenantId, int $messageId): array
+    {
+        [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
+        TenantSiteMessages::delete((int) $t->id, $messageId);
+        $this->audit($userId, (int) $t->id, 'delete-message', (string) $messageId);
+        return ['unread' => TenantSiteMessages::unread((int) $t->id)];
     }
 }

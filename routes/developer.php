@@ -136,6 +136,10 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/site/templates', [TenantSiteController::class, 'templates'])->middleware('throttle:60,1');
         Route::post('/site/templates', [TenantSiteController::class, 'saveTemplate'])->middleware('throttle:20,1');
         Route::delete('/site/templates/{templateId}', [TenantSiteController::class, 'deleteTemplate'])->whereNumber('templateId')->middleware('throttle:20,1');
+        // صندوق رسائل نموذج التواصل (owner/admin).
+        Route::get('/site/messages', [TenantSiteController::class, 'messages'])->middleware('throttle:60,1');
+        Route::put('/site/messages/{messageId}', [TenantSiteController::class, 'setMessageStatus'])->whereNumber('messageId')->middleware('throttle:60,1');
+        Route::delete('/site/messages/{messageId}', [TenantSiteController::class, 'deleteMessage'])->whereNumber('messageId')->middleware('throttle:30,1');
         Route::put('/slug', [TenantSiteController::class, 'setSlug'])->middleware('throttle:10,1');
         Route::get('/apps', [TenantController::class, 'apps'])->middleware('throttle:120,1');
         Route::post('/apps', [TenantController::class, 'createApp'])->middleware('throttle:20,1');
@@ -209,6 +213,10 @@ Route::prefix('dev/v1')->group(function () {
     // White Label: هوية الجهة اللي بتخدم الدومين + نقطة `ask` بتاعة Caddy on-demand TLS. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
     Route::get('/tenant/branding', [TenantPublicController::class, 'branding'])->middleware('throttle:120,1');
     Route::get('/tenant/site', [TenantPublicController::class, 'site'])->middleware('throttle:120,1');
+    Route::get('/tenant/site/seo', [TenantPublicController::class, 'seo'])->middleware('throttle:300,1');
+    Route::get('/tenant/site/sitemap', [TenantPublicController::class, 'sitemap'])->middleware('throttle:60,1');
+    Route::get('/tenant/site/robots', [TenantPublicController::class, 'robots'])->middleware('throttle:60,1');
+    Route::post('/tenant/site/contact', [TenantPublicController::class, 'contact'])->middleware('throttle:10,1');
     Route::get('/tenant/domain-check', [TenantPublicController::class, 'domainCheck'])->middleware('throttle:300,1');
     // Embed SDK (الخطوة 2): صفحة الـ iframe + تبديل التوكن + جلسة الـ iframe + الـ loader. عامة، من غير dev.auth، مش جوه الـ OpenAPI.
     Route::get('/embed/loader.js', [EmbedPublicController::class, 'loader'])->middleware('throttle:120,1');
