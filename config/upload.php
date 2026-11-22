@@ -26,6 +26,12 @@ return [
     // لازم يتظبط معاه upload_max_filesize / post_max_size في PHP وحدّ الرفع في الـ reverse proxy.
     'course_materials_max_kb'       => (int) env('UPLOAD_COURSE_MATERIALS_MAX_KB', 51200),
     'course_materials_video_max_kb' => (int) env('UPLOAD_COURSE_VIDEO_MAX_KB', 204800),
+    // مكتبة فيديوهات الشرح (CourseVideoService): رفع بالأجزاء بيكمّل بعد انقطاع النت.
+    'course_video_max_mb'      => (int) env('UPLOAD_COURSE_VIDEO_CHUNKED_MAX_MB', 0),   // 0 = من غير حد
+    'course_video_chunk_mb'    => max(1, (int) env('UPLOAD_COURSE_VIDEO_CHUNK_MB', 2)), // جزء صغير = إعادة أقل لو النت ضعيف
+    'course_video_url_ttl'     => max(300, (int) env('UPLOAD_COURSE_VIDEO_URL_TTL', 7200)), // عمر رابط المشاهدة الموقّع (ثواني)
+    'course_video_complete_pct' => min(100, max(1, (int) env('COURSE_VIDEO_COMPLETE_PCT', 90))), // % المشاهدة اللي تتحسب "خلّص الفيديو"
+
     // التكليفات: ملف المدرّس وملف تسليم الطالب (بالـ KB).
     'course_assignments_max_kb'     => (int) env('UPLOAD_COURSE_ASSIGNMENTS_MAX_KB', 20480),
     'pdf_active_content' => env('UPLOAD_PDF_ACTIVE_CONTENT', 'reject'),
@@ -125,6 +131,8 @@ return [
         // Course enrol / drop requests: the student's supporting document (medical note, form, screenshot...).
         'course_requests' => ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'webp', 'zip'],
         // Course materials: التضييق per-kind بيحصل في CourseMaterialService::ALLOWED.
+        // مكتبة فيديوهات الشرح (خاصة: بتتخدم بس من الرابط الموقّع بعد فحص التسجيل/الباسورد).
+        'course_videos' => ['mp4', 'webm', 'mov'],
         'course_materials' => [
             'pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'csv', 'txt', 'zip',
             'jpg', 'jpeg', 'png', 'gif', 'webp',
@@ -206,6 +214,7 @@ return [
         'group_files' => 'uploads/group-files',
         'course_requests' => 'uploads/course-requests',
         'course_materials' => 'uploads/course-materials',
+        'course_videos' => 'uploads/course-videos',
         'announcements' => 'uploads/announcements',
         'meetings'  => 'uploads/meetings',
         // Round 9 (بند 18 — Recording storage). فئة منفصلة عن 'meetings'
@@ -225,7 +234,7 @@ return [
     | الـ stored_path في الداتابيز بيفضل نسبي بنفس الشكل (uploads/messages/conv_N/xxx) — القديم لسه بيتقرأ من public/ لحد
     | ما `php artisan messages:privatize-attachments` ينقله.
     */
-    'private_categories' => ['messages', 'posts', 'avatar_originals', 'forms'],
+    'private_categories' => ['messages', 'posts', 'avatar_originals', 'forms', 'course_videos'],
 
     /*
     |--------------------------------------------------------------------------

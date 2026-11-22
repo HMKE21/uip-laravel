@@ -55,10 +55,12 @@ class ChunkedUploadService
         return config('messaging.chunked.' . $key);
     }
 
-    public function init(int $userId, string $name, int $size, ?string $mime): array
+    /** @param string $purpose 'messages' (الافتراضي) | 'course_video' (مكتبة فيديوهات المادة) */
+    public function init(int $userId, string $name, int $size, ?string $mime, string $purpose = 'messages'): array
     {
         $name = basename(trim($name));
-        $max = (int) $this->cfg('max_bytes');
+        $video = $purpose === 'course_video';
+        $max = $video ? (int) config('upload.course_video_max_mb', 0) * 1048576 : (int) $this->cfg('max_bytes');
         if ($name === '' || $size <= 0) {
             throw new \InvalidArgumentException('File name and size are required.');
         }
@@ -67,7 +69,7 @@ class ChunkedUploadService
         }
 
         $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-        $allowed = $this->policy->effectiveAllowed((array) config('upload.allowed.messages', []));
+        $allowed = $this->policy->effectiveAllowed((array) config($video ? 'upload.allowed.course_videos' : 'upload.allowed.messages', []));
         if ($ext === '' || !in_array($ext, $allowed, true)) {
             throw new \RuntimeException('File type not allowed.');
         }
@@ -75,7 +77,7 @@ class ChunkedUploadService
         // الملفات الكبيرة (> 25MB) للوسائط والأرشيف والمستندات الثنائية بس — svg/json/كود بيتقرأوا كاملين في الذاكرة عند الفحص.
         $bulky = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'ogg', 'm4a', 'zip', 'rar', '7z', 'pdf', 'docx', 'xlsx', 'pptx'];
         $nonBulkyMb = (int) $this->cfg('non_bulky_max_mb'); // 0 = من غير حد
-        if ($nonBulkyMb > 0 && $size > $nonBulkyMb * 1048576 && !in_array($ext, $bulky, true)) {
+        if (!$video && $nonBulkyMb > 0 && $size > $nonBulkyMb * 1048576 && !in_array($ext, $bulky, true)) {
             throw new \RuntimeException('Files of this type cannot be larger than ' . $nonBulkyMb . ' MB.');
         }
 
@@ -90,10 +92,10 @@ class ChunkedUploadService
         if (!@mkdir($dir, 0775, true) && !is_dir($dir)) {
             throw new \RuntimeException('Could not prepare the upload.');
         }
-        $chunk = (int) $this->cfg('chunk_bytes');
+        $chunk = $video ? (int) config('upload.course_video_chunk_mb', 2) * 1048576 : (int) $this->cfg('chunk_bytes');
         $meta = [
             'name' => $name, 'size' => $size, 'mime' => $mime, 'chunk' => $chunk,
-            'total' => (int) ceil($size / $chunk), 'received' => [], 'created' => time(),
+            'total' => (int) ceil($size / $chunk), 'received' => [], 'created' => time(), 'purpose' => $purpose,
         ];
         // ملف بالحجم الكامل (sparse) — الأجزاء بتتكتب في أماكنها.
         $fh = fopen($dir . '/data.bin', 'wb');
@@ -101,13 +103,13 @@ class ChunkedUploadService
         fclose($fh);
         file_put_contents($dir . '/meta.json', json_encode($meta));
 
-        return ['upload_id' => $id, 'chunk_bytes' => $chunk, 'total_chunks' => $meta['total'], 'received' => []];
+        return ['upload_id' => $id, 'name' => $name, 'size' => $size, 'chunk_bytes' => $chunk, 'total_chunks' => $meta['total'], 'received' => []];
     }
 
     public function status(int $userId, string $id): array
     {
         $m = $this->meta($userId, $id);
-        return ['upload_id' => $id, 'chunk_bytes' => $m['chunk'], 'total_chunks' => $m['total'], 'received' => array_values($m['received']), 'complete' => count($m['received']) === $m['total']];
+        return ['upload_id' => $id, 'name' => $m['name'], 'size' => (int) $m['size'], 'chunk_bytes' => $m['chunk'], 'total_chunks' => $m['total'], 'received' => array_values($m['received']), 'complete' => count($m['received']) === $m['total']];
     }
 
     /** @param string $tmpPath مسار الجزء المرفوع (ملف PHP tmp) */
@@ -156,9 +158,12 @@ class ChunkedUploadService
     }
 
     /** يرجّع الملف المجمّع. لازم كل الأجزاء تكون وصلت. المجلد بيتمسح بعد ما MessagingService ينقل الملف (discard). */
-    public function open(int $userId, string $id): ChunkedUploadedFile
+    public function open(int $userId, string $id, ?string $purpose = null): ChunkedUploadedFile
     {
         $m = $this->meta($userId, $id);
+        if ($purpose !== null && ($m['purpose'] ?? 'messages') !== $purpose) {
+            throw new \RuntimeException('This upload cannot be used here.');
+        }
         if (count($m['received']) !== $m['total']) {
             throw new \RuntimeException('The upload of "' . $m['name'] . '" is not finished yet.');
         }

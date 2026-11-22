@@ -344,6 +344,35 @@ final class TenantSiteTemplates
             ['Education and research, connected online.', 'تعليم وبحث متصلان عبر الإنترنت.'],
             ['The university online workspace for lectures, courses, assignments and meetings.', 'مساحة الجامعة الإلكترونية للمحاضرات والمقررات والتكليفات والاجتماعات.'], true);
 
+        $L['lecturer'] = self::define('lecturer', ['Lecturer', 'دكتور / مدرّس'], ['For university doctors and teachers: live lectures with screen sharing, explanation videos, assignments and grades.', 'لدكاترة الجامعات والمدرّسين: محاضرات مباشرة ومشاركة شاشة وفيديوهات شرح وتكليفات ودرجات.'], 'university',
+            ['primary' => '#4338CA', 'accent' => '#F59E0B', 'background' => '#F8FAFC', 'font' => 'cairo', 'font_heading' => 'cairo', 'radius' => 'lg'], 'split',
+            ['Class portal', 'بوابة المقرر', 'Sign in to attend, watch and submit', 'سجّل دخولك لتحضر وتشاهد وتسلّم'],
+            [
+                self::hero(['Your classroom, online', 'قاعتك الدراسية على الإنترنت'], ['Live lectures with screen sharing, recorded explanations you can rewatch, and assignments with grades.', 'محاضرات مباشرة مع مشاركة الشاشة، وفيديوهات شرح تعيد مشاهدتها، وتكليفات ودرجات.'], ['Sign in', 'تسجيل الدخول']),
+                self::features('Everything for your course', 'كل ما يحتاجه مقررك', [
+                    ['video', 'Live lectures & screen sharing', 'محاضرات مباشرة ومشاركة شاشة', 'Meet your students in HD and share your slides or screen.', 'قابل طلابك بجودة عالية وشارك شرائحك أو شاشتك.'],
+                    ['book', 'Explanation videos', 'فيديوهات الشرح', 'Upload lectures once; students watch any time. Uploads resume if the internet drops.', 'ارفع المحاضرات مرة واحدة ليشاهدها الطلاب في أي وقت. ويكمل الرفع إذا انقطع الإنترنت.'],
+                    ['lock', 'Private & password-protected', 'خاصة ومحمية بكلمة مرور', 'Open a video to all enrolled students or protect it with a password.', 'افتح الفيديو لكل المسجّلين أو احمه بكلمة مرور.'],
+                    ['chart', 'Know who watched', 'اعرف من شاهد', 'See which accounts watched each video and how much of it.', 'اعرف أي الحسابات شاهدت كل فيديو وكم شاهدت منه.'],
+                    ['file', 'Assignments & grades', 'تكليفات ودرجات', 'Collect submissions, grade them and give feedback in one place.', 'استلم التسليمات وصحّحها وأعطِ ملاحظاتك في مكان واحد.'],
+                    ['calendar', 'Timetable & attendance', 'الجدول والحضور', 'Lecture times and attendance for every course.', 'مواعيد المحاضرات والحضور لكل مقرر.'],
+                ]),
+                self::steps('How it works', 'كيف يعمل', [
+                    ['Join the lecture', 'انضم للمحاضرة', 'Attend live or open the recording later.', 'احضر مباشرة أو افتح التسجيل لاحقًا.'],
+                    ['Watch the explanations', 'شاهد الشرح', 'Continue from where you stopped, on any device.', 'أكمل من حيث توقفت، من أي جهاز.'],
+                    ['Submit and get graded', 'سلّم واحصل على درجتك', 'Upload your assignment and see your grade and feedback.', 'ارفع تكليفك واطّلع على درجتك وملاحظات المدرّس.'],
+                ]),
+                self::faq([
+                    ['The internet dropped while watching', 'انقطع الإنترنت أثناء المشاهدة', 'Reopen the video and it continues from where you stopped.', 'أعد فتح الفيديو وسيكمل من حيث توقفت.'],
+                    ['A video asks for a password', 'الفيديو يطلب كلمة مرور', 'Ask your lecturer for the video password.', 'اطلب كلمة مرور الفيديو من دكتور المادة.'],
+                    ['Where do I submit my assignment?', 'أين أسلّم التكليف؟', 'Open the course, then Assignments, and upload your file.', 'افتح المقرر ثم التكليفات وارفع ملفك.'],
+                ]),
+                self::contactSec('Questions for your lecturer?', 'عندك سؤال للدكتور؟'),
+            ],
+            ['About the course', 'عن المقرر', 'Lectures, explanation videos, assignments and grades for the students of this course, in one private space.', 'محاضرات وفيديوهات شرح وتكليفات ودرجات لطلاب هذا المقرر في مساحة واحدة خاصة.'],
+            ['Teach, share and grade online.', 'درّس وشارك وصحّح عبر الإنترنت.'],
+            ['A private classroom for lecturers: live lectures, screen sharing, explanation videos, assignments and grades.', 'قاعة دراسية خاصة للمدرّسين: محاضرات مباشرة ومشاركة شاشة وفيديوهات شرح وتكليفات ودرجات.']);
+
         $L['academy'] = self::define('academy', ['Academy', 'أكاديمية'], ['Training centres and e-learning: courses, results and support.', 'مراكز التدريب والتعلم الإلكتروني: دورات ونتائج ودعم.'], 'training',
             ['primary' => '#1D4ED8', 'accent' => '#F59E0B', 'background' => '#F8FAFC', 'font' => 'almarai', 'font_heading' => 'el-messiri', 'radius' => 'lg'], 'split',
             ['Learner portal', 'بوابة المتعلمين', 'Sign in with your academy account', 'سجّل الدخول بحساب الأكاديمية'],

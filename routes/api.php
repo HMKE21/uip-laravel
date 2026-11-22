@@ -49,6 +49,7 @@ use App\Http\Controllers\Api\StudentsApiController;
 use App\Http\Controllers\Api\BulkApiController;
 use App\Http\Controllers\Api\CourseApiController;
 use App\Http\Controllers\Api\CourseMaterialsApiController;
+use App\Http\Controllers\Api\CourseVideosApiController;
 use App\Http\Controllers\Api\CourseTimetableApiController;
 use App\Http\Controllers\Api\AdminRequestApiController;
 use App\Http\Controllers\Api\RegistrationApiController;
@@ -1605,6 +1606,19 @@ Route::prefix('v1')->group(function () {
         Route::get('/materials/saved', [CourseMaterialsApiController::class, 'saved']);
         // جدول المحاضرات (Study Time Table): الجدول الأسبوعي حسب الدور + إدارة حصص المادة.
         Route::get('/timetable', [CourseTimetableApiController::class, 'index']);
+        // مكتبة فيديوهات الشرح (رفع بالأجزاء + باسورد + متابعة المشاهدة + تقارير).
+        Route::get('/{id}/videos', [CourseVideosApiController::class, 'index'])->where('id', '[0-9]+');
+        Route::get('/{id}/videos/report', [CourseVideosApiController::class, 'report'])->where('id', '[0-9]+');
+        Route::post('/{id}/videos/uploads', [CourseVideosApiController::class, 'uploadInit'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::get('/{id}/videos/uploads/{uid}', [CourseVideosApiController::class, 'uploadStatus'])->where(['id' => '[0-9]+', 'uid' => '[a-f0-9]{32}'])->middleware('throttle:240,1');
+        Route::post('/{id}/videos/uploads/{uid}/chunk', [CourseVideosApiController::class, 'uploadChunk'])->where(['id' => '[0-9]+', 'uid' => '[a-f0-9]{32}'])->middleware('throttle:1200,1');
+        Route::delete('/{id}/videos/uploads/{uid}', [CourseVideosApiController::class, 'uploadCancel'])->where(['id' => '[0-9]+', 'uid' => '[a-f0-9]{32}']);
+        Route::post('/{id}/videos', [CourseVideosApiController::class, 'store'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::patch('/{id}/videos/{vid}', [CourseVideosApiController::class, 'update'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+']);
+        Route::delete('/{id}/videos/{vid}', [CourseVideosApiController::class, 'destroy'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+']);
+        Route::post('/{id}/videos/{vid}/play', [CourseVideosApiController::class, 'play'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:30,1');
+        Route::post('/{id}/videos/{vid}/progress', [CourseVideosApiController::class, 'progress'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:240,1');
+        Route::get('/{id}/videos/{vid}/viewers', [CourseVideosApiController::class, 'viewers'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+']);
         Route::get('/{id}', [CourseApiController::class, 'show'])->where('id', '[0-9]+');
         Route::patch('/{id}', [CourseApiController::class, 'update'])->where('id', '[0-9]+');
         Route::post('/{id}/archive', [CourseApiController::class, 'archive'])->where('id', '[0-9]+');
@@ -1763,6 +1777,13 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/share', [FeedApiController::class, 'share']);
         Route::post('/{id}/report', [FeedApiController::class, 'report']);
     });
+
+    // بث فيديوهات شرح المادة: رابط موقّع نسبي (صادر من POST /courses/{id}/videos/{vid}/play) — بره uip.auth لأن <video> مابيبعتش Authorization.
+    // الصلاحية (تسجيل الطالب/نشر الفيديو) بتتفحص جوه CourseVideoService::streamable.
+    Route::get('/courses/videos/stream/{id}', [CourseVideosApiController::class, 'stream'])
+        ->where('id', '[0-9]+')
+        ->middleware(['signed:relative', 'throttle:1200,1'])
+        ->name('course.videos.stream');
 
     // Social Posts (منفصل عن University Feed أعلاه) — /api/v1/posts/*. راجع PostsApiController / PostMediaApiController.
     // رابط موقّع نسبي لمرفقات المنشورات: بره uip.auth عمدًا (<video> وpdf.js والتطبيق الأصلي مابيبعتوش Authorization)؛
