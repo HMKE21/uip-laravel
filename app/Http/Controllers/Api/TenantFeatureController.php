@@ -34,6 +34,9 @@ class TenantFeatureController extends Controller
             'note'       => 'nullable|string|max:255',
         ]);
         $res = TenantFeatures::request((int) TenantContext::id(), $in['features'], (int) $r->attributes->get('uip_user_id'), $in['note'] ?? null);
+        if (!empty($res['requested'])) {
+            \App\Services\Tenancy\TenantFeatureNotifier::requested((int) TenantContext::id(), $res['requested'], (int) $r->attributes->get('uip_user_id'), $in['note'] ?? null);
+        }
         return $this->apiSuccess($res + ['features' => TenantFeatures::stateFor((int) TenantContext::id())], 'Request submitted.', 201);
     }
 
