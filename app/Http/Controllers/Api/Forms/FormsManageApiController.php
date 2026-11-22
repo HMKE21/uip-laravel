@@ -42,8 +42,14 @@ class FormsManageApiController extends Controller
     /** Unknown failure while saving: log the real cause, answer with a clear, retryable message (the builder retries by itself). */
     private function unexpected(\Throwable $e, string $op): JsonResponse
     {
-        \Log::error('forms.' . $op . ' failed: ' . $e->getMessage(), ['exception' => $e]);
-        return $this->apiError('تعذّر الحفظ مؤقتاً، هنحاول تاني تلقائياً.', ['code' => 'save_failed', 'retryable' => true], 500);
+        $ref = substr(bin2hex(random_bytes(4)), 0, 8);
+        \Log::error('forms.' . $op . ' failed [' . $ref . ']: ' . $e->getMessage(), ['exception' => $e, 'user_id' => (int) request()->attributes->get('uip_user_id'), 'ref' => $ref]);
+        $extra = ['code' => 'save_failed', 'retryable' => true, 'ref' => $ref];
+        // الأدمن (أو وضع debug) يشوف السبب الحقيقي بدل رسالة عامة — عشان نعرف نصلّحها.
+        if (config('app.debug') || request()->attributes->get('uip_role') === 'admin') {
+            $extra['reason'] = class_basename($e) . ': ' . mb_substr($e->getMessage(), 0, 300);
+        }
+        return $this->apiError('تعذّر الحفظ مؤقتاً، هنحاول تاني تلقائياً.', $extra, 500);
     }
 
     /** @return Form|JsonResponse */
