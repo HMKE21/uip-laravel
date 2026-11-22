@@ -782,6 +782,132 @@ final class TenantService
         return $this->payload(DB::table('tenants')->find($tenantId));
     }
 
+    /* ------------------------------------------------------------------ features / sign-in / checklist */
+
+    private const SELF_OFF_NOTE = 'turned off by the workspace';
+
+    /** @return array<int,array<string,mixed>> كتالوج الميزات بحالة كل ميزة للـ workspace (+ instant = بتتفعّل فورًا). */
+    private function featureRows(int $tenantId): array
+    {
+        $auto = (array) config('tenancy.launch.auto_features', []);
+        return array_map(static fn (array $r) => $r + ['instant' => in_array($r['feature'], $auto, true)], TenantFeatures::stateFor($tenantId));
+    }
+
+    public function features(int $userId, int $tenantId): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return ['features' => $this->featureRows((int) $t->id)];
+    }
+
+    /**
+     * المالك بيحدد الميزات اللي عايزها: الفورية بتتفعّل على طول، والباقي بيتبعت كطلب لفريق UIPE (pending).
+     * اللي اتقفلت/اترفضت من فريق المنصة مش بترجع فورًا: بتتحوّل لطلب جديد.
+     * @param string[] $selected
+     */
+    public function setFeatures(int $userId, int $tenantId, array $selected): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'features');
+        $tid = (int) $t->id;
+        $catalog = array_keys(TenantFeatures::catalog());
+        $selected = array_values(array_unique(array_map('strval', $selected)));
+        foreach ($selected as $f) {
+            if (!in_array($f, $catalog, true)) {
+                $this->fail("Unknown feature '{$f}'.");
+            }
+        }
+        $auto = (array) config('tenancy.launch.auto_features', []);
+        $cur = [];
+        foreach (TenantFeatures::stateFor($tid) as $r) {
+            $cur[$r['feature']] = $r;
+        }
+        $toRequest = [];
+        foreach ($catalog as $f) {
+            $status = $cur[$f]['status'] ?? 'none';
+            if (in_array($f, $selected, true)) {
+                if (in_array($status, ['enabled', 'pending'], true)) {
+                    continue;
+                }
+                $instantOk = in_array($f, $auto, true) && ($status === 'none' || ($status === 'disabled' && ($cur[$f]['decision_note'] ?? null) === self::SELF_OFF_NOTE));
+                if ($instantOk) {
+                    TenantFeatures::decide($tid, $f, 'enabled', null, 'enabled by the workspace');
+                } else {
+                    $toRequest[] = $f;
+                }
+            } elseif ($status === 'enabled') {
+                TenantFeatures::decide($tid, $f, 'disabled', $userId, self::SELF_OFF_NOTE);
+            } elseif ($status === 'pending') {
+                TenantFeatures::cancelRequest($tid, $f);
+            }
+        }
+        if ($toRequest) {
+            TenantFeatures::request($tid, $toRequest, $userId, 'requested from the developer center');
+        }
+        $this->audit($userId, $tid, 'features', implode(',', $selected));
+        return ['features' => $this->featureRows($tid)];
+    }
+
+    private function signInPayload(object $t): array
+    {
+        $isolated = ($t->mode ?? 'shared') === 'isolated';
+        return ['isolated' => $isolated, 'slug' => $t->slug, 'settings' => TenantAuthSettings::forTenant((int) $t->id)];
+    }
+
+    public function signInSettings(int $userId, int $tenantId): array
+    {
+        [$t] = $this->authorize($userId, $tenantId);
+        return $this->signInPayload($t);
+    }
+
+    public function saveSignInSettings(int $userId, int $tenantId, array $in): array
+    {
+        [$t] = $this->authorize($userId, $tenantId, 'site');
+        if (($t->mode ?? 'shared') !== 'isolated') {
+            $this->fail('The sign-in page is only available for launched platforms.', 403);
+        }
+        try {
+            TenantAuthSettings::save((int) $t->id, $in);
+        } catch (\InvalidArgumentException $e) {
+            $this->fail($e->getMessage());
+        }
+        $this->audit($userId, (int) $t->id, 'sign_in');
+        return $this->signInPayload($t);
+    }
+
+    /** بطاقة "ابدأ" (Shopify-style): بتتحسب من الحالة الفعلية. @return array{can_manage:bool,complete:bool,done:int,total:int,items:array} */
+    public function checklist(int $userId, int $tenantId): array
+    {
+        [$t, $role] = $this->authorize($userId, $tenantId);
+        $tid = (int) $t->id;
+        $isolated = ($t->mode ?? 'shared') === 'isolated';
+        $logo = trim((string) (TenantBranding::get($tid)['logo_url'] ?? '')) !== '';
+        $feat = false;
+        foreach (TenantFeatures::stateFor($tid) as $r) {
+            if (in_array($r['status'], ['enabled', 'pending'], true)) {
+                $feat = true;
+                break;
+            }
+        }
+        $team = DB::table('tenant_members')->where('tenant_id', $tid)->count() > 1;
+        $domain = Schema::hasTable('tenant_domains') && DB::table('tenant_domains')->where('tenant_id', $tid)->exists();
+        $items = [
+            ['key' => 'logo', 'section' => 'branding', 'done' => $logo, 'required' => true],
+            ['key' => 'features', 'section' => 'features', 'done' => $feat, 'required' => true],
+            ['key' => 'team', 'section' => 'members', 'done' => $team, 'required' => true],
+        ];
+        if ($isolated) {
+            $s = TenantAuthSettings::forTenant($tid);
+            $items[] = ['key' => 'signin', 'section' => 'signin', 'done' => TenantAuthSettings::exists($tid), 'required' => true];
+            $items[] = ['key' => 'google', 'section' => 'signin', 'done' => !empty($s['google']['enabled']) || !empty($s['microsoft']['enabled']), 'required' => false];
+        }
+        $items[] = ['key' => 'domain', 'section' => 'domains', 'done' => $domain, 'required' => false];
+        $done = count(array_filter($items, static fn ($i) => $i['done']));
+        $complete = count(array_filter($items, static fn ($i) => $i['required'] && !$i['done'])) === 0;
+        return [
+            'can_manage' => in_array($role, self::ABILITIES['site'], true),
+            'complete' => $complete, 'done' => $done, 'total' => count($items), 'items' => $items,
+        ];
+    }
+
     /* ------------------------------------------------------------------ audit */
 
     public function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
