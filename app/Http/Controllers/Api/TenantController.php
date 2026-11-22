@@ -103,7 +103,17 @@ class TenantController extends Controller
             'template' => 'nullable|string|max:60', 'features' => 'nullable|array|max:40', 'features.*' => 'string|max:60',
             'admin_name' => 'nullable|string|max:100', 'admin_email' => 'required|email|max:190', 'admin_password' => 'nullable|string|min:8|max:100',
         ]);
-        return $this->dom(fn () => $this->tenants->launch($this->uid($r), $in), 201);
+        return $this->dom(fn () => $this->tenants->launch($this->uid($r), $in), 202);
+    }
+
+    public function launchStatus(Request $r, string $uuid)
+    {
+        return $this->dom(fn () => $this->tenants->launchStatus($this->uid($r), $uuid));
+    }
+
+    public function activeLaunch(Request $r)
+    {
+        return $this->dom(fn () => $this->tenants->activeLaunch($this->uid($r), $r->boolean('peek')));
     }
 
     public function show(Request $r, int $id)

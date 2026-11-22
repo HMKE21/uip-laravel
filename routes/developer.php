@@ -81,6 +81,8 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
     Route::post('/tenants', [TenantController::class, 'store'])->middleware('throttle:10,1');
     Route::get('/tenants/launch-options', [TenantController::class, 'launchOptions'])->middleware('throttle:60,1');
     Route::post('/tenants/launch', [TenantController::class, 'launch'])->middleware('throttle:3,60');
+    Route::get('/tenants/launch/active', [TenantController::class, 'activeLaunch'])->middleware('throttle:120,1');
+    Route::get('/tenants/launch/{uuid}', [TenantController::class, 'launchStatus'])->whereUuid('uuid')->middleware('throttle:240,1');
     Route::prefix('/tenants/{id}')->where(['id' => '[0-9]+'])->group(function () {
         Route::get('/', [TenantController::class, 'show'])->middleware('throttle:120,1');
         Route::put('/', [TenantController::class, 'update'])->middleware('throttle:30,1');

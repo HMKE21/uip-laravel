@@ -63,6 +63,8 @@ return [
     'launch' => [
         'enabled' => filter_var(env('TENANT_LAUNCH_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
         'admin_mfa_grace_days' => (int) env('TENANT_ADMIN_MFA_GRACE_DAYS', 3),
+        /** after_response (الافتراضي): بيشتغل بعد ما الرد يتبعت من غير worker؛ queue: لو عندك queue worker شغّال. */
+        'run' => env('TENANT_LAUNCH_RUN', 'after_response'),
         'invite_days' => (int) env('TENANT_INVITE_DAYS', 7),
         'auto_features' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_AUTO_FEATURES', 'messaging,meetings,feed'))))),
     ],

@@ -56,6 +56,9 @@ class TenantProvisioner
             'mode' => 'isolated', 'db_name' => $dbName, 'db_status' => 'provisioning',
             'created_at' => now(), 'updated_at' => now(),
         ]);
+        if (isset($in['on_created']) && is_callable($in['on_created'])) {
+            ($in['on_created'])($tenantId, $slug); // الإطلاق في الخلفية: نعرف الـ id بدري عشان شاشة التقدّم
+        }
         $createdDb = false;
         try {
             $db->table('tenant_branding')->insert(['tenant_id' => $tenantId, 'display_name' => $name, 'created_at' => now(), 'updated_at' => now()]);

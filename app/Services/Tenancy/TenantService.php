@@ -168,7 +168,7 @@ final class TenantService
     /**
      * إطلاق منصة معزولة بالكامل (Shopify-style): قاعدة بيانات + أدمن أول + قالب الموقع منشور + الميزات المختارة، والرابط /w/<slug> جاهز.
      * المنشئ بيبقى owner في tenant_members (يدير المنصة من مركز المطورين). أدمن المنصة نفسها حساب منفصل جوّه قاعدتها.
-     * @return array{tenant:array,launch:array}
+     * @return array{launch_id:string,status:string,progress:int}
      */
     public function launch(int $userId, array $in): array
     {
@@ -210,167 +210,35 @@ final class TenantService
             $this->fail('Template not found.', 404);
         }
 
-        @set_time_limit(300); // الـ migrations كلها بتتشغّل لقاعدة العميل الجديدة
-        @ignore_user_abort(true);
-        try {
-            $r = app(TenantProvisioner::class)->create([
-                'name' => $name, 'domain' => null, 'slug' => null, 'kind' => $kind, 'owner_user_id' => $userId,
-                'admin_email' => $adminEmail, 'admin_name' => trim((string) ($in['admin_name'] ?? '')) ?: 'Admin', 'admin_password' => $adminPass,
-            ]);
-        } catch (\InvalidArgumentException $e) {
-            $this->fail($e->getMessage());
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::error('Platform launch failed', ['user' => $userId, 'error' => $e->getMessage()]);
-            $this->fail('Could not create the platform right now. Please try again in a minute.', 500);
+        if (DB::table('tenant_launches')->where('user_id', $userId)->whereIn('status', ['queued', 'running'])->where('updated_at', '>', now()->subMinutes(20))->exists()) {
+            $this->fail('A platform is already being created for you. Wait until it finishes.', 429);
         }
-        $id = (int) $r['tenant_id'];
-        DB::table('tenant_members')->insert(['tenant_id' => $id, 'user_id' => $userId, 'role' => 'owner', 'created_at' => now(), 'updated_at' => now()]);
-        $this->audit($userId, $id, 'launch', $kind);
-
-        $auto = array_values(array_intersect($wanted, (array) config('tenancy.launch.auto_features', [])));
-        $pending = array_values(array_diff($wanted, $auto));
-        foreach ($auto as $f) {
-            TenantFeatures::decide($id, $f, 'enabled', null, 'enabled at launch');
+        $uuid = (string) Str::uuid();
+        $launchId = (int) DB::table('tenant_launches')->insertGetId([
+            'uuid' => $uuid, 'user_id' => $userId, 'status' => 'queued', 'step' => 'queued', 'progress' => 0,
+            'payload' => \Illuminate\Support\Facades\Crypt::encryptString(json_encode([
+                'name' => $name, 'kind' => $kind, 'admin_email' => $adminEmail, 'admin_name' => trim((string) ($in['admin_name'] ?? '')),
+                'admin_password' => $adminPass, 'template' => $templateKey, 'features' => $wanted,
+            ], JSON_UNESCAPED_UNICODE)),
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // after_response: بيشتغل بعد ما الرد يتبعت (من غير queue worker). queue: لو عندك worker شغّال.
+        if (config('tenancy.launch.run', 'after_response') === 'queue') {
+            \App\Jobs\RunTenantLaunch::dispatch($launchId);
+        } else {
+            \App\Jobs\RunTenantLaunch::dispatchAfterResponse($launchId);
         }
-        if ($pending) {
-            TenantFeatures::request($id, $pending, $userId, 'requested at launch');
-        }
-        if ($templateKey !== '') {
-            try { // فشل الموقع مينفعش يبوّظ الإطلاق: يختار القالب بعدين من منشئ الموقع
-                $site = app(TenantSiteService::class);
-                $site->applyTemplate($userId, $id, ['key' => $templateKey]);
-                $site->publish($userId, $id);
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning('Launch: site template not applied', ['tenant' => $id, 'error' => $e->getMessage()]);
-            }
-        }
-        $url = TenantAddress::urlFor($id);
-        return [
-            'tenant' => $this->show($userId, $id)['tenant'],
-            'launch' => [
-                'slug' => $r['slug'], 'url' => $url, 'login_url' => $url ? $url . '/login' : null,
-                'admin_email' => $adminEmail, 'admin_password' => $r['admin_password'], // مولّد وبيظهر مرة واحدة بس لو المستخدم مكتبش باسورد
-                'features_enabled' => $auto, 'features_pending' => $pending,
-            ],
-        ];
+        return ['launch_id' => $uuid, 'status' => 'queued', 'progress' => 0];
     }
 
-    /** خطوات "ابدأ" بعد الإطلاق (Shopify-style): بتتحسب من الحالة الفعلية، ومحتاجة ability عرض. */
-    public function checklist(int $userId, int $tenantId): array
+    public function launchStatus(int $userId, string $uuid): array
     {
-        [$t, $role] = $this->authorize($userId, $tenantId);
-        $isolated = ($t->mode ?? 'shared') === 'isolated';
-        $logo = (bool) DB::table('tenant_branding')->where('tenant_id', $t->id)->whereNotNull('logo_url')->where('logo_url', '!=', '')->exists();
-        $team = $isolated ? app(PlatformUsers::class)->count($t) > 1 : DB::table('tenant_members')->where('tenant_id', $t->id)->count() > 1;
-        $features = count(TenantFeatures::enabledKeys((int) $t->id)) > 0;
-        $items = [
-            ['key' => 'logo', 'section' => 'branding', 'done' => $logo, 'optional' => false],
-            ['key' => 'features', 'section' => 'features', 'done' => $features, 'optional' => false],
-            ['key' => 'team', 'section' => 'members', 'done' => $team, 'optional' => false],
-        ];
-        if ($isolated) {
-            $a = TenantAuthSettings::forTenant((int) $t->id);
-            $items[] = ['key' => 'signin', 'section' => 'signin', 'done' => TenantAuthSettings::exists((int) $t->id), 'optional' => false];
-            $items[] = ['key' => 'google', 'section' => 'signin', 'done' => (bool) ($a['google']['enabled'] || $a['microsoft']['enabled']), 'optional' => true];
-            $items[] = ['key' => 'domain', 'section' => 'domains', 'done' => DB::table('tenant_domains')->where('tenant_id', $t->id)->exists(), 'optional' => true];
-        }
-        $required = array_filter($items, static fn ($i) => !$i['optional']);
-        return [
-            'items' => $items,
-            'done' => count(array_filter($items, static fn ($i) => $i['done'])), 'total' => count($items),
-            'complete' => count(array_filter($required, static fn ($i) => !$i['done'])) === 0,
-            'can_manage' => in_array($role, ['owner', 'admin'], true),
-        ];
+        return app(TenantLauncher::class)->status($userId, $uuid) ?? $this->fail('Launch not found.', 404);
     }
 
-    private const OWNER_OFF_NOTE = 'turned off by owner';
-
-    /** ميزات المنصة وحالة كل واحدة (none|pending|enabled|rejected|disabled) + أنهي بتتفعّل فورًا. */
-    public function features(int $userId, int $tenantId): array
+    public function activeLaunch(int $userId, bool $peek = false): array
     {
-        [$t, $role] = $this->authorize($userId, $tenantId);
-        $auto = (array) config('tenancy.launch.auto_features', []);
-        $rows = array_map(static fn (array $r) => $r + ['instant' => in_array($r['feature'], $auto, true), 'self_off' => ($r['decision_note'] ?? null) === self::OWNER_OFF_NOTE], TenantFeatures::stateFor((int) $t->id));
-        return ['features' => $rows, 'can_manage' => in_array($role, self::ABILITIES['features'], true)];
-    }
-
-    /**
-     * المالك/المدير يحدد الميزات اللي عايزها (المجموعة كلها). الجديدة: الفورية بتتفعّل، والباقي بيتبعت للأدمن كطلب.
-     * اللي مفعّلة وشالها => بتتقفل (يقدر يفعّلها تاني فورًا). طلب لسه pending وشالها => بيتلغي. قرار أدمن المنصة (رفض/إيقاف) مبيتغيّرش من هنا.
-     * @param string[] $want
-     */
-    public function setFeatures(int $userId, int $tenantId, array $want): array
-    {
-        [$t] = $this->authorize($userId, $tenantId, 'features');
-        $want = array_values(array_unique(array_map('strval', $want)));
-        $catalog = array_keys(TenantFeatures::catalog());
-        foreach ($want as $f) {
-            if (!in_array($f, $catalog, true)) {
-                $this->fail("Unknown feature '{$f}'.");
-            }
-        }
-        $auto = (array) config('tenancy.launch.auto_features', []);
-        $ask = [];
-        foreach (TenantFeatures::stateFor((int) $t->id) as $r) {
-            $f = $r['feature'];
-            $on = in_array($f, $want, true);
-            switch ($r['status']) {
-                case 'enabled':
-                    if (!$on) {
-                        TenantFeatures::decide((int) $t->id, $f, 'disabled', null, self::OWNER_OFF_NOTE);
-                    }
-                    break;
-                case 'pending':
-                    if (!$on) {
-                        TenantFeatures::cancelRequest((int) $t->id, $f);
-                    }
-                    break;
-                case 'disabled':
-                    if ($on) {
-                        if (($r['decision_note'] ?? null) === self::OWNER_OFF_NOTE) {
-                            TenantFeatures::decide((int) $t->id, $f, 'enabled', null, 'turned on by owner'); // هو اللي قفلها بنفسه
-                        } else {
-                            $ask[] = $f;
-                        }
-                    }
-                    break;
-                default: // none | rejected
-                    if ($on) {
-                        if ($r['status'] === 'none' && in_array($f, $auto, true)) {
-                            TenantFeatures::decide((int) $t->id, $f, 'enabled', null, 'enabled by owner');
-                        } else {
-                            $ask[] = $f;
-                        }
-                    }
-            }
-        }
-        if ($ask) {
-            TenantFeatures::request((int) $t->id, $ask, $userId, 'requested by workspace owner');
-        }
-        $this->audit($userId, (int) $t->id, 'features', implode(',', $want));
-        return $this->features($userId, $tenantId);
-    }
-
-    /** إعدادات صفحة دخول المنصة (القالب + جوجل/مايكروسوفت). */
-    public function signInSettings(int $userId, int $tenantId): array
-    {
-        [$t] = $this->authorize($userId, $tenantId);
-        return ['settings' => TenantAuthSettings::forTenant((int) $t->id), 'templates' => TenantAuthSettings::TEMPLATES, 'isolated' => ($t->mode ?? 'shared') === 'isolated', 'slug' => $t->slug ?? null];
-    }
-
-    public function saveSignInSettings(int $userId, int $tenantId, array $in): array
-    {
-        [$t] = $this->authorize($userId, $tenantId, 'site');
-        if (($t->mode ?? 'shared') !== 'isolated') {
-            $this->fail('Sign-in design is available for launched platforms (with their own accounts).', 409);
-        }
-        try {
-            TenantAuthSettings::save((int) $t->id, $in);
-        } catch (\InvalidArgumentException $e) {
-            $this->fail($e->getMessage());
-        }
-        $this->audit($userId, (int) $t->id, 'sign-in.settings', (string) ($in['template'] ?? ''));
-        return $this->signInSettings($userId, $tenantId);
+        return ['launch' => app(TenantLauncher::class)->active($userId, $peek)];
     }
 
     public function rename(int $userId, int $tenantId, string $name): array
