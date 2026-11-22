@@ -47,14 +47,20 @@ final class PlatformUsers
     }
 
     /** توكن دعوة/إعداد باسورد: بيبطل لوحده أول ما الباسورد يتغيّر (بصمة الهاش جواه). */
+    /**
+     * بيتولّد جوّه سياق المنصة (سر التوقيع + claim tid خاصين بيها): مينفعش يتفك في منصة تانية ولا في المنصة الأم.
+     * مهم: لو اتولّد برّه السياق مش هيتفك لما صاحبه يفتح اللينك (بيتفك جوّه سياق المنصة).
+     */
+    public static function mintInviteToken(object $t, int $uid, ?string $hash, ?int $ttlSeconds = null): string
+    {
+        $ttl = $ttlSeconds ?? max(1, (int) config('tenancy.launch.invite_days', 7)) * 86400;
+        return TenantContext::run($t, static fn () => \App\Services\UipJwtService::encode(['typ' => 'ws_invite', 'uid' => $uid, 'tn' => (int) $t->id, 'fp' => self::fp($hash)], $ttl));
+    }
+
     private function inviteLink(object $t, int $uid, ?string $hash): ?string
     {
         $base = TenantAddress::urlFor((int) $t->id);
-        if (!$base) {
-            return null;
-        }
-        $token = \App\Services\UipJwtService::encode(['typ' => 'ws_invite', 'uid' => $uid, 'tn' => (int) $t->id, 'fp' => self::fp($hash)], max(1, (int) config('tenancy.launch.invite_days', 7)) * 86400);
-        return $base . '/invite?token=' . $token;
+        return $base ? $base . '/invite?token=' . self::mintInviteToken($t, $uid, $hash) : null;
     }
 
     /** يُستدعى جوّه سياق المنصة: المستخدم صاحب التوكن لو لسه سليم، وإلا null. */

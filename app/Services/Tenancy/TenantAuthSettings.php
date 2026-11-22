@@ -2,7 +2,6 @@
 
 namespace App\Services\Tenancy;
 
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -26,21 +25,34 @@ final class TenantAuthSettings
         ];
     }
 
+    /** @var array<int,array> ذاكرة لنفس الـ request بس (الـ Cache مبينفعش: مفاتيحه مفصولة لكل منصة، فمستحيل نمسحه من لوحة المالك). */
+    private static array $memo = [];
+
+    public static function flush(?int $tenantId = null): void
+    {
+        if ($tenantId === null) {
+            self::$memo = [];
+        } else {
+            unset(self::$memo[$tenantId]);
+        }
+    }
+
     public static function forTenant(int $tenantId): array
     {
-        $row = Cache::remember('tenant:auth:' . $tenantId, 60, static function () use ($tenantId) {
-            try {
-                return TenantContext::runCentral(static fn () => DB::table('tenant_auth_settings')->where('tenant_id', $tenantId)->first(['template', 'config'])) ?: false;
-            } catch (\Throwable $e) {
-                return false; // الجدول لسه مش موجود: الافتراضي
-            }
-        });
-        $d = self::defaults();
+        if (isset(self::$memo[$tenantId])) {
+            return self::$memo[$tenantId];
+        }
+        $row = null;
+        try {
+            $row = TenantContext::runCentral(static fn () => DB::table('tenant_auth_settings')->where('tenant_id', $tenantId)->first(['template', 'config']));
+        } catch (\Throwable $e) {
+            // الجدول لسه مش موجود (قبل الـ migration): الافتراضي
+        }
         if (!$row) {
-            return $d;
+            return self::$memo[$tenantId] = self::defaults();
         }
         $c = json_decode((string) $row->config, true);
-        return self::normalize(['template' => $row->template] + (is_array($c) ? $c : []));
+        return self::$memo[$tenantId] = self::normalize(['template' => $row->template] + (is_array($c) ? $c : []));
     }
 
     public static function exists(int $tenantId): bool
@@ -138,7 +150,7 @@ final class TenantAuthSettings
                 DB::table('tenant_auth_settings')->insert($data + ['tenant_id' => $tenantId, 'created_at' => now()]);
             }
         });
-        Cache::forget('tenant:auth:' . $tenantId);
+        self::flush($tenantId);
         return self::forTenant($tenantId);
     }
 }
