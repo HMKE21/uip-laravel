@@ -83,7 +83,7 @@ final class TenantSiteTemplates
                 // الخطوط: font = خط النص. font_heading = خط العناوين (same = نفس خط النص).
                 'font_heading' => 'enum:same|' . implode('|', self::FONTS), 'font_scale' => 'enum:md|sm|lg|xl', 'heading_weight' => 'enum:bold|medium|semibold|extrabold',
             ],
-            'layout' => ['login_style' => 'enum:split|centered|card', 'nav_style' => 'enum:top|side', 'show_footer' => 'bool', 'hero_image_url' => 'img'],
+            'layout' => ['login_style' => 'enum:split|centered|card', 'nav_style' => 'enum:top|centered|side|burger', 'nav_scroll' => 'enum:sticky|static', 'nav_button' => 'enum:show|hide', 'show_footer' => 'bool', 'hero_image_url' => 'img'],
             'texts' => ['login_title' => 'i18n:80', 'login_subtitle' => 'i18n:160', 'welcome' => 'i18n:120'],
             'nav' => ['list', (int) config('tenancy.site.max_nav', 8), ['label' => 'i18n:30', 'url' => 'link', 'new_tab' => 'bool']],
             'footer' => ['text' => 'i18n:200', 'links' => ['list', 6, ['label' => 'i18n:30', 'url' => 'link']]],
@@ -114,7 +114,7 @@ final class TenantSiteTemplates
     {
         return [
             'theme' => ['primary' => null, 'accent' => null, 'background' => null, 'surface' => null, 'text' => null, 'font' => 'system', 'radius' => 'md', 'mode' => 'auto', 'density' => 'comfortable', 'font_heading' => 'same', 'font_scale' => 'md', 'heading_weight' => 'bold'],
-            'layout' => ['login_style' => 'split', 'nav_style' => 'top', 'show_footer' => true, 'hero_image_url' => null],
+            'layout' => ['login_style' => 'split', 'nav_style' => 'top', 'nav_scroll' => 'sticky', 'nav_button' => 'show', 'show_footer' => true, 'hero_image_url' => null],
             'texts' => ['login_title' => ['en' => '', 'ar' => ''], 'login_subtitle' => ['en' => '', 'ar' => ''], 'welcome' => ['en' => '', 'ar' => '']],
             'home' => ['sections' => []],
             'nav' => [],

@@ -125,7 +125,7 @@ final class TenantSiteService
         return [
             'sections' => array_keys(TenantSiteTemplates::sectionSpecs()), 'icons' => TenantSiteTemplates::ICONS, 'fonts' => TenantSiteTemplates::FONTS,
             'radius' => ['none', 'sm', 'md', 'lg', 'xl'], 'modes' => ['light', 'dark', 'auto'], 'density' => ['compact', 'comfortable', 'spacious'],
-            'login_styles' => ['split', 'centered', 'card'], 'nav_styles' => ['top', 'side'],
+            'login_styles' => ['split', 'centered', 'card'], 'nav_styles' => ['top', 'centered', 'side', 'burger'], 'nav_scrolls' => ['sticky', 'static'], 'nav_buttons' => ['show', 'hide'],
             // الخطوط: كل عنصر {key,label,group(sans|serif|display),arabic,family}. family = اسم Google Fonts (null = خط النظام). font_heading بيقبل كمان 'same'.
             'font_catalog' => TenantSiteTemplates::fontCatalog(), 'font_scales' => ['sm', 'md', 'lg', 'xl'], 'heading_weights' => ['medium', 'semibold', 'bold', 'extrabold'],
             'page_kinds' => TenantSiteTemplates::PAGE_KINDS, 'legal_kinds' => TenantSiteTemplates::LEGAL_KINDS, 'template_kinds' => TenantSiteTemplates::TEMPLATE_KINDS, 'reserved_page_slugs' => TenantSiteTemplates::RESERVED_PAGE_SLUGS,
