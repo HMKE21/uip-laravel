@@ -43,12 +43,38 @@ class AuthCookies
     /** بصمة المتصفح (HttpOnly، سنة، بتتجدد): مش credential — بس بتعرّف إن اللي بيدخل هو نفس المتصفح بتاع الجلسة الحية. */
     public const DEVICE_COOKIE  = 'uip_did';
 
+    // ---- أسماء الكوكيز لكل مساحة ------------------------------------------
+
+    /**
+     * الرابط الجاهز /w/<slug> على نفس origin المنصة => نفس الكوكيز. فلو اسم كوكي الـ refresh/CSRF ثابت، دخول المساحة
+     * كان بيمسح جلسة المنصة (والعكس) والاتنين بيطلعوا. جوّه مساحة (X-Tenant-Slug) الأسماء بتاخد لاحقة `_w_<slug>`.
+     * X-Tenant-Domain (دومين العميل = origin تاني خالص) بيغلب ومفيش لاحقة. على المنصة نفسها الأسماء زي ما هي.
+     */
+    public static function scope(Request $request): string
+    {
+        if (trim((string) $request->header('X-Tenant-Domain', '')) !== '') {
+            return '';
+        }
+        $slug = strtolower(trim((string) $request->header('X-Tenant-Slug', '')));
+        return preg_match('/^[a-z0-9](?:[a-z0-9-]{1,38})[a-z0-9]$/', $slug) === 1 ? '_w_' . $slug : '';
+    }
+
+    public static function refreshName(Request $request): string
+    {
+        return self::REFRESH_COOKIE . self::scope($request);
+    }
+
+    public static function csrfName(Request $request): string
+    {
+        return self::CSRF_COOKIE . self::scope($request);
+    }
+
     // ---- القراءة ---------------------------------------------------------
 
     public static function refreshFromCookie(Request $request): string
     {
         // نقرا الكوكي الخام (الـ api group مفيهوش EncryptCookies).
-        $value = $request->cookies->get(self::REFRESH_COOKIE);
+        $value = $request->cookies->get(self::refreshName($request));
         return is_string($value) ? $value : '';
     }
 
@@ -103,7 +129,7 @@ class AuthCookies
         }
 
         $header = (string) $request->header(self::CSRF_HEADER, '');
-        $cookie = (string) $request->cookies->get(self::CSRF_COOKIE, '');
+        $cookie = (string) $request->cookies->get(self::csrfName($request), '');
         if ($header === '' || $cookie === '') {
             return 'csrf_missing';
         }
@@ -165,8 +191,8 @@ class AuthCookies
         $ttl = \App\Services\UipJwtService::refreshTtl();
         $expires = time() + $ttl;
 
-        $response->headers->setCookie(self::makeCookie(self::REFRESH_COOKIE, $raw, $expires, self::COOKIE_PATH, true, $request));
-        $response->headers->setCookie(self::makeCookie(self::CSRF_COOKIE, self::csrfFor($raw), $expires, '/', false, $request));
+        $response->headers->setCookie(self::makeCookie(self::refreshName($request), $raw, $expires, self::COOKIE_PATH, true, $request));
+        $response->headers->setCookie(self::makeCookie(self::csrfName($request), self::csrfFor($raw), $expires, '/', false, $request));
         // بصمة المتصفح: بتفضل بعد الـ logout (clear() مبيلمسهاش) وبتتجدد مع كل إصدار توكن.
         $response->headers->setCookie(self::makeCookie(self::DEVICE_COOKIE, self::deviceId($request, true), time() + 31536000, self::COOKIE_PATH, true, $request));
 
@@ -181,8 +207,8 @@ class AuthCookies
     public static function clear(Response $response, Request $request): Response
     {
         $response = self::noStore($response);
-        $response->headers->setCookie(self::makeCookie(self::REFRESH_COOKIE, '', 1, self::COOKIE_PATH, true, $request));
-        $response->headers->setCookie(self::makeCookie(self::CSRF_COOKIE, '', 1, '/', false, $request));
+        $response->headers->setCookie(self::makeCookie(self::refreshName($request), '', 1, self::COOKIE_PATH, true, $request));
+        $response->headers->setCookie(self::makeCookie(self::csrfName($request), '', 1, '/', false, $request));
         return $response;
     }
 
