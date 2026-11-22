@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
  */
 class LoginHistoryService
 {
-    public const METHODS = ['password', 'google', 'microsoft', 'keycloak', 'github', '2fa', 'passkey'];
+    public const METHODS = ['password', 'google', 'microsoft', 'keycloak', 'github', '2fa', 'passkey', 'magic_link', 'oidc'];
 
     /** الطريقة من مسار الريكوست (جوجل/مايكروسوفت/... بيعدّوا على نفس finishLogin). */
     public static function methodFromRequest(Request $r): string
@@ -24,6 +24,12 @@ class LoginHistoryService
             if (str_contains($p, "auth/{$m}")) {
                 return $m;
             }
+        }
+        if (str_contains($p, 'auth/magic-link')) {
+            return 'magic_link';
+        }
+        if (str_contains($p, 'auth/tenant-oidc')) {
+            return 'oidc';
         }
         return str_contains($p, 'two-factor') ? '2fa' : 'password';
     }

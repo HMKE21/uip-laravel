@@ -319,7 +319,8 @@ class GoogleAuthController extends Controller
     {
         // نفس رسالة "بيانات غلط" عشان محدش يعرف إن الإيميل ده ستاف.
         $role = $this->roles->primaryRoleFor($user->id);
-        if (in_array($role, ['admin', 'data_analyst', 'security_admin', 'security_officer'], true)) {
+        // منصة معزولة: "admin" هناك أدمن الشركة نفسها (مش ستاف UIPE)، فبيدخل بجوجل/مايكروسوفت/SSO زي أي حد.
+        if (!\App\Services\Tenancy\TenantContext::active() && in_array($role, ['admin', 'data_analyst', 'security_admin', 'security_officer'], true)) {
             SecurityLog::write('Google sign-in refused - staff account', ['user_id' => $user->id, 'ip' => $request->ip()]);
             return $this->fail($locale === 'ar' ? 'مينفعش الدخول بجوجل للحساب ده.' : "This account can't sign in with Google.", 422);
         }

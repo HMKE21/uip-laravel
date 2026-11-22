@@ -61,12 +61,14 @@ class MailConfigService
     public function apply(): void
     {
         try {
-            $rows = DB::table('settings')
+            // إعدادات مزوّد البريد بتاعة المنصة الأم: لو الإرسال جوه منصة معزولة (نسيت الباسورد، magic link…) بنقراها من قاعدة الأم
+            // مش من قاعدة المنصة (ملهاش مزوّد بريد خاص بيها)، وإلا الإيميل كان هيرجع لـ .env أو يفشل.
+            $rows = \App\Services\Tenancy\TenantContext::runCentral(static fn () => DB::table('settings')
                 ->where('scope', 'global')
                 ->whereNull('user_id')
                 ->where('key', 'like', 'mail_%')
                 ->pluck('value', 'key')
-                ->all();
+                ->all());
         } catch (Throwable $e) {
             Log::warning('MailConfigService: could not load mail settings, using .env', ['error' => $e->getMessage()]);
             return;

@@ -210,6 +210,12 @@ Route::prefix('v1')->group(function () {
         Route::get('/keycloak/config', [\App\Http\Controllers\Api\Auth\KeycloakAuthController::class, 'config']);
         Route::post('/keycloak', [\App\Http\Controllers\Api\Auth\KeycloakAuthController::class, 'submit'])->middleware('throttle:20,1');
 
+        // منصة معزولة: الدخول بلينك سحري (Magic link) + SSO بـ OIDC (المالك بيفعّلهم من "الدخول والأمان").
+        Route::post('/magic-link/request', [\App\Http\Controllers\Api\Auth\MagicLinkController::class, 'request'])->middleware('throttle:10,1');
+        Route::post('/magic-link/verify', [\App\Http\Controllers\Api\Auth\MagicLinkController::class, 'verify'])->middleware('throttle:20,1');
+        Route::get('/tenant-oidc/config', [\App\Http\Controllers\Api\Auth\TenantOidcController::class, 'config'])->middleware('throttle:60,1');
+        Route::post('/tenant-oidc', [\App\Http\Controllers\Api\Auth\TenantOidcController::class, 'submit'])->middleware('throttle:20,1');
+
         // Sign in / sign up with GitHub (ويب بس). نافذة OAuth + polling بـ nonce؛ بعد التحقق نفس مسار جوجل (/google/complete و /google/restore).
         Route::get('/github/config', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'config']);
         Route::post('/github/start', [\App\Http\Controllers\Api\Auth\GithubAuthController::class, 'start'])->middleware('throttle:20,1');

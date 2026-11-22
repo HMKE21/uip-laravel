@@ -41,6 +41,42 @@ final class PlatformUsers
         return (string) $map[$role];
     }
 
+    /** قيد دومين الإيميل اللي ضابطه المالك (company.com…). فاضي = كله مسموح. */
+    private function assertDomainAllowed(object $t, string $email): void
+    {
+        $domains = (array) (TenantSecurity::forTenant((int) $t->id)['allowed_domains'] ?? []);
+        if (!TenantSecurity::emailAllowed($email, $domains)) {
+            $this->fail('Only these email domains are allowed on this platform: ' . implode(', ', array_map(fn ($d) => '@' . $d, $domains)), 422);
+        }
+    }
+
+    /** سياسة الباسورد بتاعة المنصة (جوه سياقها) على باسورد كتبه المالك. */
+    private function assertPasswordOk(object $t, string $pass): void
+    {
+        try {
+            TenantContext::run($t, static fn () => app(\App\Services\PasswordPolicyService::class)->assertValid($pass));
+        } catch (\InvalidArgumentException $e) {
+            $this->fail($e->getMessage());
+        }
+    }
+
+    /** باسورد متولّد بيطابق سياسة المنصة (الطول + أنواع الحروف). */
+    private function generatePassword(object $t): string
+    {
+        $min = (int) (TenantContext::run($t, static fn () => app(\App\Services\PasswordPolicyService::class)->getPolicy()['min_length'] ?? 8));
+        $len = max(14, $min + 2);
+        for ($i = 0; $i < 10; $i++) {
+            $p = Str::password($len, true, true, true, true);
+            try {
+                TenantContext::run($t, static fn () => app(\App\Services\PasswordPolicyService::class)->assertValid($p));
+                return $p;
+            } catch (\InvalidArgumentException $e) {
+                // جرّب تاني
+            }
+        }
+        return Str::password($len, true, true, true, true);
+    }
+
     private static function fp(?string $hash): string
     {
         return substr(hash('sha256', (string) $hash), 0, 20);
@@ -59,7 +95,7 @@ final class PlatformUsers
 
     private function inviteLink(object $t, int $uid, ?string $hash): ?string
     {
-        $base = TenantAddress::urlFor((int) $t->id);
+        $base = TenantMailBrand::frontendUrl((int) $t->id); // دومين المنصة الشغّال لو فيه، وإلا الرابط الجاهز /w/<slug>
         return $base ? $base . '/invite?token=' . self::mintInviteToken($t, $uid, $hash) : null;
     }
 
@@ -84,12 +120,14 @@ final class PlatformUsers
         }
         $ar = $locale === 'ar';
         try {
-            return (bool) app(\App\Services\MailService::class)->sendNotificationEmail(
+            // الطلب جاي من مركز المطوّرين (على المنصة الأم): بنلبس الإيميل هوية المنصة (اسم/لوجو/لون/سيندر) من غير ما نبدّل قاعدة البيانات
+            // (إعدادات مزوّد البريد لازم تتقرا من المنصة الأم).
+            return (bool) TenantMailBrand::using($t, static fn () => app(\App\Services\MailService::class)->sendNotificationEmail(
                 $email, $name,
                 $ar ? "اتدعيت تنضم لـ {$t->name}" : "You're invited to {$t->name}",
                 $ar ? 'اضغط على الزرار واختار كلمة المرور بتاعتك عشان تبدأ. اللينك شغّال لمدة محدودة.' : 'Use the button to choose your password and get started. The link works for a limited time.',
                 $link, $locale
-            );
+            ));
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('Platform invite email failed', ['tenant' => $t->id, 'error' => $e->getMessage()]);
             return false;
@@ -128,18 +166,19 @@ final class PlatformUsers
         if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
             $this->fail('Enter a valid email.');
         }
+        $this->assertDomainAllowed($t, $email);
         $name = trim((string) ($in['name'] ?? '')) ?: Str::before($email, '@');
         $invite = (string) ($in['mode'] ?? 'invite') !== 'password';
         $require = !array_key_exists('require_change', $in) || (bool) $in['require_change'];
         $pass = (string) ($in['password'] ?? '');
-        if (!$invite && $pass !== '' && strlen($pass) < 8) {
-            $this->fail('The password must be at least 8 characters.');
+        if (!$invite && $pass !== '') {
+            $this->assertPasswordOk($t, $pass);
         }
         $generated = null;
         if ($invite) {
             $pass = Str::random(48); // مش بيتعرض لحد: الشخص بيختار باسورده من اللينك
         } elseif ($pass === '') {
-            $generated = $pass = Str::password(14, true, true, true, false);
+            $generated = $pass = $this->generatePassword($t);
         }
         $hash = password_hash($pass, PASSWORD_DEFAULT);
 
@@ -186,10 +225,10 @@ final class PlatformUsers
     {
         [$t] = $this->open($actorId, $tenantId);
         $password = (string) $password;
-        if ($password !== '' && strlen($password) < 8) {
-            $this->fail('The password must be at least 8 characters.');
+        if ($password !== '') {
+            $this->assertPasswordOk($t, $password);
         }
-        $generated = $password === '' ? Str::password(14, true, true, true, false) : null;
+        $generated = $password === '' ? $this->generatePassword($t) : null;
         $password = $password !== '' ? $password : $generated;
         $email = TenantContext::run($t, function () use ($userId, $password, $requireChange) {
             $u = DB::table('users')->where('id', $userId)->whereNull('deleted_at')->first(['id', 'email']);

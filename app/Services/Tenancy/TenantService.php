@@ -480,6 +480,10 @@ final class TenantService
         if (DB::table('tenant_members')->where('tenant_id', $t->id)->count() >= (int) $this->limits($t)['members']) {
             $this->fail('This workspace reached its member limit.', 403);
         }
+        $domains = (array) (TenantSecurity::forTenant((int) $t->id)['allowed_domains'] ?? []);
+        if (!TenantSecurity::emailAllowed($email, $domains)) {
+            $this->fail('Only these email domains are allowed in this workspace: ' . implode(', ', array_map(fn ($d) => '@' . $d, $domains)), 422);
+        }
         $u = DB::table('users')->whereRaw('lower(email) = ?', [strtolower(trim($email))])->whereNull('deleted_at')->first(['id', 'status']);
         if (!$u || in_array($u->status, ['suspended', 'banned'], true)) {
             $this->fail('No active UIPE account uses this email.', 404);

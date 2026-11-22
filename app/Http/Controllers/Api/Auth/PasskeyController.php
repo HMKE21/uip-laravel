@@ -82,7 +82,7 @@ class PasskeyController extends Controller
             return $this->apiError($generic, null, 422);
         }
         $role = $this->roles->primaryRoleFor((int) $user->id);
-        if (in_array($role, self::STAFF_ROLES, true)) {
+        if (!\App\Services\Tenancy\TenantContext::active() && in_array($role, self::STAFF_ROLES, true)) {
             SecurityLog::write('Passkey sign-in refused - staff account', ['user_id' => $user->id, 'ip' => $request->ip()]);
             $this->history->record($request, (int) $user->id, false, 'passkey', 'staff_refused');
             return $this->apiError($generic, null, 422);
@@ -106,7 +106,7 @@ class PasskeyController extends Controller
 
     private function staff(Request $r): bool
     {
-        return in_array((string) $r->attributes->get('uip_role'), self::STAFF_ROLES, true);
+        return !\App\Services\Tenancy\TenantContext::active() && in_array((string) $r->attributes->get('uip_role'), self::STAFF_ROLES, true);
     }
 
     public function registerOptions(Request $r)

@@ -61,6 +61,17 @@ class UipAuthMiddleware
             ], 403);
         }
 
+        // IP allowlist بتاعة المنصة المعزولة: جلسة شغّالة من شبكة اتشالت من القايمة بتتقفل فورًا.
+        if (\App\Services\Tenancy\TenantSecurity::ipBlocked($request->ip())) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Access from this network is not allowed on this platform.',
+                'data'    => null,
+                'errors'  => ['code' => 'ip_not_allowed'],
+                'meta'    => (object) [],
+            ], 403);
+        }
+
         // جلسة اتلغت من بورتال الأمان (أو خلصت) => الـ access token بيبطل فورًا.
         $sid = isset($claims['sid']) ? (int) $claims['sid'] : null;
         // توكن من غير sid مينفعش يتلغى بالـ logout — نرفضه لو AUTH_REQUIRE_SID=true.

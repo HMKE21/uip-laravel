@@ -48,14 +48,14 @@ class TenantController extends Controller
 
     public function createPlatformUser(Request $r, int $id)
     {
-        $in = $r->validate(['name' => 'nullable|string|max:100', 'email' => 'required|email|max:190', 'role' => 'required|in:admin,employee', 'mode' => 'nullable|in:invite,password', 'require_change' => 'nullable|boolean', 'password' => 'nullable|string|min:8|max:100']);
+        $in = $r->validate(['name' => 'nullable|string|max:100', 'email' => 'required|email|max:190', 'role' => 'required|in:admin,employee', 'mode' => 'nullable|in:invite,password', 'require_change' => 'nullable|boolean', 'password' => 'nullable|string|min:6|max:100']);
         $in['locale'] = $r->header('X-Locale', 'ar') === 'en' ? 'en' : 'ar';
         return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->create($this->uid($r), $id, $in), 201);
     }
 
     public function resetPlatformUser(Request $r, int $id, int $userId)
     {
-        $in = $r->validate(['password' => 'nullable|string|min:8|max:100', 'require_change' => 'nullable|boolean']);
+        $in = $r->validate(['password' => 'nullable|string|min:6|max:100', 'require_change' => 'nullable|boolean']);
         return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->resetPassword($this->uid($r), $id, $userId, $in['password'] ?? null, !array_key_exists('require_change', $in) || (bool) $in['require_change']));
     }
 
@@ -89,6 +89,33 @@ class TenantController extends Controller
             'microsoft' => 'nullable|array', 'microsoft.enabled' => 'nullable|boolean', 'microsoft.client_id' => 'nullable|string|max:80', 'microsoft.directory' => 'nullable|string|max:60',
         ]);
         return $this->dom(fn () => $this->tenants->saveSignInSettings($this->uid($r), $id, $in));
+    }
+
+    public function security(Request $r, int $id)
+    {
+        return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->get($this->uid($r), $id));
+    }
+
+    public function saveSecurity(Request $r, int $id)
+    {
+        $in = $r->validate([
+            'allowed_domains' => 'nullable|array|max:20', 'allowed_domains.*' => 'nullable|string|max:190',
+            'session_hours' => 'nullable|integer|min:0|max:8760',
+            'ip_allowlist' => 'nullable|array|max:50', 'ip_allowlist.*' => 'nullable|string|max:64',
+            'password' => 'nullable|array', 'password.custom' => 'nullable|boolean', 'password.min_length' => 'nullable|integer|min:6|max:64',
+            'password.require_upper' => 'nullable|boolean', 'password.require_lower' => 'nullable|boolean', 'password.require_number' => 'nullable|boolean',
+            'password.require_special' => 'nullable|boolean', 'password.expire_days' => 'nullable|integer|min:0|max:3650',
+            'magic_link' => 'nullable|boolean', 'passkeys' => 'nullable|boolean',
+            'oidc' => 'nullable|array', 'oidc.enabled' => 'nullable|boolean', 'oidc.issuer' => 'nullable|string|max:300', 'oidc.client_id' => 'nullable|string|max:200', 'oidc.label' => 'nullable|string|max:40',
+            'mail' => 'nullable|array', 'mail.from_enabled' => 'nullable|boolean', 'mail.from_address' => 'nullable|string|max:190',
+        ]);
+        return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->save($this->uid($r), $id, $in));
+    }
+
+    public function testSso(Request $r, int $id)
+    {
+        $in = $r->validate(['issuer' => 'required|string|max:300']);
+        return $this->dom(fn () => app(\App\Services\Tenancy\TenantSecuritySettings::class)->testOidc($this->uid($r), $id, $in['issuer']));
     }
 
     public function launchOptions(Request $r)

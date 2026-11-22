@@ -26,6 +26,33 @@ final class WorkspaceAccess
         if (!$tenant || $role === 'admin') {
             return null;
         }
+        // سياسات مالك المساحة المشتركة: IP allowlist ودومين الإيميل (باقي السياسات للمنصات المعزولة).
+        // الإعدادات بتتخزن 30 ثانية لأن الدالة دي بتتنادى مع كل request محمي.
+        try {
+            $sec = Cache::remember('ws:sec:' . $tenant->id, 30, static function () use ($tenant) {
+                $x = TenantSecurity::forTenant((int) $tenant->id);
+                return ['ip' => (array) ($x['ip_allowlist'] ?? []), 'domains' => (array) ($x['allowed_domains'] ?? [])];
+            });
+            if ($sec['ip'] !== [] && !TenantSecurity::ipInList($request->ip(), $sec['ip'])) {
+                return [
+                    'code' => 'ip_not_allowed',
+                    'message_en' => "Sign-in is only allowed from this workspace's approved networks.",
+                    'message_ar' => 'الدخول مسموح من الشبكات المعتمدة للمساحة دي بس.',
+                ];
+            }
+            if ($sec['domains'] !== []) {
+                $email = (string) Cache::remember('ws:mail:' . $userId, 60, static fn () => (string) DB::table('users')->where('id', $userId)->value('email'));
+                if (!TenantSecurity::emailAllowed($email, $sec['domains'])) {
+                    return [
+                        'code' => 'email_domain_not_allowed',
+                        'message_en' => 'This email address is not on a domain allowed in this workspace.',
+                        'message_ar' => 'الإيميل ده مش على دومين مسموح له بالدخول للمساحة دي.',
+                    ];
+                }
+            }
+        } catch (\Throwable $e) {
+            // الإعدادات لسه مش موجودة: مفيش قيود
+        }
         try {
             $member = Cache::remember('ws:member:' . $tenant->id . ':' . $userId, 15, static fn () => DB::table('tenant_members')
                 ->where('tenant_id', (int) $tenant->id)->where('user_id', $userId)->exists());

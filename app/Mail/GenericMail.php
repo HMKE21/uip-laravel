@@ -61,7 +61,9 @@ class GenericMail extends Mailable
             $replyToList = $replyTo ? [new Address($replyTo)] : [];
         }
 
-        $from = ($tb && config('mail.from.address')) ? new Address((string) config('mail.from.address'), $tb['name']) : null;
+        // سيندر المنصة لو اتفعّل (دومينها)، وإلا عنوان المنصة الأم باسم المنصة.
+        $fromEmail = ($tb['from_address'] ?? null) ?: config('mail.from.address');
+        $from = ($tb && $fromEmail) ? new Address((string) $fromEmail, $tb['name']) : null;
 
         return new Envelope(
             from: $from,

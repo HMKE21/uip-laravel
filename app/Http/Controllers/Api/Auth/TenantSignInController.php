@@ -44,7 +44,7 @@ class TenantSignInController extends Controller
         if (!TenantContext::active()) {
             return $this->err('Not found.', 404, 'not_found');
         }
-        $v = \Illuminate\Support\Facades\Validator::make($request->all(), ['email' => 'required|email', 'current_password' => 'required|string', 'password' => 'required|string|min:8|max:100']);
+        $v = \Illuminate\Support\Facades\Validator::make($request->all(), ['email' => 'required|email', 'current_password' => 'required|string', 'password' => 'required|string|min:6|max:100']);
         if ($v->fails()) {
             return $this->err($v->errors()->first());
         }
@@ -78,7 +78,7 @@ class TenantSignInController extends Controller
     public function inviteAccept(\Illuminate\Http\Request $request)
     {
         $locale = $request->header('X-Locale', 'en') === 'ar' ? 'ar' : 'en';
-        $v = \Illuminate\Support\Facades\Validator::make($request->all(), ['token' => 'required|string|max:2000', 'password' => 'required|string|min:8|max:100']);
+        $v = \Illuminate\Support\Facades\Validator::make($request->all(), ['token' => 'required|string|max:2000', 'password' => 'required|string|min:6|max:100']);
         if ($v->fails()) {
             return $this->err($v->errors()->first());
         }
@@ -96,9 +96,27 @@ class TenantSignInController extends Controller
     public function show()
     {
         $s = TenantAuthSettings::active();
-        $data = $s === null || !TenantContext::active()
-            ? ['isolated' => false]
-            : ['isolated' => true, 'template' => $s['template'], 'headline' => $s['headline'], 'subtitle' => $s['subtitle']];
+        if ($s === null || !TenantContext::active()) {
+            $data = ['isolated' => false];
+        } else {
+            $sec = $s['security'] ?? TenantAuthSettings::securityDefaults();
+            $pp = app(\App\Services\PasswordPolicyService::class)->getPolicy();
+            $data = [
+                'isolated' => true, 'template' => $s['template'], 'headline' => $s['headline'], 'subtitle' => $s['subtitle'],
+                // طرق الدخول المتاحة (الفرونت بيظهر الأزرار منها) + قيود الدومين + قواعد الباسورد لصفحات الدعوة/التغيير.
+                'methods' => [
+                    'magic_link' => !empty($sec['magic_link']),
+                    'passkeys' => !empty($sec['passkeys']),
+                    'sso' => !empty($sec['oidc']['enabled']),
+                    'sso_label' => ($sec['oidc']['label'] ?? '') !== '' ? $sec['oidc']['label'] : null,
+                ],
+                'allowed_domains' => (array) ($sec['allowed_domains'] ?? []),
+                'password_rules' => [
+                    'min_length' => (int) $pp['min_length'], 'require_upper' => (bool) $pp['require_upper'], 'require_lower' => (bool) $pp['require_lower'],
+                    'require_number' => (bool) $pp['require_number'], 'require_special' => (bool) $pp['require_special'],
+                ],
+            ];
+        }
         return response()->json(['success' => true, 'message' => 'OK', 'data' => $data, 'errors' => null, 'meta' => (object) []]);
     }
 }

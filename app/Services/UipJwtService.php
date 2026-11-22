@@ -225,6 +225,11 @@ class UipJwtService
     {
         $base = (int) config('security.jwt.refresh_ttl', 1209600);
         try {
+            // مدة جلسة ضابطها مالك المنصة المعزولة: بتغلب الافتراضي و"فضّل مسجّل دخول".
+            $hours = \App\Services\Tenancy\TenantSecurity::sessionHours();
+            if ($hours > 0) {
+                return $hours * 3600;
+            }
             if (\App\Support\PlatformPolicy::flag('persistent_login')) {
                 return max($base, (int) config('security.persistent_refresh_ttl', 31536000));
             }

@@ -48,7 +48,14 @@ class PasswordPolicyService
                 $stored = $decoded;
             }
         }
-        return array_merge(self::DEFAULTS, $stored);
+        $policy = array_merge(self::DEFAULTS, $stored);
+        // منصة معزولة فعّل مالكها "سياسة مخصصة": قيم المنصة بتغلب (طول/أنواع الحروف/انتهاء الصلاحية).
+        try {
+            $overlay = \App\Services\Tenancy\TenantSecurity::passwordOverlay();
+        } catch (\Throwable $e) {
+            $overlay = [];
+        }
+        return $overlay ? array_merge($policy, $overlay) : $policy;
     }
 
     /**

@@ -121,6 +121,11 @@ class LoginController extends Controller
             ], 403);
         }
 
+        // سياسة المنصة المعزولة: IP allowlist — قبل أي بحث عن الحساب (مفيش تسريب لوجود حساب).
+        if (\App\Services\Tenancy\TenantSecurity::ipBlocked($request->ip(), null, true)) {
+            return $this->tenantBlock($request, null, 'ip_not_allowed', $locale);
+        }
+
         $user = User::where('email', $data['email'])->first();
 
         // الإيميل الجامعي: لو مفيش حساب بالعنوان ده كإيميل أساسي، نجرّبه كعنوان جامعي لطالب (الأولوية دايماً للإيميل الأساسي).
@@ -310,8 +315,38 @@ class LoginController extends Controller
      * محاولات الفشل، وضع الصيانة، الجلسة الواحدة، الـ 2FA، وإصدار التوكنز. اتفصل عن submit()
      * عشان GoogleAuthController يعدّي من نفس الحراسات بالظبط بدل ما نكرر الكود.
      */
+    /** رد رفض سياسة المنصة (IP / دومين الإيميل). نفس الرسالة أيًا كان الحساب. */
+    public function tenantBlock(Request $request, ?User $user, string $code, string $locale)
+    {
+        $ar = $locale === 'ar';
+        SecurityLog::write('Login blocked - workspace policy', ['code' => $code, 'user_id' => $user?->id, 'ip' => $request->ip()]);
+        if ($user) {
+            $this->logLogin($request, $user, false, $code);
+        }
+        $msg = $code === 'ip_not_allowed'
+            ? ($ar ? 'الدخول مسموح من الشبكات المعتمدة للمنصة دي بس.' : 'Sign-in is only allowed from this platform\'s approved networks.')
+            : ($ar ? 'الإيميل ده مش على دومين مسموح له بالدخول للمنصة دي.' : 'This email address is not on a domain allowed to sign in to this platform.');
+        return response()->json(['success' => false, 'message' => $msg, 'data' => null, 'errors' => ['code' => $code], 'meta' => (object) []], 403);
+    }
+
+    /** سياسات المنصة اللي بتتفرض على أي طريقة دخول (باسورد / جوجل / مايكروسوفت / SSO / passkey / magic link). null = مسموح. */
+    private function tenantPolicyDenial(Request $request, User $user, string $locale)
+    {
+        if (\App\Services\Tenancy\TenantSecurity::ipBlocked($request->ip(), null, true)) {
+            return $this->tenantBlock($request, $user, 'ip_not_allowed', $locale);
+        }
+        if (\App\Services\Tenancy\TenantSecurity::emailBlockedHere((string) $user->email)) {
+            return $this->tenantBlock($request, $user, 'email_domain_not_allowed', $locale);
+        }
+        return null;
+    }
+
     public function finishLogin(Request $request, User $user, string $role, string $locale, bool $mfaSatisfied = false)
     {
+        if ($deny = $this->tenantPolicyDenial($request, $user, $locale)) {
+            return $deny;
+        }
+
         // Device Restrictions Policy (وضع by_role) — الدور اتعرف دلوقتي والحساب اتأكد منه،
         // فنطبّق قاعدة الدور ده على نوع الجهاز (مثلًا الطالب ممنوع موبايل والأدمن لأ).
         if (!$this->deviceRestriction->isAllowed($request->userAgent(), $role)) {

@@ -2,6 +2,8 @@
 
 namespace App\Services\Identity;
 
+use App\Services\Tenancy\TenantContext;
+use App\Services\Tenancy\TenantSecurity;
 use App\Support\WebAuthn\WebAuthn;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -20,14 +22,36 @@ class PasskeyService
         throw new \DomainException($m, $code);
     }
 
-    /** @return string[] */
+    /** @return string[] origins المسموحة (جوه منصة معزولة: origins السيرفر + دومينات المنصة الشغّالة). */
     public function origins(): array
     {
-        return array_values(array_filter(array_map(fn ($o) => rtrim(trim($o), '/'), explode(',', (string) config('identity.passkeys.origins', '')))));
+        $o = array_values(array_filter(array_map(fn ($o) => rtrim(trim($o), '/'), explode(',', (string) config('identity.passkeys.origins', '')))));
+        if (TenantContext::active() && TenantContext::id()) {
+            foreach (TenantSecurity::activeDomains((int) TenantContext::id()) as $d) {
+                $o[] = 'https://' . $d;
+            }
+        }
+        return array_values(array_unique($o));
+    }
+
+    /** جوه منصة معزولة وطلب جاي من دومينها المخصص: الـ passkey بتتربط بالدومين ده (rp id = الدومين). */
+    private function tenantRpId(): ?string
+    {
+        if (!TenantContext::active() || !TenantContext::id()) {
+            return null;
+        }
+        $host = strtolower(trim((string) request()->headers->get('X-Tenant-Domain', '')));
+        if ($host !== '' && in_array($host, TenantSecurity::activeDomains((int) TenantContext::id()), true)) {
+            return $host;
+        }
+        return null;
     }
 
     public function rpId(): string
     {
+        if (($t = $this->tenantRpId()) !== null) {
+            return $t;
+        }
         $id = trim((string) config('identity.passkeys.rp_id', ''));
         if ($id !== '') {
             return strtolower($id);
@@ -38,6 +62,13 @@ class PasskeyService
 
     public function enabled(): bool
     {
+        // منصة معزولة: Passkeys لازم المالك يفعّلها من "الدخول والأمان".
+        if (TenantContext::active()) {
+            $s = TenantSecurity::current();
+            if (empty($s['passkeys'])) {
+                return false;
+            }
+        }
         return $this->origins() !== [] && $this->rpId() !== '';
     }
 
@@ -91,7 +122,7 @@ class PasskeyService
         Cache::put('passkey:reg:' . $userId, $ch, self::TTL);
         return ['publicKey' => [
             'challenge' => $ch,
-            'rp' => ['id' => $this->rpId(), 'name' => (string) config('identity.passkeys.rp_name', 'UIPE')],
+            'rp' => ['id' => $this->rpId(), 'name' => (string) ((TenantContext::active() ? \App\Services\Tenancy\TenantMailBrand::current()['name'] ?? null : null) ?: config('identity.passkeys.rp_name', 'UIPE'))],
             'user' => ['id' => WebAuthn::b64uEncode($this->userHandle($userId)), 'name' => (string) ($u->email ?? ('user' . $userId)), 'displayName' => (string) ($u->full_name ?? $u->email ?? 'User')],
             'pubKeyCredParams' => [['type' => 'public-key', 'alg' => WebAuthn::ALG_ES256], ['type' => 'public-key', 'alg' => WebAuthn::ALG_RS256]],
             'timeout' => self::TTL * 1000,

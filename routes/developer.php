@@ -109,6 +109,10 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::put('/platform-users/{userId}/status', [TenantController::class, 'statusPlatformUser'])->whereNumber('userId')->middleware('throttle:30,1');
         Route::get('/sign-in', [TenantController::class, 'signIn'])->middleware('throttle:120,1');
         Route::put('/sign-in', [TenantController::class, 'saveSignIn'])->middleware('throttle:30,1');
+        // الدخول والأمان: دومين الإيميل، IP allowlist، الجلسة، الباسورد، Magic link، Passkeys، SSO (OIDC)، سيندر الإيميل.
+        Route::get('/security', [TenantController::class, 'security'])->middleware('throttle:120,1');
+        Route::put('/security', [TenantController::class, 'saveSecurity'])->middleware('throttle:30,1');
+        Route::post('/security/test-sso', [TenantController::class, 'testSso'])->middleware('throttle:10,1');
         Route::get('/role-labels', [TenantController::class, 'roleLabels'])->middleware('throttle:120,1');
         Route::put('/role-labels', [TenantController::class, 'saveRoleLabels'])->middleware('throttle:30,1');
         Route::post('/members', [TenantController::class, 'addMember'])->middleware('throttle:30,1');

@@ -27,7 +27,7 @@ class ResetPasswordController extends Controller
 
         $validator = Validator::make($request->all(), [
             'token'    => 'required',
-            'password' => 'required|min:8|confirmed',
+            'password' => 'required|min:6|confirmed',
         ]);
 
         if ($validator->fails()) {
@@ -115,7 +115,7 @@ class ResetPasswordController extends Controller
         $validator = Validator::make($request->all(), [
             'email'    => 'required|email',
             'otp'      => 'required|string',
-            'password' => 'required|min:8|confirmed',
+            'password' => 'required|min:6|confirmed',
         ]);
         if ($validator->fails()) {
             return response()->json(['success' => false, 'message' => $validator->errors()->first()], 422);

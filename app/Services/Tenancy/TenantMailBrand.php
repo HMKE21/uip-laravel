@@ -14,6 +14,21 @@ class TenantMailBrand
     /** @var array<int, array<string,mixed>> */
     private static array $memo = [];
 
+    /** منصة بنبعت باسمها من خارج سياقها (مثلًا دعوة من مركز المطوّرين على المنصة الأم). */
+    private static ?object $override = null;
+
+    /** يشغّل $fn والإيميلات اللي بتتبعت جواه بهوية المنصة $tenant، من غير تبديل قاعدة البيانات. */
+    public static function using(object $tenant, \Closure $fn): mixed
+    {
+        $prev = self::$override;
+        self::$override = $tenant;
+        try {
+            return $fn();
+        } finally {
+            self::$override = $prev;
+        }
+    }
+
     public static function flush(): void
     {
         self::$memo = [];
@@ -22,7 +37,7 @@ class TenantMailBrand
     /** @return array{name:string,logo_url:?string,color:?string,color_dark:?string,support_email:?string,hide_platform:bool}|null */
     public static function current(): ?array
     {
-        $tenant = TenantContext::tenant();
+        $tenant = TenantContext::tenant() ?? self::$override;
         if (!$tenant) {
             return null;
         }
@@ -42,7 +57,21 @@ class TenantMailBrand
         $logo = (is_string($b['logo_url'] ?? null) && preg_match('#^https://#i', $b['logo_url'])) ? $b['logo_url'] : null;
         $email = filter_var((string) ($b['support_email'] ?? ''), FILTER_VALIDATE_EMAIL) ?: null;
 
+        // سيندر المنصة (لو المالك فعّله وعنوانه على دومين شغّال للمنصة): بيظهر كـ From بدل عنوان UIPE.
+        $fromAddress = null;
+        try {
+            $sec = TenantSecurity::forTenant($id);
+            $addr = strtolower(trim((string) ($sec['mail']['from_address'] ?? '')));
+            if (!empty($sec['mail']['from_enabled']) && $addr !== '' && filter_var($addr, FILTER_VALIDATE_EMAIL) !== false
+                && in_array(substr($addr, (int) strrpos($addr, '@') + 1), TenantSecurity::activeDomains($id), true)) {
+                $fromAddress = $addr;
+            }
+        } catch (\Throwable $e) {
+            $fromAddress = null;
+        }
+
         return self::$memo[$id] = [
+            'from_address' => $fromAddress,
             'name' => $name !== '' ? $name : 'Workspace',
             'logo_url' => $logo,
             'color' => $color,
