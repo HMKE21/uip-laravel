@@ -131,7 +131,8 @@ final class TenantBranding
             'colors' => ['primary' => $b['primary_color'], 'accent' => $b['accent_color']],
             'theme' => $b['theme'], 'locale' => $b['default_locale'],
             'support' => ['email' => $b['support_email'], 'url' => $b['support_url']],
-            'legal' => ['privacy_url' => $b['privacy_url'], 'terms_url' => $b['terms_url']],
+            // privacy_url/terms_url = رابط خارجي اختياري. privacy_page/terms_page = صفحات المساحة نفسها (دايمًا موجودة) — مفيش حد بيروح لسياسة المنصة.
+            'legal' => ['privacy_url' => $b['privacy_url'], 'terms_url' => $b['terms_url'], 'privacy_page' => '/p/privacy', 'terms_page' => '/p/terms'],
             'powered_by' => $hide ? null : 'UIPE',
         ];
     }

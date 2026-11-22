@@ -55,6 +55,22 @@ final class TenantSiteService
         return $this->db()->table('tenant_sites')->where('tenant_id', $tenant->id)->first();
     }
 
+    /**
+     * يضمن إن الإعدادات فيها صفحتي الخصوصية والشروط الخاصتين بالمساحة (باسمها وإيميل دعمها) — فمفيش زائر بيتحوّل لسياسة المنصة الأصلية.
+     * @param array<string,mixed> $settings إعدادات سليمة (full)
+     */
+    private function legalize(object $tenant, array $settings): array
+    {
+        $name = (string) ($tenant->name ?? '');
+        $email = '';
+        try {
+            $b = TenantBranding::get((int) $tenant->id);
+            $name = (string) (($b['display_name'] ?? '') ?: $name);
+            $email = (string) ($b['support_email'] ?? '');
+        } catch (\Throwable $e) { /* الهوية مش شرط */ }
+        return TenantSiteLegal::fill($settings, $name, $email);
+    }
+
     /** ألوان هوية العميل (لو مضبوطة) بتغلب ألوان القالب الافتراضية عند تطبيقه. */
     private function withBrand(object $tenant, array $settings): array
     {
@@ -66,12 +82,12 @@ final class TenantSiteService
                 }
             }
         }
-        return TenantSiteSanitizer::full($settings);
+        return $this->legalize($tenant, TenantSiteSanitizer::full($settings));
     }
 
-    private function draftOf(object $row): array
+    private function draftOf(object $row, object $tenant): array
     {
-        return TenantSiteSanitizer::full($this->decode($row->draft) ?? []);
+        return $this->legalize($tenant, TenantSiteSanitizer::full($this->decode($row->draft) ?? []));
     }
 
     private function meta(object $row): array
@@ -94,7 +110,7 @@ final class TenantSiteService
         $row = $this->row($t);
         $pub = $this->decode($row->published);
         return [
-            'site' => $this->meta($row) + ['draft' => $this->draftOf($row), 'published_settings' => $pub ? TenantSiteSanitizer::full($pub) : null],
+            'site' => $this->meta($row) + ['draft' => $this->draftOf($row, $t), 'published_settings' => $pub ? $this->legalize($t, TenantSiteSanitizer::full($pub)) : null],
             'address' => TenantAddress::payload($t),
             'preview' => $this->previewInfo($t, $row),
             'templates' => $this->templateList((int) $t->id),
@@ -112,7 +128,7 @@ final class TenantSiteService
             'login_styles' => ['split', 'centered', 'card'], 'nav_styles' => ['top', 'side'],
             // الخطوط: كل عنصر {key,label,group(sans|serif|display),arabic,family}. family = اسم Google Fonts (null = خط النظام). font_heading بيقبل كمان 'same'.
             'font_catalog' => TenantSiteTemplates::fontCatalog(), 'font_scales' => ['sm', 'md', 'lg', 'xl'], 'heading_weights' => ['medium', 'semibold', 'bold', 'extrabold'],
-            'page_kinds' => TenantSiteTemplates::PAGE_KINDS, 'reserved_page_slugs' => TenantSiteTemplates::RESERVED_PAGE_SLUGS,
+            'page_kinds' => TenantSiteTemplates::PAGE_KINDS, 'legal_kinds' => TenantSiteTemplates::LEGAL_KINDS, 'template_kinds' => TenantSiteTemplates::TEMPLATE_KINDS, 'reserved_page_slugs' => TenantSiteTemplates::RESERVED_PAGE_SLUGS,
             'limits' => ['sections' => (int) config('tenancy.site.max_sections', 12), 'nav' => (int) config('tenancy.site.max_nav', 8),
                 'pages' => (int) config('tenancy.site.max_pages', 8), 'page_sections' => (int) config('tenancy.site.max_page_sections', 10), 'posts' => (int) config('tenancy.site.max_posts', 30),
                 'bytes' => (int) config('tenancy.site.max_bytes', 262144), 'seo_title' => 70, 'seo_description' => 160],
@@ -142,7 +158,7 @@ final class TenantSiteService
     {
         [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
         $row = $this->row($t);
-        $draft = TenantSiteSanitizer::settings($in, $this->draftOf($row));
+        $draft = $this->legalize($t, TenantSiteSanitizer::settings($in, $this->draftOf($row, $t)));
         $this->db()->table('tenant_sites')->where('tenant_id', $t->id)->update(['draft' => json_encode($draft, JSON_UNESCAPED_UNICODE), 'draft_updated_at' => now(), 'updated_at' => now()]);
         return ['draft' => $draft, 'site' => $this->meta($this->row($t))];
     }
@@ -157,7 +173,7 @@ final class TenantSiteService
             if (!$c) {
                 $this->fail('Template not found.', 404);
             }
-            $settings = TenantSiteSanitizer::full($this->decode($c->settings) ?? []);
+            $settings = $this->legalize($t, TenantSiteSanitizer::full($this->decode($c->settings) ?? []));
             $key = 'custom:' . $c->id;
         } else {
             $tpl = TenantSiteTemplates::find((string) ($in['key'] ?? ''));
@@ -178,7 +194,7 @@ final class TenantSiteService
         [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
         $row = $this->row($t);
         $pub = $this->decode($row->published);
-        $draft = $pub ? TenantSiteSanitizer::full($pub) : $this->withBrand($t, TenantSiteTemplates::find('classic')['settings']);
+        $draft = $pub ? $this->legalize($t, TenantSiteSanitizer::full($pub)) : $this->withBrand($t, TenantSiteTemplates::find('classic')['settings']);
         $this->db()->table('tenant_sites')->where('tenant_id', $t->id)->update(['draft' => json_encode($draft, JSON_UNESCAPED_UNICODE), 'draft_updated_at' => now(), 'updated_at' => now()]);
         $this->audit($userId, (int) $t->id, 'discard');
         return ['draft' => $draft, 'site' => $this->meta($this->row($t))];
@@ -190,7 +206,7 @@ final class TenantSiteService
     {
         [$t] = $this->tenants->authorize($userId, $tenantId, 'site');
         $row = $this->row($t);
-        $draft = $this->draftOf($row);
+        $draft = $this->draftOf($row, $t);
         $this->db()->transaction(function () use ($t, $row, $draft, $userId) {
             $old = $this->decode($row->published);
             if ($old !== null) {
@@ -234,7 +250,7 @@ final class TenantSiteService
         if (!$v) {
             $this->fail('Version not found.', 404);
         }
-        $draft = TenantSiteSanitizer::full($this->decode($v->settings) ?? []);
+        $draft = $this->legalize($t, TenantSiteSanitizer::full($this->decode($v->settings) ?? []));
         $this->row($t);
         $this->db()->table('tenant_sites')->where('tenant_id', $t->id)->update(['draft' => json_encode($draft, JSON_UNESCAPED_UNICODE), 'draft_updated_at' => now(), 'updated_at' => now()]);
         $this->audit($userId, (int) $t->id, 'restore', 'v' . $v->version);
@@ -274,7 +290,7 @@ final class TenantSiteService
         if ($this->db()->table('tenant_site_templates')->where('tenant_id', $t->id)->count() >= (int) config('tenancy.site.max_custom_templates', 20)) {
             $this->fail('You reached the maximum number of saved templates. Delete one first.', 403);
         }
-        $draft = $this->draftOf($this->row($t));
+        $draft = $this->draftOf($this->row($t), $t);
         $id = $this->db()->table('tenant_site_templates')->insertGetId(['tenant_id' => (int) $t->id, 'name' => $name, 'settings' => json_encode($draft, JSON_UNESCAPED_UNICODE),
             'created_by' => $userId ?: null, 'created_at' => now(), 'updated_at' => now()]);
         $this->audit($userId, (int) $t->id, 'save-template', $name);
@@ -318,13 +334,18 @@ final class TenantSiteService
     {
         $row = $this->db()->table('tenant_sites')->where('tenant_id', $tenant->id)->first();
         $pub = $row ? $this->decode($row->published) : null;
-        $full = $pub ? TenantSiteSanitizer::full($pub) : null;
-        return [
+        $full = $pub ? $this->legalize($tenant, TenantSiteSanitizer::full($pub)) : null;
+        $out = [
             'tenant' => $tenant->public_id,
             'site' => $pub ? ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => $full, 'preview' => false] : null,
             'branding' => TenantBranding::publicPayload($tenant),
             'canonical_base' => TenantSiteSeo::base($tenant), 'contact_form' => $full ? TenantSiteMessages::hasForm($full) : false,
         ];
+        if (!$pub) {
+            // لسه مفيش نشر: الفرونت بيعرض الشكل الافتراضي، لكن صفحتي الخصوصية والشروط لازم يكونوا موجودين وخاصين بالمساحة.
+            $out['legal_pages'] = $this->legalize($tenant, TenantSiteSanitizer::full([]))['pages'];
+        }
+        return $out;
     }
 
     /** المسودة لحامل توكن المعاينة. null لو التوكن غلط (من غير ما نكشف إن فيه مسودة). */
@@ -334,7 +355,7 @@ final class TenantSiteService
         if (!$row || !$row->preview_token || $token === '' || !hash_equals((string) $row->preview_token, $token)) {
             return null;
         }
-        $draft = $this->draftOf($row);
+        $draft = $this->draftOf($row, $tenant);
         return ['tenant' => $tenant->public_id, 'site' => ['version' => (int) $row->version, 'published_at' => $row->published_at, 'settings' => $draft, 'preview' => true],
             'branding' => TenantBranding::publicPayload($tenant), 'canonical_base' => TenantSiteSeo::base($tenant), 'contact_form' => TenantSiteMessages::hasForm($draft)];
     }
@@ -344,7 +365,7 @@ final class TenantSiteService
     {
         $row = $this->db()->table('tenant_sites')->where('tenant_id', $tenant->id)->first();
         $pub = $row ? $this->decode($row->published) : null;
-        return $pub ? TenantSiteSanitizer::full($pub) : null;
+        return $pub ? $this->legalize($tenant, TenantSiteSanitizer::full($pub)) : null;
     }
 
     /** SEO لمسار معيّن (للـ <head> وكروت المشاركة). بتوكن معاينة صالح بيتحسب من المسودة وبـ noindex. null لو التوكن غلط. */
@@ -355,18 +376,18 @@ final class TenantSiteService
             $p = $this->previewPayload($tenant, $preview);
             return $p === null ? null : TenantSiteSeo::resolve($tenant, $p['site']['settings'], $branding, $path, true);
         }
-        $settings = $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]);
+        $settings = $this->publishedSettings($tenant) ?? $this->legalize($tenant, TenantSiteSanitizer::full([]));
         return TenantSiteSeo::resolve($tenant, $settings, $branding, $path, false);
     }
 
     public function publicSitemap(object $tenant): string
     {
-        return TenantSiteSeo::sitemap($tenant, $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]));
+        return TenantSiteSeo::sitemap($tenant, $this->publishedSettings($tenant) ?? $this->legalize($tenant, TenantSiteSanitizer::full([])));
     }
 
     public function publicRobots(object $tenant): string
     {
-        return TenantSiteSeo::robots($tenant, $this->publishedSettings($tenant) ?? TenantSiteSanitizer::full([]));
+        return TenantSiteSeo::robots($tenant, $this->publishedSettings($tenant) ?? $this->legalize($tenant, TenantSiteSanitizer::full([])));
     }
 
     /** رسالة من نموذج التواصل في الموقع المنشور. */

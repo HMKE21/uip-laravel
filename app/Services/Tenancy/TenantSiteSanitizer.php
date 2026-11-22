@@ -171,6 +171,7 @@ final class TenantSiteSanitizer
         $out = [];
         $ids = [];
         $slugs = [];
+        $legalSeen = [];
         foreach (array_slice(is_array($in) ? array_values($in) : [], 0, $max * 3) as $row) {
             if (count($out) >= $max) {
                 break;
@@ -186,7 +187,17 @@ final class TenantSiteSanitizer
             }
             $title = $page['title']['en'] ?: $page['title']['ar'];
             $kind = $page['kind'];
-            $slug = self::uniqueSlug(self::slugify($row['slug'] ?? '') ?: self::slugify($title), $slugs, TenantSiteTemplates::RESERVED_PAGE_SLUGS, $kind === 'custom' ? 'page' : $kind);
+            if (in_array($kind, TenantSiteTemplates::LEGAL_KINDS, true)) {
+                // الصفحة القانونية واحدة من كل نوع وعنوانها ثابت (/p/privacy و /p/terms): الروابط في الفوتر والهوية بتعتمد عليه.
+                if (isset($legalSeen[$kind])) {
+                    continue;
+                }
+                $legalSeen[$kind] = true;
+                $slug = $kind;
+                $slugs[$slug] = true;
+            } else {
+                $slug = self::uniqueSlug(self::slugify($row['slug'] ?? '') ?: self::slugify($title), $slugs, array_merge(TenantSiteTemplates::RESERVED_PAGE_SLUGS, TenantSiteTemplates::LEGAL_KINDS), $kind === 'custom' ? 'page' : $kind);
+            }
             $out[] = ['id' => self::itemId($row['id'] ?? '', 'page', $ids), 'slug' => $slug] + $page + ['sections' => self::sections($row['sections'] ?? [], $maxSections)];
         }
         return $out;
