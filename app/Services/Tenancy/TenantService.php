@@ -990,7 +990,8 @@ final class TenantService
             }
         }
         if ($toRequest) {
-            TenantFeatures::request($tid, $toRequest, $userId, 'requested from the developer center');
+            $res = TenantFeatures::request($tid, $toRequest, $userId, 'requested from the developer center');
+            TenantFeatureNotifier::requested($tid, $res['requested'] ?? [], $userId, 'requested from the developer center');
         }
         $this->audit($userId, $tid, 'features', implode(',', $selected));
         return ['features' => $this->featureRows($tid)];
