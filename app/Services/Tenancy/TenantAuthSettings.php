@@ -43,6 +43,15 @@ final class TenantAuthSettings
         return self::normalize(['template' => $row->template] + (is_array($c) ? $c : []));
     }
 
+    public static function exists(int $tenantId): bool
+    {
+        try {
+            return (bool) TenantContext::runCentral(static fn () => DB::table('tenant_auth_settings')->where('tenant_id', $tenantId)->exists());
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     /** إعدادات المنصة المعزولة اللي الطلب شغّال جواها، أو null (المنصة الأم / مساحة مشتركة). */
     public static function active(): ?array
     {

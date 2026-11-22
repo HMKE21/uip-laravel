@@ -276,6 +276,17 @@ class LoginController extends Controller
 
         // Password expiration policy: كلمة السر انتهت => الدخول بيترفض لحد ما تتغيّر (عن طريق "نسيت كلمة السر").
         $expiry = app(\App\Services\PasswordPolicyService::class)->expiryStatus($user->id);
+        if ($expiry['expired'] && $ownPlatform) {
+            // منصة معزولة: بدل "نسيت الباسورد"، الفرونت بيفتح خطوة "اختار باسورد جديد" (POST /auth/tenant-password-change).
+            $this->logLogin($request, $user, false, 'password_change_required');
+            return response()->json([
+                'success' => false,
+                'message' => $locale === 'ar' ? 'لازم تغيّر كلمة المرور قبل ما تكمّل.' : 'You need to choose a new password before continuing.',
+                'data'    => ['password_change_required' => true, 'email' => $user->email],
+                'errors'  => ['code' => 'password_change_required'],
+                'meta'    => (object) [],
+            ], 403);
+        }
         if ($expiry['expired']) {
             SecurityLog::write('Login blocked - password expired', ['user_id' => $user->id, 'ip' => $request->ip()]);
             $this->logLogin($request, $user, false, 'password_expired');

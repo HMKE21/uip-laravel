@@ -41,6 +41,60 @@ final class PlatformUsers
         return (string) $map[$role];
     }
 
+    private static function fp(?string $hash): string
+    {
+        return substr(hash('sha256', (string) $hash), 0, 20);
+    }
+
+    /** توكن دعوة/إعداد باسورد: بيبطل لوحده أول ما الباسورد يتغيّر (بصمة الهاش جواه). */
+    private function inviteLink(object $t, int $uid, ?string $hash): ?string
+    {
+        $base = TenantAddress::urlFor((int) $t->id);
+        if (!$base) {
+            return null;
+        }
+        $token = \App\Services\UipJwtService::encode(['typ' => 'ws_invite', 'uid' => $uid, 'tn' => (int) $t->id, 'fp' => self::fp($hash)], max(1, (int) config('tenancy.launch.invite_days', 7)) * 86400);
+        return $base . '/invite?token=' . $token;
+    }
+
+    /** يُستدعى جوّه سياق المنصة: المستخدم صاحب التوكن لو لسه سليم، وإلا null. */
+    public static function userFromInvite(string $token): ?object
+    {
+        $c = \App\Services\UipJwtService::decode($token);
+        if (!$c || ($c['typ'] ?? null) !== 'ws_invite' || (int) ($c['tn'] ?? 0) !== (int) TenantContext::id()) {
+            return null;
+        }
+        $u = DB::table('users')->where('id', (int) ($c['uid'] ?? 0))->whereNull('deleted_at')->first();
+        if (!$u || in_array($u->status, ['suspended', 'banned'], true) || !hash_equals(self::fp($u->password_hash), (string) ($c['fp'] ?? ''))) {
+            return null;
+        }
+        return $u;
+    }
+
+    private function mailInvite(object $t, string $email, string $name, ?string $link, string $locale): bool
+    {
+        if (!$link) {
+            return false;
+        }
+        $ar = $locale === 'ar';
+        try {
+            return (bool) app(\App\Services\MailService::class)->sendNotificationEmail(
+                $email, $name,
+                $ar ? "اتدعيت تنضم لـ {$t->name}" : "You're invited to {$t->name}",
+                $ar ? 'اضغط على الزرار واختار كلمة المرور بتاعتك عشان تبدأ. اللينك شغّال لمدة محدودة.' : 'Use the button to choose your password and get started. The link works for a limited time.',
+                $link, $locale
+            );
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Platform invite email failed', ['tenant' => $t->id, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    public function count(object $t): int
+    {
+        return (int) TenantContext::run($t, static fn () => DB::table('users')->whereNull('deleted_at')->count());
+    }
+
     public function list(int $actorId, int $tenantId): array
     {
         [$t] = $this->open($actorId, $tenantId);
@@ -55,7 +109,11 @@ final class PlatformUsers
         });
     }
 
-    /** @return array{users:array,created:array{email:string,password:?string}} الباسورد المتولّد بيرجع مرة واحدة بس. */
+    /**
+     * مود invite (الافتراضي): بنعمل الحساب ونبعت لينك يختار بيه الشخص باسورده (من غير ما حد يعرف باسورد).
+     * مود password: باسورد مؤقت (بيكتبه المالك أو يتولّد)، وبشكل افتراضي لازم يتغيّر عند أول دخول.
+     * @return array{users:array,created:array{email:string,password:?string,invited:bool,emailed:bool,invite_link:?string}}
+     */
     public function create(int $actorId, int $tenantId, array $in): array
     {
         [$t] = $this->open($actorId, $tenantId);
@@ -65,14 +123,21 @@ final class PlatformUsers
             $this->fail('Enter a valid email.');
         }
         $name = trim((string) ($in['name'] ?? '')) ?: Str::before($email, '@');
+        $invite = (string) ($in['mode'] ?? 'invite') !== 'password';
+        $require = !array_key_exists('require_change', $in) || (bool) $in['require_change'];
         $pass = (string) ($in['password'] ?? '');
-        if ($pass !== '' && strlen($pass) < 8) {
+        if (!$invite && $pass !== '' && strlen($pass) < 8) {
             $this->fail('The password must be at least 8 characters.');
         }
-        $generated = $pass === '' ? Str::password(14, true, true, true, false) : null;
-        $pass = $pass !== '' ? $pass : $generated;
+        $generated = null;
+        if ($invite) {
+            $pass = Str::random(48); // مش بيتعرض لحد: الشخص بيختار باسورده من اللينك
+        } elseif ($pass === '') {
+            $generated = $pass = Str::password(14, true, true, true, false);
+        }
+        $hash = password_hash($pass, PASSWORD_DEFAULT);
 
-        TenantContext::run($t, function () use ($slug, $email, $name, $pass) {
+        $uid = TenantContext::run($t, function () use ($slug, $email, $name, $hash, $invite, $require) {
             if (DB::table('users')->whereRaw('lower(email) = ?', [$email])->exists()) {
                 $this->fail('This email already has an account on this platform.', 409);
             }
@@ -80,21 +145,38 @@ final class PlatformUsers
             if (!$roleId) {
                 $this->fail("Role '{$slug}' was not found on this platform.", 500);
             }
-            DB::transaction(function () use ($roleId, $email, $name, $pass) {
+            return DB::transaction(function () use ($roleId, $email, $name, $hash, $invite, $require) {
                 $uid = (int) DB::table('users')->insertGetId([
                     'uuid' => (string) Str::uuid(), 'full_name' => mb_substr($name, 0, 100), 'email' => $email,
-                    'password_hash' => password_hash($pass, PASSWORD_DEFAULT),
-                    'status' => 'active', 'email_verified_at' => now(), 'password_changed_at' => now(),
+                    'password_hash' => $hash, 'status' => 'active', 'email_verified_at' => now(), 'password_changed_at' => now(),
+                    'must_change_password' => (!$invite && $require) ? 1 : 0,
                 ]);
                 DB::table('user_roles')->insert(['user_id' => $uid, 'role_id' => $roleId]);
+                return $uid;
             });
         });
-        $this->tenants->audit($actorId, (int) $t->id, 'platform-user.create', $email);
-        return ['users' => $this->list($actorId, $tenantId), 'created' => ['email' => $email, 'password' => $generated]];
+        $link = $invite ? $this->inviteLink($t, $uid, $hash) : null;
+        $emailed = $invite ? $this->mailInvite($t, $email, $name, $link, (string) ($in['locale'] ?? 'ar')) : false;
+        $this->tenants->audit($actorId, (int) $t->id, $invite ? 'platform-user.invite' : 'platform-user.create', $email);
+        return ['users' => $this->list($actorId, $tenantId), 'created' => ['email' => $email, 'password' => $generated, 'invited' => $invite, 'emailed' => $emailed, 'invite_link' => $link]];
+    }
+
+    /** يبعت لينك إعداد باسورد جديد لحساب موجود (بديل إعادة الضبط من غير ما حد يستلم باسورد). */
+    public function sendInvite(int $actorId, int $tenantId, int $userId, string $locale = 'ar'): array
+    {
+        [$t] = $this->open($actorId, $tenantId);
+        $u = TenantContext::run($t, static fn () => DB::table('users')->where('id', $userId)->whereNull('deleted_at')->first(['id', 'email', 'full_name', 'password_hash']));
+        if (!$u) {
+            $this->fail('User not found.', 404);
+        }
+        $link = $this->inviteLink($t, (int) $u->id, $u->password_hash);
+        $emailed = $this->mailInvite($t, (string) $u->email, (string) $u->full_name, $link, $locale);
+        $this->tenants->audit($actorId, (int) $t->id, 'platform-user.invite-resend', '#' . $userId);
+        return ['users' => $this->list($actorId, $tenantId), 'created' => ['email' => $u->email, 'password' => null, 'invited' => true, 'emailed' => $emailed, 'invite_link' => $link]];
     }
 
     /** @return array{users:array,reset:array{email:string,password:?string}} */
-    public function resetPassword(int $actorId, int $tenantId, int $userId, ?string $password): array
+    public function resetPassword(int $actorId, int $tenantId, int $userId, ?string $password, bool $requireChange = true): array
     {
         [$t] = $this->open($actorId, $tenantId);
         $password = (string) $password;
@@ -103,12 +185,12 @@ final class PlatformUsers
         }
         $generated = $password === '' ? Str::password(14, true, true, true, false) : null;
         $password = $password !== '' ? $password : $generated;
-        $email = TenantContext::run($t, function () use ($userId, $password) {
+        $email = TenantContext::run($t, function () use ($userId, $password, $requireChange) {
             $u = DB::table('users')->where('id', $userId)->whereNull('deleted_at')->first(['id', 'email']);
             if (!$u) {
                 $this->fail('User not found.', 404);
             }
-            $data = ['password_hash' => password_hash($password, PASSWORD_DEFAULT), 'password_changed_at' => now()];
+            $data = ['password_hash' => password_hash($password, PASSWORD_DEFAULT), 'password_changed_at' => now(), 'must_change_password' => $requireChange ? 1 : 0];
             if (Schema::hasColumn('users', 'tokens_valid_after')) {
                 $data['tokens_valid_after'] = now(); // الجلسات القديمة بتبطل
             }

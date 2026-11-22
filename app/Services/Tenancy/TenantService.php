@@ -255,6 +255,34 @@ final class TenantService
         ];
     }
 
+    /** خطوات "ابدأ" بعد الإطلاق (Shopify-style): بتتحسب من الحالة الفعلية، ومحتاجة ability عرض. */
+    public function checklist(int $userId, int $tenantId): array
+    {
+        [$t, $role] = $this->authorize($userId, $tenantId);
+        $isolated = ($t->mode ?? 'shared') === 'isolated';
+        $logo = (bool) DB::table('tenant_branding')->where('tenant_id', $t->id)->whereNotNull('logo_url')->where('logo_url', '!=', '')->exists();
+        $team = $isolated ? app(PlatformUsers::class)->count($t) > 1 : DB::table('tenant_members')->where('tenant_id', $t->id)->count() > 1;
+        $features = count(TenantFeatures::enabledKeys((int) $t->id)) > 0;
+        $items = [
+            ['key' => 'logo', 'section' => 'branding', 'done' => $logo, 'optional' => false],
+            ['key' => 'features', 'section' => 'features', 'done' => $features, 'optional' => false],
+            ['key' => 'team', 'section' => 'members', 'done' => $team, 'optional' => false],
+        ];
+        if ($isolated) {
+            $a = TenantAuthSettings::forTenant((int) $t->id);
+            $items[] = ['key' => 'signin', 'section' => 'signin', 'done' => TenantAuthSettings::exists((int) $t->id), 'optional' => false];
+            $items[] = ['key' => 'google', 'section' => 'signin', 'done' => (bool) ($a['google']['enabled'] || $a['microsoft']['enabled']), 'optional' => true];
+            $items[] = ['key' => 'domain', 'section' => 'domains', 'done' => DB::table('tenant_domains')->where('tenant_id', $t->id)->exists(), 'optional' => true];
+        }
+        $required = array_filter($items, static fn ($i) => !$i['optional']);
+        return [
+            'items' => $items,
+            'done' => count(array_filter($items, static fn ($i) => $i['done'])), 'total' => count($items),
+            'complete' => count(array_filter($required, static fn ($i) => !$i['done'])) === 0,
+            'can_manage' => in_array($role, ['owner', 'admin'], true),
+        ];
+    }
+
     private const OWNER_OFF_NOTE = 'turned off by owner';
 
     /** ميزات المنصة وحالة كل واحدة (none|pending|enabled|rejected|disabled) + أنهي بتتفعّل فورًا. */

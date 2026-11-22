@@ -72,13 +72,22 @@ class TenantProvisioner
             $createdDb = true;
 
             $tenant = $db->table('tenants')->where('id', $tenantId)->first();
-            TenantContext::run($tenant, function () use ($log, $central, $email, $in, $password) {
+            TenantContext::run($tenant, function () use ($log, $central, $email, $in, $password, $plainPassword) {
                 $log('Running migrations ...');
                 $this->migrateCurrent();
                 $log('Copying roles and permissions ...');
                 $this->copyCatalogFrom($central);
                 $log('Creating first admin ...');
-                $this->createAdmin($email, (string) ($in['admin_name'] ?? 'Admin'), $password);
+                $adminId = $this->createAdmin($email, (string) ($in['admin_name'] ?? 'Admin'), $password);
+                // أدمن المنصة: 2FA إجباري (بعد فترة سماح قصيرة)، وباسورد متولّد = لازم يتغيّر عند أول دخول.
+                try {
+                    app(\App\Services\MfaPolicyService::class)->updatePolicy(['enforced_roles' => ['admin'], 'grace_period_days' => (int) config('tenancy.launch.admin_mfa_grace_days', 3)], $adminId);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('Tenant admin MFA policy not set', ['error' => $e->getMessage()]);
+                }
+                if ($plainPassword !== null) {
+                    DB::table('users')->where('id', $adminId)->update(['must_change_password' => 1]);
+                }
             });
 
             $db->table('tenants')->where('id', $tenantId)->update(['db_status' => 'ready', 'provisioned_at' => now(), 'updated_at' => now()]);

@@ -52,6 +52,7 @@ class TenantFeatureAdminController extends Controller
         }
         $in = $r->validate(['status' => ['required', Rule::in(self::DECISIONS)], 'note' => 'nullable|string|max:255']);
         TenantFeatures::decide($id, $feature, $in['status'], (int) $r->attributes->get('uip_user_id'), $in['note'] ?? null);
+        \App\Services\Tenancy\TenantFeatureNotifier::decided($id, [$feature], (string) $in['status'], $in['note'] ?? null);
         return $this->apiSuccess(['features' => TenantFeatures::stateFor($id)], 'Feature updated.');
     }
 
@@ -70,6 +71,9 @@ class TenantFeatureAdminController extends Controller
         $admin = (int) $r->attributes->get('uip_user_id');
         foreach ($in['features'] as $feature => $status) {
             TenantFeatures::decide($id, (string) $feature, (string) $status, $admin, $in['note'] ?? null);
+        }
+        foreach (array_unique(array_values($in['features'])) as $st) {
+            \App\Services\Tenancy\TenantFeatureNotifier::decided($id, array_keys(array_filter($in['features'], static fn ($x) => $x === $st)), (string) $st, $in['note'] ?? null);
         }
         return $this->apiSuccess(['features' => TenantFeatures::stateFor($id)], 'Features updated.');
     }

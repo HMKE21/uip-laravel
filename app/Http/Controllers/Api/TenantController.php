@@ -48,14 +48,25 @@ class TenantController extends Controller
 
     public function createPlatformUser(Request $r, int $id)
     {
-        $in = $r->validate(['name' => 'nullable|string|max:100', 'email' => 'required|email|max:190', 'role' => 'required|in:admin,employee', 'password' => 'nullable|string|min:8|max:100']);
+        $in = $r->validate(['name' => 'nullable|string|max:100', 'email' => 'required|email|max:190', 'role' => 'required|in:admin,employee', 'mode' => 'nullable|in:invite,password', 'require_change' => 'nullable|boolean', 'password' => 'nullable|string|min:8|max:100']);
+        $in['locale'] = $r->header('X-Locale', 'ar') === 'en' ? 'en' : 'ar';
         return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->create($this->uid($r), $id, $in), 201);
     }
 
     public function resetPlatformUser(Request $r, int $id, int $userId)
     {
-        $in = $r->validate(['password' => 'nullable|string|min:8|max:100']);
-        return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->resetPassword($this->uid($r), $id, $userId, $in['password'] ?? null));
+        $in = $r->validate(['password' => 'nullable|string|min:8|max:100', 'require_change' => 'nullable|boolean']);
+        return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->resetPassword($this->uid($r), $id, $userId, $in['password'] ?? null, !array_key_exists('require_change', $in) || (bool) $in['require_change']));
+    }
+
+    public function invitePlatformUser(Request $r, int $id, int $userId)
+    {
+        return $this->dom(fn () => app(\App\Services\Tenancy\PlatformUsers::class)->sendInvite($this->uid($r), $id, $userId, $r->header('X-Locale', 'ar') === 'en' ? 'en' : 'ar'));
+    }
+
+    public function checklist(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->tenants->checklist($this->uid($r), $id));
     }
 
     public function statusPlatformUser(Request $r, int $id, int $userId)

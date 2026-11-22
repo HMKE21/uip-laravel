@@ -93,6 +93,8 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/platform-users', [TenantController::class, 'platformUsers'])->middleware('throttle:120,1');
         Route::post('/platform-users', [TenantController::class, 'createPlatformUser'])->middleware('throttle:30,1');
         Route::post('/platform-users/{userId}/password', [TenantController::class, 'resetPlatformUser'])->whereNumber('userId')->middleware('throttle:20,1');
+        Route::post('/platform-users/{userId}/invite', [TenantController::class, 'invitePlatformUser'])->whereNumber('userId')->middleware('throttle:20,1');
+        Route::get('/checklist', [TenantController::class, 'checklist'])->middleware('throttle:120,1');
         Route::put('/platform-users/{userId}/status', [TenantController::class, 'statusPlatformUser'])->whereNumber('userId')->middleware('throttle:30,1');
         Route::get('/sign-in', [TenantController::class, 'signIn'])->middleware('throttle:120,1');
         Route::put('/sign-in', [TenantController::class, 'saveSignIn'])->middleware('throttle:30,1');

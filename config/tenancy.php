@@ -62,6 +62,8 @@ return [
     /** Launch (إنشاء منصة جاهزة بنفسه من مركز المطورين). الميزات دي بتتفعّل فورًا؛ أي ميزة تانية بتتبعت كطلب للأدمن. */
     'launch' => [
         'enabled' => filter_var(env('TENANT_LAUNCH_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        'admin_mfa_grace_days' => (int) env('TENANT_ADMIN_MFA_GRACE_DAYS', 3),
+        'invite_days' => (int) env('TENANT_INVITE_DAYS', 7),
         'auto_features' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_AUTO_FEATURES', 'messaging,meetings,feed'))))),
     ],
 
