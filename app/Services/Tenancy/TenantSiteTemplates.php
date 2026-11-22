@@ -149,6 +149,6 @@ final class TenantSiteTemplates
     /** بيانات القالب للعرض في المعرض (من غير settings الكاملة). */
     public static function card(array $t): array
     {
-        return ['key' => $t['key'], 'name' => $t['name'], 'description' => $t['description'], 'kind' => $t['kind'], 'preview' => $t['preview'], 'builtin' => true];
+        return ['key' => $t['key'], 'name' => $t['name'], 'description' => $t['description'], 'kind' => $t['kind'], 'preview' => $t['preview'], 'settings' => $t['settings'] ?? null, 'builtin' => true];
     }
 }
