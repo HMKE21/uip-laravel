@@ -30,6 +30,9 @@ final class TenantService
         'embed' => ['owner', 'admin'],
         'site' => ['owner', 'admin'],
         'features' => ['owner', 'admin'],
+        'teams' => ['owner', 'admin'],
+        'roles' => ['owner', 'admin'],
+        'activity' => ['owner', 'admin'],
         'delete' => ['owner'],
     ];
 
@@ -59,21 +62,129 @@ final class TenantService
         ];
     }
 
+    /* ------------------------------------------------------------------ custom roles support */
+
+    /** @var array<string,array|null> */
+    private static array $customMemo = [];
+    private static ?bool $customOk = null;
+
+    public static function forgetCustomRoles(): void
+    {
+        self::$customMemo = [];
+    }
+
+    /** الأدوار المخصصة شغّالة (الـ migration اتعمل)؟ */
+    public static function customRolesReady(): bool
+    {
+        if (self::$customOk === null) {
+            try {
+                self::$customOk = Schema::hasTable('tenant_custom_roles') && Schema::hasColumn('tenant_members', 'custom_role_id');
+            } catch (\Throwable $e) {
+                self::$customOk = false;
+            }
+        }
+        return self::$customOk;
+    }
+
+    /** @return array{id:int,name_en:?string,name_ar:?string,description:?string,permissions:array<string,string>}|null */
+    public static function customRole(int $roleId, int $tenantId): ?array
+    {
+        if ($roleId <= 0 || !self::customRolesReady()) {
+            return null;
+        }
+        $k = $tenantId . ':' . $roleId;
+        if (!array_key_exists($k, self::$customMemo)) {
+            $r = DB::table('tenant_custom_roles')->where('id', $roleId)->where('tenant_id', $tenantId)->first();
+            self::$customMemo[$k] = $r ? ['id' => (int) $r->id, 'name_en' => $r->name_en, 'name_ar' => $r->name_ar, 'description' => $r->description,
+                'permissions' => TenantPermissions::normalize((array) json_decode((string) $r->permissions, true))] : null;
+        }
+        return self::$customMemo[$k];
+    }
+
+    /** @return string[] abilities of a built-in role */
+    public static function abilitiesOfRole(string $role): array
+    {
+        return array_keys(array_filter(self::ABILITIES, static fn ($r) => in_array($role, $r, true)));
+    }
+
+    /** @return array{0:object,1:object,2:string,3:?array} [tenant, member row, role, custom role] — يرمي 404 لو المستخدم مش عضو. */
+    private function resolve(int $userId, int $tenantId): array
+    {
+        $t = DB::table('tenants')->where('id', $tenantId)->first();
+        $m = $t ? DB::table('tenant_members')->where('tenant_id', $tenantId)->where('user_id', $userId)->first() : null;
+        if (!$t || !$m || !$m->role) {
+            $this->fail('Workspace not found.', 404);
+        }
+        $cr = self::customRole((int) ($m->custom_role_id ?? 0), $tenantId);
+        return [$t, $m, (string) $m->role, $cr];
+    }
+
+    /** abilities الفعلية لعضو (دور أساسي أو مخصص). @return string[] */
+    public function abilitiesOfMember(int $tenantId, int $userId): array
+    {
+        $m = DB::table('tenant_members')->where('tenant_id', $tenantId)->where('user_id', $userId)->first();
+        if (!$m) {
+            return [];
+        }
+        $cr = self::customRole((int) ($m->custom_role_id ?? 0), $tenantId);
+        return $cr ? TenantPermissions::abilities($cr['permissions']) : self::abilitiesOfRole((string) $m->role);
+    }
+
     /** @return array{0:object,1:string} [tenant, role] — يرمي 404 لو المستخدم مش عضو (من غير ما يكشف إن الـ tenant موجود). */
     public function authorize(int $userId, int $tenantId, string $ability = 'view'): array
     {
-        $t = DB::table('tenants')->where('id', $tenantId)->first();
-        $role = $t ? DB::table('tenant_members')->where('tenant_id', $tenantId)->where('user_id', $userId)->value('role') : null;
-        if (!$t || !$role) {
-            $this->fail('Workspace not found.', 404);
-        }
-        if (!in_array($role, self::ABILITIES[$ability] ?? [], true)) {
+        [$t, , $role, $cr] = $this->resolve($userId, $tenantId);
+        $allowed = $cr ? in_array($ability, TenantPermissions::abilities($cr['permissions']), true) : in_array($role, self::ABILITIES[$ability] ?? [], true);
+        if (!$allowed) {
             $this->fail('Your role in this workspace does not allow this.', 403);
         }
         if ($ability !== 'view' && $t->status !== 'active') {
             $this->fail('This workspace is suspended.', 403);
         }
-        return [$t, (string) $role];
+        return [$t, $role];
+    }
+
+    /** قراءة قسم معيّن: الدور المخصص ممكن يكون مخفي عنه القسم ده (none). الأدوار الأساسية تقرأ كل حاجة ما عدا سجل النشاط (owner/admin). */
+    public function authorizeRead(int $userId, int $tenantId, string $section): array
+    {
+        [$t, , $role, $cr] = $this->resolve($userId, $tenantId);
+        if ($cr ? TenantPermissions::level($cr['permissions'], $section) === 'none' : ($section === 'activity' && !in_array($role, self::ABILITIES['activity'], true))) {
+            $this->fail('Your role in this workspace does not allow this.', 403);
+        }
+        return [$t, $role];
+    }
+
+    /** 'custom:12' → ['viewer', 12] · 'admin' → ['admin', null] */
+    public static function parseRole(string $role): array
+    {
+        if (preg_match('/^custom:(\d+)$/', $role, $m) === 1) {
+            return ['viewer', (int) $m[1]];
+        }
+        return [$role, null];
+    }
+
+    /** مين مش owner/admin ميقدرش يدي (أو يعدّل في) حد صلاحياته أكبر من صلاحياته هو. */
+    private function assertNotAbove(int $tenantId, int $actorId, string $actorRole, array $targetAbilities): void
+    {
+        if (in_array($actorRole, ['owner', 'admin'], true)) {
+            return;
+        }
+        $mine = $this->abilitiesOfMember($tenantId, $actorId);
+        if (array_diff($targetAbilities, $mine)) {
+            $this->fail('You cannot give or manage permissions beyond your own.', 403);
+        }
+    }
+
+    private function grantAbilities(int $tenantId, string $base, ?int $customId): array
+    {
+        if ($customId) {
+            $cr = self::customRole($customId, $tenantId);
+            if (!$cr) {
+                $this->fail('Role not found.', 404);
+            }
+            return TenantPermissions::abilities($cr['permissions']);
+        }
+        return self::abilitiesOfRole($base);
     }
 
     public function mine(int $userId): array
@@ -94,7 +205,11 @@ final class TenantService
             'participants' => Schema::hasTable('tenant_participants') ? DB::table('tenant_participants')->where('tenant_id', $t->id)->count() : 0,
             'embed_origins' => Schema::hasTable('tenant_embed_origins') ? DB::table('tenant_embed_origins')->where('tenant_id', $t->id)->count() : 0,
         ];
-        return ['tenant' => $this->payload($t, $role), 'branding' => TenantBranding::get((int) $t->id), 'counts' => $counts, 'abilities' => array_keys(array_filter(self::ABILITIES, fn ($r) => in_array($role, $r, true)))];
+        $cr = self::customRolesReady() ? self::customRole((int) (DB::table('tenant_members')->where('tenant_id', $t->id)->where('user_id', $userId)->value('custom_role_id') ?? 0), (int) $t->id) : null;
+        return ['tenant' => $this->payload($t, $role), 'branding' => TenantBranding::get((int) $t->id), 'counts' => $counts,
+            'abilities' => $this->abilitiesOfMember((int) $t->id, $userId),
+            'custom_role' => $cr ? ['id' => $cr['id'], 'name_en' => $cr['name_en'], 'name_ar' => $cr['name_ar']] : null,
+            'permissions' => $cr ? $cr['permissions'] : null];
     }
 
     /* ------------------------------------------------------------------ create / update / delete */
@@ -291,16 +406,28 @@ final class TenantService
 
     public function members(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'members');
+        $ready = self::customRolesReady();
+        $cols = ['m.user_id', 'm.role', 'm.created_at', 'u.email', 'u.full_name'] + ($ready ? [5 => 'm.custom_role_id'] : []);
+        $teams = [];
+        if ($ready && Schema::hasTable('tenant_team_members')) {
+            foreach (DB::table('tenant_team_members')->where('tenant_id', $t->id)->get(['team_id', 'user_id']) as $r) {
+                $teams[(int) $r->user_id][] = (int) $r->team_id;
+            }
+        }
         return DB::table('tenant_members as m')->join('users as u', 'u.id', '=', 'm.user_id')->where('m.tenant_id', $t->id)->orderBy('m.id')
-            ->get(['m.user_id', 'm.role', 'm.created_at', 'u.email', 'u.full_name'])
-            ->map(fn ($m) => ['user_id' => (int) $m->user_id, 'role' => $m->role, 'email' => $m->email, 'name' => $m->full_name, 'joined_at' => $m->created_at])->all();
+            ->get($cols)
+            ->map(function ($m) use ($t, $teams) {
+                $cr = self::customRole((int) ($m->custom_role_id ?? 0), (int) $t->id);
+                return ['user_id' => (int) $m->user_id, 'role' => $m->role, 'email' => $m->email, 'name' => $m->full_name, 'joined_at' => $m->created_at,
+                    'custom_role' => $cr ? ['id' => $cr['id'], 'name_en' => $cr['name_en'], 'name_ar' => $cr['name_ar']] : null, 'teams' => $teams[(int) $m->user_id] ?? []];
+            })->all();
     }
 
     /** @return array<string,array{0:?string,1:?string}> role => [English, Arabic] — الأدوار اللي ليها اسم مخصص بس. */
     public function roleLabels(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'members');
         try {
             return DB::table('tenant_role_labels')->where('tenant_id', $t->id)->get(['role', 'label_en', 'label_ar'])
                 ->mapWithKeys(fn ($r) => [$r->role => [$r->label_en, $r->label_ar]])->all();
@@ -347,7 +474,9 @@ final class TenantService
     public function addMember(int $actorId, int $tenantId, string $email, string $role): array
     {
         [$t, $actorRole] = $this->authorize($actorId, $tenantId, 'members');
-        $this->assertAssignable($actorRole, $role);
+        [$base, $customId] = self::parseRole($role);
+        $this->assertAssignable($actorRole, $base);
+        $this->assertNotAbove((int) $t->id, $actorId, $actorRole, $this->grantAbilities((int) $t->id, $base, $customId));
         if (DB::table('tenant_members')->where('tenant_id', $t->id)->count() >= (int) $this->limits($t)['members']) {
             $this->fail('This workspace reached its member limit.', 403);
         }
@@ -358,9 +487,10 @@ final class TenantService
         if (DB::table('tenant_members')->where('tenant_id', $t->id)->where('user_id', $u->id)->exists()) {
             $this->fail('This person is already a member.', 409);
         }
-        DB::table('tenant_members')->insert(['tenant_id' => $t->id, 'user_id' => $u->id, 'role' => $role, 'invited_by' => $actorId, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('tenant_members')->insert(['tenant_id' => $t->id, 'user_id' => $u->id, 'role' => $base, 'invited_by' => $actorId, 'created_at' => now(), 'updated_at' => now()]
+            + (self::customRolesReady() ? ['custom_role_id' => $customId] : []));
         WorkspaceAccess::forget((int) $t->id, (int) $u->id);
-        $this->audit($actorId, (int) $t->id, 'member.add', '#' . $u->id . ' ' . $role);
+        $this->audit($actorId, (int) $t->id, 'member.add', '#' . $u->id . ' ' . ($customId ? 'custom:' . $customId : $base));
         return $this->members($actorId, $tenantId);
     }
 
@@ -376,13 +506,19 @@ final class TenantService
         if (!$cur) {
             $this->fail('Member not found.', 404);
         }
-        $this->assertAssignable($actorRole, $role, (string) $cur);
-        if ($cur === 'owner' && $role !== 'owner' && $this->ownerCount((int) $t->id) <= 1) {
+        [$base, $customId] = self::parseRole($role);
+        $this->assertAssignable($actorRole, $base, (string) $cur);
+        $this->assertNotAbove((int) $t->id, $actorId, $actorRole, $this->grantAbilities((int) $t->id, $base, $customId));
+        if ($userId !== $actorId) {
+            $this->assertNotAbove((int) $t->id, $actorId, $actorRole, $this->abilitiesOfMember((int) $t->id, $userId));
+        }
+        if ($cur === 'owner' && $base !== 'owner' && $this->ownerCount((int) $t->id) <= 1) {
             $this->fail('A workspace needs at least one owner.', 409);
         }
-        DB::table('tenant_members')->where('tenant_id', $t->id)->where('user_id', $userId)->update(['role' => $role, 'updated_at' => now()]);
+        DB::table('tenant_members')->where('tenant_id', $t->id)->where('user_id', $userId)->update(['role' => $base, 'updated_at' => now()]
+            + (self::customRolesReady() ? ['custom_role_id' => $customId] : []));
         Cache::forget("tenant:gate:{$t->id}:{$userId}");
-        $this->audit($actorId, (int) $t->id, 'member.role', '#' . $userId . ' ' . $cur . '→' . $role);
+        $this->audit($actorId, (int) $t->id, 'member.role', '#' . $userId . ' ' . $cur . '→' . ($customId ? 'custom:' . $customId : $base));
         return $this->members($actorId, $tenantId);
     }
 
@@ -398,11 +534,17 @@ final class TenantService
         if (!$self && $actorRole !== 'owner' && in_array($cur, ['owner', 'admin'], true)) {
             $this->fail('Only an owner can remove owners and admins.', 403);
         }
+        if (!$self) {
+            $this->assertNotAbove((int) $t->id, $actorId, $actorRole, $this->abilitiesOfMember((int) $t->id, $userId));
+        }
         if ($cur === 'owner' && $this->ownerCount((int) $t->id) <= 1) {
             $this->fail('A workspace needs at least one owner. Make someone else an owner first.', 409);
         }
         DB::transaction(function () use ($t, $userId) {
             DB::table('tenant_members')->where('tenant_id', $t->id)->where('user_id', $userId)->delete();
+            if (self::customRolesReady() && Schema::hasTable('tenant_team_members')) {
+                DB::table('tenant_team_members')->where('tenant_id', $t->id)->where('user_id', $userId)->delete();
+            }
             $this->stopMemberResources((int) $t->id, $userId, 'Owner left the workspace');
         });
         Cache::forget("tenant:gate:{$t->id}:{$userId}");
@@ -423,7 +565,7 @@ final class TenantService
 
     public function domains(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'domains');
         return TenantDomainService::list((int) $t->id);
     }
 
@@ -468,19 +610,19 @@ final class TenantService
 
     public function listApps(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'resources');
         return DB::table('dev_apps')->where('tenant_id', $t->id)->orderByDesc('id')->get()->map(fn ($a) => $this->apps->appPayload($a))->all();
     }
 
     public function listKeys(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'resources');
         return DB::table('dev_api_keys')->where('tenant_id', $t->id)->orderByDesc('id')->get()->map(fn ($k) => $this->apps->keyPayload($k) + ['owner_user_id' => (int) $k->user_id])->all();
     }
 
     public function listWebhooks(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'resources');
         return DB::table('dev_webhooks')->where('tenant_id', $t->id)->orderByDesc('id')->get()->map(fn ($h) => $this->hooks->payload($h) + ['owner_user_id' => (int) $h->user_id])->all();
     }
 
@@ -586,7 +728,7 @@ final class TenantService
 
     public function listParticipants(int $userId, int $tenantId, array $f = []): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'embed');
         return $this->participants->list((int) $t->id, $f);
     }
 
@@ -609,7 +751,7 @@ final class TenantService
 
     public function embedOrigins(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'embed');
         return ['origins' => $this->embed->listOrigins((int) $t->id), 'frame_ancestors' => $this->embed->frameAncestors((int) $t->id)];
     }
 
@@ -676,14 +818,14 @@ final class TenantService
     /** استهلاك الـ Workspace (Rate Limit Dashboard) بنفس شكل /developer/usage — مفاتيح وتطبيقات الـ tenant بس. ?range=1h|24h|7d */
     public function usageReport(int $userId, int $tenantId, string $range): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'resources');
         return $this->usage->report($userId, $range, (int) $t->id);
     }
 
     /** سجل الـ Workspace المعزول: كل الأعضاء بيشوفوا طلبات tenant بتاعهم بس (مفاتيحه وتطبيقاته وأحداث إدارته). */
     public function logs(int $userId, int $tenantId, array $filters, int $page = 1, int $per = 30): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'resources');
         $allowed = array_intersect_key($filters, array_flip(['kind', 'status', 'from', 'to', 'q', 'app_id', 'api_key_id']));
         return $this->logs->search($allowed + ['tenant_id' => (int) $t->id], $page, $per);
     }
@@ -704,11 +846,13 @@ final class TenantService
             if ($status !== 'active') {
                 return 'tenant_suspended';
             }
-            $role = DB::table('tenant_members')->where('tenant_id', $tenantId)->where('user_id', $userId)->value('role');
-            if (!$role) {
+            $m = DB::table('tenant_members')->where('tenant_id', $tenantId)->where('user_id', $userId)->first();
+            if (!$m || !$m->role) {
                 return 'tenant_membership_revoked';
             }
-            return in_array($role, self::ABILITIES['resources'], true) ? '' : 'tenant_role_insufficient';
+            $cr = self::customRole((int) ($m->custom_role_id ?? 0), $tenantId);
+            $ok = $cr ? in_array('resources', TenantPermissions::abilities($cr['permissions']), true) : in_array($m->role, self::ABILITIES['resources'], true);
+            return $ok ? '' : 'tenant_role_insufficient';
         });
         return $code === '' ? null : $code;
     }
@@ -795,7 +939,7 @@ final class TenantService
 
     public function features(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'features');
         return ['features' => $this->featureRows((int) $t->id)];
     }
 
@@ -854,7 +998,7 @@ final class TenantService
 
     public function signInSettings(int $userId, int $tenantId): array
     {
-        [$t] = $this->authorize($userId, $tenantId);
+        [$t] = $this->authorizeRead($userId, $tenantId, 'site');
         return $this->signInPayload($t);
     }
 
@@ -903,7 +1047,7 @@ final class TenantService
         $done = count(array_filter($items, static fn ($i) => $i['done']));
         $complete = count(array_filter($items, static fn ($i) => $i['required'] && !$i['done'])) === 0;
         return [
-            'can_manage' => in_array($role, self::ABILITIES['site'], true),
+            'can_manage' => in_array('site', $this->abilitiesOfMember($tid, $userId), true),
             'complete' => $complete, 'done' => $done, 'total' => count($items), 'items' => $items,
         ];
     }
@@ -913,6 +1057,6 @@ final class TenantService
     public function audit(int $userId, ?int $tenantId, string $action, ?string $note = null): void
     {
         $this->logs->record(['user_id' => $userId ?: null, 'kind' => 'admin', 'method' => 'TENANT', 'path' => 'tenant/' . ($tenantId ?? '-') . '/' . $action, 'status' => 200,
-            'note' => $note]);
+            'note' => $note, 'tenant_id' => $tenantId, 'ip' => app()->runningInConsole() ? null : request()->ip()]);
     }
 }

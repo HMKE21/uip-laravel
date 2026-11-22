@@ -18,10 +18,24 @@ class DevLogService
                 'path' => isset($f['path']) ? substr((string) $f['path'], 0, 200) : null, 'status' => $f['status'] ?? null,
                 'duration_ms' => $f['duration_ms'] ?? null, 'scope' => $f['scope'] ?? null, 'error_code' => $f['error_code'] ?? null,
                 'ip' => $f['ip'] ?? null, 'note' => isset($f['note']) ? substr((string) $f['note'], 0, 200) : null, 'created_at' => now(),
-            ]);
+            ] + (isset($f['tenant_id']) && $f['tenant_id'] && self::hasTenantCol() ? ['tenant_id' => (int) $f['tenant_id']] : []));
         } catch (\Throwable $e) {
             Log::warning('Dev log failed', ['error' => $e->getMessage()]);
         }
+    }
+
+    private static ?bool $tenantCol = null;
+
+    private static function hasTenantCol(): bool
+    {
+        if (self::$tenantCol === null) {
+            try {
+                self::$tenantCol = \Illuminate\Support\Facades\Schema::hasColumn('dev_request_logs', 'tenant_id');
+            } catch (\Throwable $e) {
+                self::$tenantCol = false;
+            }
+        }
+        return self::$tenantCol;
     }
 
     public function fromRequest(Request $r, int $status, array $ctx, int $ms, ?string $errorCode = null, ?string $scope = null): void
@@ -85,7 +99,10 @@ class DevLogService
 
     public function prune(): array
     {
-        $l = DB::table('dev_request_logs')->where('created_at', '<', now()->subDays(max(1, (int) config('developer.logs.retention_days', 30))))->delete();
+        // سجل نشاط المساحات (method=TENANT) بيتحفظ أطول من سجل الطلبات العادي (config developer.logs.audit_days، افتراضي 365).
+        $l = DB::table('dev_request_logs')->where('created_at', '<', now()->subDays(max(1, (int) config('developer.logs.retention_days', 30))))
+            ->where(fn ($w) => $w->whereNull('method')->orWhere('method', '!=', 'TENANT'))->delete();
+        $l += DB::table('dev_request_logs')->where('method', 'TENANT')->where('created_at', '<', now()->subDays(max(30, (int) config('developer.logs.audit_days', 365))))->delete();
         $d = DB::table('dev_webhook_deliveries')->where('created_at', '<', now()->subDays(max(1, (int) config('developer.logs.delivery_days', 14))))
             ->whereIn('status', ['success', 'failed'])->delete();
         $c = DB::table('dev_oauth_codes')->where('expires_at', '<', now()->subDay())->delete();

@@ -233,8 +233,20 @@ class TenantContext
         // الـ stores والـ singletons اللي اتبنت بالـ prefix/المسار القديم لازم تتبني من جديد.
         Cache::forgetDriver(array_keys($stores));
         $app = app();
+        // الـ RateLimiter singleton بيشيل الـ limiters المسمّاة (auth-login…) اللي اتسجّلت في AppServiceProvider لما نمسحه،
+        // فكان أي طلب جوه مساحة بيرجّع 500 "Rate limiter [auth-login] is not defined". نحفظها ونسجّلها في النسخة الجديدة.
+        $saved = [];
+        if ($app->resolved(\Illuminate\Cache\RateLimiter::class)) {
+            $saved = (fn () => $this->limiters)->call($app->make(\Illuminate\Cache\RateLimiter::class));
+        }
         foreach (['cache.store', \Illuminate\Cache\RateLimiter::class] as $abstract) {
             $app->forgetInstance($abstract);
+        }
+        if ($saved) {
+            $fresh = $app->make(\Illuminate\Cache\RateLimiter::class);
+            foreach ($saved as $name => $callback) {
+                $fresh->for($name, $callback);
+            }
         }
     }
 }

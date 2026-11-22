@@ -90,6 +90,15 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/branding', [TenantController::class, 'branding'])->middleware('throttle:120,1');
         Route::put('/branding', [TenantController::class, 'saveBranding'])->middleware('throttle:30,1');
         Route::get('/members', [TenantController::class, 'members'])->middleware('throttle:120,1');
+        Route::get('/roles', [TenantController::class, 'roles'])->middleware('throttle:120,1');
+        Route::post('/roles', [TenantController::class, 'createRole'])->middleware('throttle:30,1');
+        Route::put('/roles/{roleId}', [TenantController::class, 'updateRole'])->whereNumber('roleId')->middleware('throttle:30,1');
+        Route::delete('/roles/{roleId}', [TenantController::class, 'deleteRole'])->whereNumber('roleId')->middleware('throttle:20,1');
+        Route::get('/teams', [TenantController::class, 'teams'])->middleware('throttle:120,1');
+        Route::post('/teams', [TenantController::class, 'createTeam'])->middleware('throttle:30,1');
+        Route::put('/teams/{teamId}', [TenantController::class, 'updateTeam'])->whereNumber('teamId')->middleware('throttle:30,1');
+        Route::delete('/teams/{teamId}', [TenantController::class, 'deleteTeam'])->whereNumber('teamId')->middleware('throttle:20,1');
+        Route::get('/activity', [TenantController::class, 'activity'])->middleware('throttle:60,1');
         Route::get('/features', [TenantController::class, 'features'])->middleware('throttle:120,1');
         Route::put('/features', [TenantController::class, 'setFeatures'])->middleware('throttle:20,1');
         Route::get('/platform-users', [TenantController::class, 'platformUsers'])->middleware('throttle:120,1');

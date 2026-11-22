@@ -90,7 +90,7 @@ final class TenantSiteService
     /** كل اللي صفحة الـ builder محتاجاه في request واحد. */
     public function overview(int $userId, int $tenantId): array
     {
-        [$t] = $this->tenants->authorize($userId, $tenantId, 'view');
+        [$t] = $this->tenants->authorizeRead($userId, $tenantId, 'site');
         $row = $this->row($t);
         $pub = $this->decode($row->published);
         return [
@@ -126,7 +126,7 @@ final class TenantSiteService
 
     public function templates(int $userId, int $tenantId): array
     {
-        [$t] = $this->tenants->authorize($userId, $tenantId, 'view');
+        [$t] = $this->tenants->authorizeRead($userId, $tenantId, 'site');
         return $this->templateList((int) $t->id);
     }
 
@@ -215,7 +215,7 @@ final class TenantSiteService
 
     public function versions(int $userId, int $tenantId): array
     {
-        [$t] = $this->tenants->authorize($userId, $tenantId, 'view');
+        [$t] = $this->tenants->authorizeRead($userId, $tenantId, 'site');
         return ['versions' => $this->db()->table('tenant_site_versions')->where('tenant_id', $t->id)->orderByDesc('id')->get(['id', 'version', 'published_by', 'published_at'])
             ->map(fn ($v) => ['id' => (int) $v->id, 'version' => (int) $v->version, 'published_by' => $v->published_by ? (int) $v->published_by : null, 'published_at' => $v->published_at])->all()];
     }

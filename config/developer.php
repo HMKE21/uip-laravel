@@ -39,6 +39,7 @@ return [
     'logs' => [
         'retention_days' => (int) env('DEV_LOG_DAYS', 30),
         'delivery_days'  => (int) env('DEV_WEBHOOK_LOG_DAYS', 14),
+        'audit_days'     => (int) env('DEV_AUDIT_LOG_DAYS', 365), // سجل نشاط المساحات (مين غيّر إيه)
     ],
 
     /**

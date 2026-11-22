@@ -172,13 +172,13 @@ class TenantController extends Controller
 
     public function addMember(Request $r, int $id)
     {
-        $in = $r->validate(['email' => 'required|email|max:190', 'role' => 'required|in:owner,admin,developer,viewer,employee']);
+        $in = $r->validate(['email' => 'required|email|max:190', 'role' => ['required', 'string', 'regex:/^(owner|admin|developer|viewer|employee|custom:[0-9]+)$/']]);
         return $this->dom(fn () => ['members' => $this->tenants->addMember($this->uid($r), $id, $in['email'], $in['role'])], 201);
     }
 
     public function setRole(Request $r, int $id, int $userId)
     {
-        $in = $r->validate(['role' => 'required|in:owner,admin,developer,viewer,employee']);
+        $in = $r->validate(['role' => ['required', 'string', 'regex:/^(owner|admin|developer|viewer|employee|custom:[0-9]+)$/']]);
         return $this->dom(fn () => ['members' => $this->tenants->setRole($this->uid($r), $id, $userId, $in['role'])]);
     }
 
@@ -331,5 +331,73 @@ class TenantController extends Controller
         $f = $r->validate(['kind' => 'nullable|in:api,oauth,admin,webhook,sandbox', 'status' => 'nullable|string|max:8', 'from' => 'nullable|string|max:40', 'to' => 'nullable|string|max:40',
             'q' => 'nullable|string|max:100', 'app_id' => 'nullable|integer', 'api_key_id' => 'nullable|integer', 'page' => 'nullable|integer|min:1', 'per_page' => 'nullable|integer|min:1|max:100']);
         return $this->dom(fn () => $this->tenants->logs($this->uid($r), $id, $f, (int) ($f['page'] ?? 1), (int) ($f['per_page'] ?? 30)));
+    }
+
+    /* ---- أدوار مخصصة + أقسام + سجل نشاط (TenantRoles) ---- */
+
+    private function rolesSvc(): \App\Services\Tenancy\TenantRoles
+    {
+        return app(\App\Services\Tenancy\TenantRoles::class);
+    }
+
+    private function roleRules(): array
+    {
+        return ['name_en' => 'nullable|string|max:60', 'name_ar' => 'nullable|string|max:60', 'description' => 'nullable|string|max:160', 'permissions' => 'required|array', 'permissions.*' => 'string|in:none,view,edit'];
+    }
+
+    public function roles(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->rolesSvc()->roles($this->uid($r), $id));
+    }
+
+    public function createRole(Request $r, int $id)
+    {
+        $in = $r->validate($this->roleRules());
+        return $this->dom(fn () => $this->rolesSvc()->saveRole($this->uid($r), $id, null, $in), 201);
+    }
+
+    public function updateRole(Request $r, int $id, int $roleId)
+    {
+        $in = $r->validate($this->roleRules());
+        return $this->dom(fn () => $this->rolesSvc()->saveRole($this->uid($r), $id, $roleId, $in));
+    }
+
+    public function deleteRole(Request $r, int $id, int $roleId)
+    {
+        return $this->dom(fn () => $this->rolesSvc()->deleteRole($this->uid($r), $id, $roleId));
+    }
+
+    private function teamRules(): array
+    {
+        return ['name_en' => 'nullable|string|max:60', 'name_ar' => 'nullable|string|max:60', 'color' => 'nullable|string|max:7', 'members' => 'nullable|array|max:500', 'members.*.user_id' => 'required|integer', 'members.*.lead' => 'nullable|boolean'];
+    }
+
+    public function teams(Request $r, int $id)
+    {
+        return $this->dom(fn () => $this->rolesSvc()->teams($this->uid($r), $id));
+    }
+
+    public function createTeam(Request $r, int $id)
+    {
+        $in = $r->validate($this->teamRules());
+        return $this->dom(fn () => $this->rolesSvc()->saveTeam($this->uid($r), $id, null, $in), 201);
+    }
+
+    public function updateTeam(Request $r, int $id, int $teamId)
+    {
+        $in = $r->validate($this->teamRules());
+        return $this->dom(fn () => $this->rolesSvc()->saveTeam($this->uid($r), $id, $teamId, $in));
+    }
+
+    public function deleteTeam(Request $r, int $id, int $teamId)
+    {
+        return $this->dom(fn () => $this->rolesSvc()->deleteTeam($this->uid($r), $id, $teamId));
+    }
+
+    public function activity(Request $r, int $id)
+    {
+        $f = $r->validate(['type' => 'nullable|in:changes,logins', 'action' => 'nullable|string|max:40', 'user_id' => 'nullable|integer', 'q' => 'nullable|string|max:100',
+            'from' => 'nullable|string|max:40', 'to' => 'nullable|string|max:40', 'page' => 'nullable|integer|min:1', 'per_page' => 'nullable|integer|min:1|max:100']);
+        return $this->dom(fn () => $this->rolesSvc()->activity($this->uid($r), $id, $f, (int) ($f['page'] ?? 1), (int) ($f['per_page'] ?? 30)));
     }
 }
