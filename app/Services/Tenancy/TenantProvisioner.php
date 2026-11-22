@@ -81,7 +81,7 @@ class TenantProvisioner
                 $log('Copying roles and permissions ...');
                 $this->copyCatalogFrom($central);
                 $log('Creating first admin ...');
-                $adminId = $this->createAdmin($email, (string) ($in['admin_name'] ?? 'Admin'), $password);
+                $adminId = $this->createAdmin($email, (string) ($in['admin_name'] ?? 'Admin'), $password, (string) ($in['kind'] ?? ''));
                 // أدمن المنصة: 2FA إجباري (بعد فترة سماح قصيرة)، وباسورد متولّد = لازم يتغيّر عند أول دخول.
                 try {
                     app(\App\Services\MfaPolicyService::class)->updatePolicy(['enforced_roles' => ['admin'], 'grace_period_days' => (int) config('tenancy.launch.admin_mfa_grace_days', 3)], $adminId);
@@ -147,7 +147,7 @@ class TenantProvisioner
         }
     }
 
-    public function createAdmin(string $email, string $name, string $password): int
+    public function createAdmin(string $email, string $name, string $password, string $kind = ''): int
     {
         $roleSlug = (string) config('tenancy.isolation.admin_role', 'admin');
         $roleId = DB::table('roles')->where('slug', $roleSlug)->value('id');
@@ -159,8 +159,25 @@ class TenantProvisioner
             'password_hash' => password_hash($password, PASSWORD_DEFAULT),
             'status' => 'active', 'email_verified_at' => now(), 'password_changed_at' => now(),
         ]);
-        DB::table('user_roles')->insert(['user_id' => $uid, 'role_id' => $roleId]);
+        DB::table('user_roles')->insert(['user_id' => $uid, 'role_id' => $roleId, 'assigned_at' => now()->subSecond()]); // الأدمن هو الدور الأساسي
+        if ($kind === 'university') {
+            self::grantUniversityRole($uid);
+        }
         return $uid;
+    }
+
+    /**
+     * منصة جامعة: صاحبها بيشتغل كمان بدور `university` (الكليات، الدكاترة، الطلبة، المواد)، ويبدّل بينه وبين الأدمن.
+     * لازم TenantContext يكون active. آمنة لو الدور موجود بالفعل.
+     */
+    public static function grantUniversityRole(int $userId): bool
+    {
+        $rid = DB::table('roles')->where('slug', 'university')->value('id');
+        if (!$rid || DB::table('user_roles')->where('user_id', $userId)->where('role_id', $rid)->exists()) {
+            return false;
+        }
+        DB::table('user_roles')->insert(['user_id' => $userId, 'role_id' => $rid, 'assigned_at' => now()]);
+        return true;
     }
 
     private function uniqueSlug($db, string $base): string

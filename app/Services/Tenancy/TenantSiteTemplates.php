@@ -40,6 +40,19 @@ final class TenantSiteTemplates
     /** صفحات قانونية: كل مساحة ليها واحدة من كل نوع، وعنوانها ثابت (/p/privacy و /p/terms). */
     public const LEGAL_KINDS = ['privacy', 'terms'];
     /** أنواع النشاط اللي القوالب بتتصنّف بيها في المعرض. */
+    /** الميزات اللي القالب بيعتمد عليها (بتتطلب تلقائيًا لما القالب يتطبّق، والأدمن بيوافق). */
+    public const FEATURES = [
+        'lecturer' => ['academic', 'meetings'],
+        'campus'   => ['academic', 'meetings'],
+        'academy'  => ['academic', 'meetings'],
+    ];
+
+    /** @return string[] */
+    public static function featuresFor(string $key): array
+    {
+        return self::FEATURES[$key] ?? [];
+    }
+
     public const TEMPLATE_KINDS = ['any', 'company', 'tech', 'university', 'training', 'school', 'health', 'fitness', 'retail', 'food', 'hospitality', 'realestate', 'finance', 'legal', 'nonprofit', 'government', 'events', 'media', 'agency'];
     /** slugs صفحات محجوزة لمسارات الموقع نفسها. */
     public const RESERVED_PAGE_SLUGS = ['login', 'blog', 'p', 'w', 'api', 'admin', 'register', 'signup', 'preview', 'sitemap', 'robots'];

@@ -75,6 +75,10 @@ return [
         /** after_response (الافتراضي): بيشتغل بعد ما الرد يتبعت من غير worker؛ queue: لو عندك queue worker شغّال. */
         'run' => env('TENANT_LAUNCH_RUN', 'after_response'),
         'invite_days' => (int) env('TENANT_INVITE_DAYS', 7),
+        /** ميزات بتتفعّل فورًا حسب نوع المنصة (الجامعة من غير "الإدارة الأكاديمية" مالهاش لازمة). */
+        'auto_features_by_kind' => [
+            'university' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_UNIVERSITY_FEATURES', 'academic,meetings'))))),
+        ],
         'auto_features' => array_values(array_filter(array_map('trim', explode(',', (string) env('TENANT_LAUNCH_AUTO_FEATURES', 'messaging,meetings,feed'))))),
     ],
 

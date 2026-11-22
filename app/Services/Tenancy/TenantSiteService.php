@@ -185,7 +185,27 @@ final class TenantSiteService
         }
         $this->db()->table('tenant_sites')->where('tenant_id', $t->id)->update(['draft' => json_encode($settings, JSON_UNESCAPED_UNICODE), 'template_key' => $key, 'draft_updated_at' => now(), 'updated_at' => now()]);
         $this->audit($userId, (int) $t->id, 'apply-template', $key);
+        $this->requestTemplateFeatures((int) $t->id, $userId, $key);
         return ['draft' => $settings, 'site' => $this->meta($this->row($t))];
+    }
+
+    /** القالب محتاج ميزات (طلبة/دكاترة/اجتماعات...): نطلب الناقص منها ونبلّغ أدمن المنصة. فشلها مايوقّفش تطبيق القالب. */
+    private function requestTemplateFeatures(int $tenantId, int $userId, string $key): void
+    {
+        try {
+            $need = TenantSiteTemplates::featuresFor($key);
+            if (!$need || ($this->db()->table('tenants')->where('id', $tenantId)->value('mode') ?? 'shared') !== 'isolated') {
+                return;
+            }
+            $missing = array_values(array_diff($need, TenantFeatures::enabledKeys($tenantId)));
+            if (!$missing) {
+                return;
+            }
+            $res = TenantFeatures::request($tenantId, $missing, $userId, 'needed by template ' . $key);
+            TenantFeatureNotifier::requested($tenantId, $res['requested'] ?? [], $userId, 'needed by template ' . $key);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::notice('Template features not requested', ['tenant' => $tenantId, 'error' => $e->getMessage()]);
+        }
     }
 
     /** يرجّع المسودة لآخر منشور (أو لقالب classic لو لسه مفيش نشر). */

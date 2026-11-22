@@ -60,13 +60,16 @@ final class TenantLauncher
 
             $this->set($id, ['step' => 'features', 'progress' => 93]);
             $wanted = (array) ($p['features'] ?? []);
-            $auto = array_values(array_intersect($wanted, (array) config('tenancy.launch.auto_features', [])));
+            $kindAuto = (array) (config('tenancy.launch.auto_features_by_kind', [])[(string) ($p['kind'] ?? '')] ?? []);
+            $wanted = array_values(array_unique(array_merge($wanted, $kindAuto, TenantSiteTemplates::featuresFor((string) ($p['template'] ?? '')))));
+            $auto = array_values(array_intersect($wanted, array_merge((array) config('tenancy.launch.auto_features', []), $kindAuto)));
             $pending = array_values(array_diff($wanted, $auto));
             foreach ($auto as $f) {
                 TenantFeatures::decide($tid, $f, 'enabled', null, 'enabled at launch');
             }
             if ($pending) {
-                TenantFeatures::request($tid, $pending, $userId, 'requested at launch');
+                $res = TenantFeatures::request($tid, $pending, $userId, 'requested at launch');
+                TenantFeatureNotifier::requested($tid, $res['requested'] ?? [], $userId, 'requested at launch');
             }
 
             $this->set($id, ['step' => 'site', 'progress' => 96]);
