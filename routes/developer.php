@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\DevDocsController;
 use App\Http\Controllers\Api\DevSdkDownloadController;
 use App\Http\Controllers\Api\TenantAdminController;
 use App\Http\Controllers\Api\TenantController;
+use App\Http\Controllers\Api\TenantDataController;
 use App\Http\Controllers\Api\TenantPublicController;
 use App\Http\Controllers\Api\TenantSiteController;
 use App\Http\Controllers\Api\DeveloperCenterController;
@@ -150,6 +151,17 @@ Route::prefix('v1/developer')->middleware('uip.auth')->group(function () {
         Route::get('/embed-origins', [TenantController::class, 'embedOrigins'])->middleware('throttle:120,1');
         Route::post('/embed-origins', [TenantController::class, 'addEmbedOrigin'])->middleware('throttle:30,1');
         Route::delete('/embed-origins/{originId}', [TenantController::class, 'removeEmbedOrigin'])->whereNumber('originId')->middleware('throttle:30,1');
+        // مدير بيانات المساحة (Database Manager) — المالك بس، على قاعدة المساحة المعزولة بس. POST للقراءة اللي فيها جسم (key/filters) عشان مفيش بيانات في الـ URL.
+        Route::prefix('/data')->group(function () {
+            Route::get('/', [TenantDataController::class, 'overview'])->middleware('throttle:120,1');
+            Route::post('/schema', [TenantDataController::class, 'schema'])->middleware('throttle:120,1');
+            Route::post('/rows', [TenantDataController::class, 'rows'])->middleware('throttle:240,1');
+            Route::post('/row', [TenantDataController::class, 'row'])->middleware('throttle:240,1');
+            Route::post('/insert', [TenantDataController::class, 'insert'])->middleware('throttle:60,1');
+            Route::put('/update', [TenantDataController::class, 'update'])->middleware('throttle:120,1');
+            Route::post('/delete', [TenantDataController::class, 'destroy'])->middleware('throttle:60,1');
+            Route::post('/sql', [TenantDataController::class, 'sql'])->middleware('throttle:30,1');
+        });
         Route::get('/usage', [TenantController::class, 'usage'])->middleware('throttle:60,1');
         Route::get('/logs', [TenantController::class, 'logs'])->middleware('throttle:120,1');
         Route::get('/keys', [TenantController::class, 'keys'])->middleware('throttle:120,1');

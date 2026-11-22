@@ -34,6 +34,8 @@ final class TenantService
         'roles' => ['owner', 'admin'],
         'activity' => ['owner', 'admin'],
         'delete' => ['owner'],
+        /** مدير بيانات المساحة (Database Manager): المالك بس — الأدوار المخصصة مبتاخدهاش أبدًا. */
+        'data' => ['owner'],
     ];
 
     public function __construct(private DeveloperAppService $apps, private WebhookService $hooks, private DevLogService $logs, private DevUsageService $usage, private TenantParticipantService $participants, private TenantEmbedService $embed)

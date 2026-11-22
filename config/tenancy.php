@@ -130,4 +130,39 @@ return [
         'max_custom_templates' => (int) env('TENANT_SITE_MAX_TEMPLATES', 20),
         'keep_versions' => (int) env('TENANT_SITE_KEEP_VERSIONS', 10),
     ],
+
+    /**
+     * إدارة بيانات المساحة (Database Manager) — لمالك المساحة المعزولة بس، على قاعدة المساحة نفسها.
+     * الأنماط fnmatch (حروف صغيرة). الجداول المخفية مش بتظهر ومش بتتقري ولا بتتذكر في SQL.
+     * الأعمدة الحساسة بتتقنّع في النتايج ومبتتعدّلش ومينفعش تتذكر في SQL.
+     * مهم للإنتاج: اضبط TENANCY_DB_USERNAME على مستخدم MySQL صلاحياته على قواعد العملاء بس (مفيش GRANT على قواعد تانية)،
+     * ولو عايز تفصل صلاحية القراءة عن الكتابة استخدم TENANT_DATA_DB_USERNAME (مستخدم SELECT بس للـ SQL editor).
+     */
+    'data' => [
+        'enabled' => filter_var(env('TENANT_DATA_ENABLED', true), FILTER_VALIDATE_BOOLEAN),
+        /** false = قراءة بس (بيقفل الإضافة/التعديل/الحذف من الـ Grid). */
+        'allow_write' => filter_var(env('TENANT_DATA_WRITE', true), FILTER_VALIDATE_BOOLEAN),
+        'username' => env('TENANT_DATA_DB_USERNAME', ''),
+        'password' => env('TENANT_DATA_DB_PASSWORD', ''),
+        'page_max' => 100,
+        'sql_max_rows' => (int) env('TENANT_DATA_SQL_ROWS', 500),
+        'sql_timeout_ms' => (int) env('TENANT_DATA_SQL_TIMEOUT_MS', 8000),
+        'sql_max_chars' => 20000,
+        'cell_chars' => 300,
+        'full_cell_bytes' => 65536,
+        'count_cap' => 100000,
+        'hidden_tables' => [
+            'migrations', 'cache', 'cache_locks', 'jobs', 'job_batches', 'failed_jobs', 'sessions', 'user_sessions', 'trusted_devices',
+            'refresh_tokens', 'api_tokens', 'api_token_usages', 'password_reset_tokens', 'password_history', 'email_verification_tokens',
+            'passkeys', 'scim_tokens', 'scim_identities', 'push_devices', 'user_social_accounts', 'github_connections', 'google_drive_connections',
+            'dev_api_keys', 'dev_oauth_*', 'tenant_auth_settings', 'drive_share_visitors', 'blocked_devices', 'mail_accounts',
+            '*_tokens', '*_secrets', '*_credentials', 'oauth_*',
+        ],
+        /** جداول بتتعرض وتتقري بس (سجلات تدقيق + داخليات المنصة). */
+        'readonly_tables' => ['audit_logs', 'security_logs', 'login_events', 'mail_audit_logs', 'dev_request_logs', 'user_activity_events', 'content_safety_events', 'tenant_*', 'dev_*', 'provisioning_runs'],
+        'sensitive_columns' => [
+            '*password*', '*passwd*', '*token*', '*secret*', 'hash', '*_hash', 'hash_*', '*_enc', 'otp', 'otp_*', '*_otp', 'totp*', '*_totp*', '*recovery_code*',
+            '*api_key*', 'key_hash', '*private_key*', '*public_key*', '*credential*', '*cookie*', 'salt', '*session_id*', 'remember_*',
+        ],
+    ],
 ];

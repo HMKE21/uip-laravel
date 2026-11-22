@@ -32,6 +32,8 @@ final class TenantRoles
         'participant.delete' => ['Removed a participant', 'شال مشارك'], 'embed.session' => ['Started an embed session', 'بدأ جلسة تضمين'],
         'platform-user.create' => ['Created a platform account', 'أنشأ حساب في المنصة'], 'platform-user.invite' => ['Invited a platform account', 'دعا حساب للمنصة'], 'platform-user.reset' => ['Reset a platform password', 'صفّر باسورد حساب'],
         'platform-user.suspend' => ['Suspended a platform account', 'أوقف حساب'], 'platform-user.activate' => ['Re-activated a platform account', 'فعّل حساب'], 'platform-user.invite-resend' => ['Re-sent an invitation', 'أعاد إرسال دعوة'],
+        'data.insert' => ['Added a database row', 'أضاف صف في قاعدة البيانات'], 'data.update' => ['Edited a database row', 'عدّل صف في قاعدة البيانات'],
+        'data.delete' => ['Deleted a database row', 'حذف صف من قاعدة البيانات'], 'data.sql' => ['Ran a SQL query', 'شغّل استعلام SQL'],
     ];
 
     public function __construct(private TenantService $tenants)
