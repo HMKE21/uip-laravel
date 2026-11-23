@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Contracts\SfuProvider;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 
@@ -17,8 +18,19 @@ use Illuminate\Support\Facades\Http;
  * https://developers.cloudflare.com/realtime/sfu/https-api/ قبل الإنتاج، خصوصًا شكل ردّ tracks/close.
  * كل ميثود بترجع ['ok'=>bool, 'status'=>int, 'data'=>array] ومابترميش exception، عشان الكنترولر يرد 502 نضيف.
  */
-class CloudflareSfuService
+class CloudflareSfuService implements SfuProvider
 {
+    public function name(): string
+    {
+        return 'cloudflare';
+    }
+
+    /** فحص سريع: بيفتح session جديدة (نفس اللي زرار "Test" في اللوحة بيعمله). */
+    public function ping(): array
+    {
+        return $this->newSession();
+    }
+
     public function enabled(): bool
     {
         $c = MeetingAdminSettings::sfu(); // اللوحة (Admin → Meetings Control → Video) تغلب الـ env

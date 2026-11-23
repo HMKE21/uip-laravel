@@ -88,6 +88,7 @@ class MeetingAdminSettings
 
             // -- الفيديو: Cloudflare Realtime SFU (الافتراضي من .env / config/webrtc.php، والتعديل من اللوحة بيغلب) --
             'sfu_enabled'                 => ['group' => 'video', 'type' => 'bool', 'default' => (bool) config('webrtc.sfu.enabled', false)],
+            'sfu_provider'                => ['group' => 'video', 'type' => 'enum', 'default' => in_array(config('webrtc.sfu.provider'), ['cloudflare', 'selfhosted'], true) ? config('webrtc.sfu.provider') : 'cloudflare', 'options' => ['cloudflare', 'selfhosted']],
             'sfu_mode'                    => ['group' => 'video', 'type' => 'enum', 'default' => in_array(config('webrtc.sfu.force'), ['auto', 'sfu', 'mesh'], true) ? config('webrtc.sfu.force') : 'auto', 'options' => ['auto', 'sfu', 'mesh']],
             'sfu_min_participants'        => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.min_participants', 5), 'min' => 2, 'max' => 500],
             'sfu_max_video_subscriptions' => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.max_video_subscriptions', 25), 'min' => 1, 'max' => 200],
@@ -207,7 +208,7 @@ class MeetingAdminSettings
 
     /**
      * إعدادات الـ SFU الفعلية (اللوحة تغلب الـ env). app_id الفاضي = ارجع للـ env.
-     * @return array{enabled:bool,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
+     * @return array{enabled:bool,provider:string,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
      */
     public static function sfu(): array
     {
@@ -218,6 +219,7 @@ class MeetingAdminSettings
 
         return [
             'enabled'                 => (bool) self::get('sfu_enabled'),
+            'provider'                => (string) self::get('sfu_provider'),
             'app_id'                  => $appId,
             'app_secret'              => (string) self::get('sfu_app_secret'),
             'mode'                    => (string) self::get('sfu_mode'),

@@ -70,6 +70,8 @@ return [
     */
     'sfu' => [
         'enabled'    => (bool) env('MEETINGS_SFU_ENABLED', false),
+        // مين المزوّد: 'cloudflare' (الحالي) | 'selfhosted' (mediasoup بتاعنا، راجع 'selfhosted' تحت). الأدمن يغيّره من اللوحة.
+        'provider'   => strtolower((string) env('MEETINGS_SFU_PROVIDER', 'cloudflare')),
         'app_id'     => env('CF_SFU_APP_ID'),
         'app_secret' => env('CF_SFU_APP_SECRET'),
         'base_url'   => rtrim((string) env('CF_SFU_BASE_URL', 'https://rtc.live.cloudflare.com/v1'), '/'),
@@ -85,5 +87,20 @@ return [
         'block_seconds'    => (int) env('MEETINGS_SFU_BLOCK_SECONDS', 300),
         // أقل مدة بين تحويلين (ثواني) — يمنع الرجوع والتحويل المتكرر.
         'min_dwell_seconds' => (int) env('MEETINGS_SFU_MIN_DWELL', 30),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | mediasoup SFU المستضاف عندنا (مشروع uipe-sfu على EC2)
+    |--------------------------------------------------------------------------
+    | url: عنوان سيرفر الـ SFU. لو لارافيل والـ SFU في نفس الـ VPC استخدم الـ private IP (http://172.31.x.x:4443)
+    | عشان السر مايعدّيش على الإنترنت بدون تشفير. لو عبر الإنترنت لازم https.
+    | secret: نفس قيمة INTERNAL_API_SECRET في .env بتاع سيرفر الـ SFU.
+    | الـ TURN بيتظبط من TURN_URLS / TURN_SECRET فوق (نفس coturn بيخدم الـ mesh والـ SFU).
+    */
+    'selfhosted' => [
+        'url'     => rtrim((string) env('SFU_SELFHOSTED_URL', ''), '/'),
+        'secret'  => env('SFU_SELFHOSTED_SECRET'),
+        'timeout' => (int) env('SFU_SELFHOSTED_TIMEOUT', 10),
     ],
 ];

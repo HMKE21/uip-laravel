@@ -23,7 +23,7 @@ class MeetingTransportService
     private const TTL = 21600; // 6 ساعات
     private const FRESH_SECONDS = 30; // تقرير أقدم من كده مايتحسبش
 
-    public function __construct(private CloudflareSfuService $sfu, private MeetingPolicyService $policy)
+    public function __construct(private SfuManager $sfu, private MeetingPolicyService $policy)
     {
     }
 
@@ -262,6 +262,64 @@ class MeetingTransportService
                 $byName[$t['trackName']] = $t;
             }
             $r[$actorKey]['tracks'] = array_values($byName);
+            Cache::put($this->key($meeting, 'registry'), $r, self::TTL);
+        });
+    }
+
+    /** جلسة النشر الحالية للمشارك (أو null). في mediasoup هي نفسها الـ peerId الوحيد بتاعه. */
+    public function publisherSession(Meeting $meeting, string $actorKey): ?string
+    {
+        $pub = $this->registry($meeting)[$actorKey]['pub'] ?? null;
+
+        return is_string($pub) && $pub !== '' ? $pub : null;
+    }
+
+    /** عدد الترَكات المسجّلة للمشارك (بيمنع واحد يفتح producers بلا حدود). */
+    public function trackCount(Meeting $meeting, string $actorKey): int
+    {
+        return count((array) ($this->registry($meeting)[$actorKey]['tracks'] ?? []));
+    }
+
+    /** الترَك (producerId في mediasoup) تابع للمشارك ده فعلًا؟ */
+    public function ownsTrack(Meeting $meeting, string $actorKey, string $trackName): bool
+    {
+        foreach ((array) ($this->registry($meeting)[$actorKey]['tracks'] ?? []) as $t) {
+            if (($t['trackName'] ?? null) === $trackName) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** الترَك ده تابع لمشارك *تاني* في نفس الاجتماع؟ (يمنع سحب ميديا اجتماع غير اجتماعه). */
+    public function isOtherPeerTrack(Meeting $meeting, string $actorKey, string $trackName): bool
+    {
+        foreach ($this->registry($meeting) as $k => $e) {
+            if ($k === $actorKey) {
+                continue;
+            }
+            foreach ((array) ($e['tracks'] ?? []) as $t) {
+                if (($t['trackName'] ?? null) === $trackName) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public function removeTrack(Meeting $meeting, string $actorKey, string $trackName): void
+    {
+        $this->locked($meeting, function () use ($meeting, $actorKey, $trackName) {
+            $r = $this->registry($meeting);
+            if (!isset($r[$actorKey])) {
+                return;
+            }
+            $r[$actorKey]['tracks'] = array_values(array_filter(
+                (array) $r[$actorKey]['tracks'],
+                fn ($t) => ($t['trackName'] ?? null) !== $trackName
+            ));
             Cache::put($this->key($meeting, 'registry'), $r, self::TTL);
         });
     }

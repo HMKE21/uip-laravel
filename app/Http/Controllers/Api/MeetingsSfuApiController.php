@@ -7,6 +7,8 @@ use App\Repositories\MeetingRepository;
 use App\Services\CloudflareSfuService;
 use App\Services\MeetingSignalingService;
 use App\Services\MeetingTransportService;
+use App\Services\SelfHostedSfuService;
+use App\Services\SfuManager;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
@@ -26,7 +28,8 @@ class MeetingsSfuApiController extends Controller
         private MeetingRepository $meetings,
         private MeetingSignalingService $signaling,
         private CloudflareSfuService $sfu,
-        private MeetingTransportService $transport
+        private MeetingTransportService $transport,
+        private SfuManager $manager
     ) {
     }
 
@@ -111,7 +114,8 @@ class MeetingsSfuApiController extends Controller
         $state = $this->transport->evaluate($meeting, $this->presentCount($meeting), false);
 
         return $this->apiSuccess([
-            'enabled'                 => $this->sfu->enabled(),
+            'enabled'                 => $this->manager->enabled(),
+            'provider'                => $this->manager->provider(),
             'mode'                    => $state['mode'],
             'epoch'                   => $state['epoch'],
             'reason'                  => $state['reason'],
@@ -142,6 +146,10 @@ class MeetingsSfuApiController extends Controller
             return $ctx;
         }
         [$meeting, $actor] = $ctx;
+
+        if ($this->manager->provider() !== 'cloudflare') {
+            return $this->apiError('The active SFU provider is not Cloudflare.', ['code' => 'sfu_provider_mismatch', 'provider' => $this->manager->provider()], 409);
+        }
 
         $v = Validator::make($request->all(), ['role' => 'required|in:pub,sub']);
         if ($v->fails()) {
@@ -328,7 +336,12 @@ class MeetingsSfuApiController extends Controller
             return $ctx;
         }
         [$meeting, $actor] = $ctx;
+        $pub = $this->transport->publisherSession($meeting, $actor['key']);
         $this->transport->removeActor($meeting, $actor['key']);
+        if ($pub !== null && str_starts_with($pub, 'ms_')) {
+            // جلسة mediasoup: نحرّر الـ peer على سيرفر الـ SFU كمان (لو وقع/اتأخر السيرفر بيتنضّف لوحده بعد شوية).
+            $this->manager->selfHosted()->leave(SelfHostedSfuService::roomId($meeting->uuid), $pub);
+        }
 
         return $this->apiSuccess(null, 'OK');
     }

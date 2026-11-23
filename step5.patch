@@ -1,0 +1,877 @@
+diff -ruN -x vendor -x node_modules orig/.env.example uip-laravel-main/.env.example
+--- orig/.env.example	2026-11-23 22:32:21.950799002 +0000
++++ uip-laravel-main/.env.example	2026-11-23 22:33:50.592696265 +0000
+@@ -26,4 +26,15 @@
+ VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
+ VITE_REVERB_HOST="${REVERB_HOST}"
+ VITE_REVERB_PORT="${REVERB_PORT}"
+-VITE_REVERB_SCHEME="${REVERB_SCHEME}"
+\ No newline at end of file
++VITE_REVERB_SCHEME="${REVERB_SCHEME}"
++# --- Meetings SFU: mediasoup المستضاف عندنا (Step 5) ---------------------------------
++# المزوّد الافتراضي: cloudflare (زي الأول) أو selfhosted. الأدمن يغيّره من اللوحة (Meetings Control ▸ Video ▸ sfu_provider).
++MEETINGS_SFU_PROVIDER=cloudflare
++# عنوان سيرفر الـ SFU. لو لارافيل والـ SFU في نفس الـ VPC استخدم الـ private IP (مفيش تشفير على الطريق):
++SFU_SELFHOSTED_URL=
++# نفس قيمة INTERNAL_API_SECRET في .env بتاع سيرفر الـ SFU
++SFU_SELFHOSTED_SECRET=
++# coturn (بيخدم الـ mesh والـ SFU). TURN_SECRET = static-auth-secret في /etc/turnserver.conf
++# STUN_URLS=stun:<SFU_PUBLIC_IP>:3478
++# TURN_URLS=turn:<SFU_PUBLIC_IP>:3478?transport=udp,turn:<SFU_PUBLIC_IP>:3478?transport=tcp
++# TURN_SECRET=
+diff -ruN -x vendor -x node_modules orig/app/Contracts/SfuProvider.php uip-laravel-main/app/Contracts/SfuProvider.php
+--- orig/app/Contracts/SfuProvider.php	1970-01-01 00:00:00.000000000 +0000
++++ uip-laravel-main/app/Contracts/SfuProvider.php	2026-11-23 22:32:47.852101794 +0000
+@@ -0,0 +1,23 @@
++<?php
++
++namespace App\Contracts;
++
++/**
++ * أي مزوّد SFU (Cloudflare Realtime أو mediasoup المستضاف عندنا). الواجهة صغيرة عن قصد:
++ * بروتوكول الميديا نفسه مختلف بين المزوّدين (Cloudflare = SDP، mediasoup = RTP parameters)،
++ * فكل مزوّد ليه ميثوداته الخاصة، واللي مشترك هنا هو اللي قرار التحويل والـ failover محتاجه.
++ */
++interface SfuProvider
++{
++    /** 'cloudflare' | 'selfhosted' */
++    public function name(): string;
++
++    /** مفعّل من لوحة الأدمن + بياناته (credentials / URL) مكتملة. */
++    public function enabled(): bool;
++
++    /**
++     * فحص سريع إن المزوّد بيرد.
++     * @return array{ok:bool,status:int,data:array<string,mixed>}
++     */
++    public function ping(): array;
++}
+diff -ruN -x vendor -x node_modules orig/app/Http/Controllers/Api/AdminMeetingsControlApiController.php uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php
+--- orig/app/Http/Controllers/Api/AdminMeetingsControlApiController.php	2026-11-23 22:32:21.955536647 +0000
++++ uip-laravel-main/app/Http/Controllers/Api/AdminMeetingsControlApiController.php	2026-11-23 22:33:17.002378069 +0000
+@@ -90,8 +90,30 @@
+     /** POST sfu/test — بيعمل session تجريبية على Cloudflare بالإعدادات المحفوظة حاليًا ويقول الاتصال سليم ولا لأ (من غير ما يكشف السر). */
+     public function testSfu(Request $request)
+     {
+-        $svc = app(\App\Services\CloudflareSfuService::class);
+         $cfg = MeetingAdminSettings::sfu();
++
++        // المزوّد الفعّال = mediasoup بتاعنا: نختبره هو (health + إنشاء session تجريبية بالسر).
++        if ($cfg['provider'] === 'selfhosted') {
++            $own = app(\App\Services\SelfHostedSfuService::class);
++            if (!$own->configured()) {
++                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'Self-hosted SFU URL / secret are not set (SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET).');
++            }
++            if (!$cfg['enabled']) {
++                return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
++            }
++            $r = $own->test();
++            $code = $r['ok'] ? 'ok' : match (true) {
++                in_array($r['status'], [401, 403], true) => 'bad_secret',
++                $r['status'] === 504 => 'unreachable',
++                default => 'error',
++            };
++            $this->log($request, 'sfu_tested', null, null, ['result' => $code, 'provider' => 'selfhosted'], 'MeetingSettings');
++            $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
++
++            return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to the self-hosted SFU.' : 'Could not connect to the self-hosted SFU.');
++        }
++
++        $svc = app(\App\Services\CloudflareSfuService::class);
+         if ($cfg['app_id'] === '' || $cfg['app_secret'] === '') {
+             return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'App ID / secret are not set.');
+         }
+diff -ruN -x vendor -x node_modules orig/app/Http/Controllers/Api/MeetingsMediasoupApiController.php uip-laravel-main/app/Http/Controllers/Api/MeetingsMediasoupApiController.php
+--- orig/app/Http/Controllers/Api/MeetingsMediasoupApiController.php	1970-01-01 00:00:00.000000000 +0000
++++ uip-laravel-main/app/Http/Controllers/Api/MeetingsMediasoupApiController.php	2026-11-23 22:33:50.592696265 +0000
+@@ -0,0 +1,304 @@
++<?php
++
++namespace App\Http\Controllers\Api;
++
++use App\Http\Controllers\Controller;
++use App\Repositories\MeetingRepository;
++use App\Services\MeetingAdminSettings;
++use App\Services\MeetingSignalingService;
++use App\Services\MeetingTransportService;
++use App\Services\SelfHostedSfuService;
++use App\Services\SfuManager;
++use Illuminate\Http\JsonResponse;
++use Illuminate\Http\Request;
++use Illuminate\Support\Facades\Validator;
++use Illuminate\Support\Str;
++
++/**
++ * سطح /api/v1/meetings/{uuid}/sfu/ms/* — بروكسي آمن بين المتصفح (mediasoup-client) وسيرفر mediasoup بتاعنا.
++ * نفس فلسفة MeetingsSfuApiController: كل endpoint بيتأكد الأول إن الطالب جوه الاجتماع (resolveActor) وإن الـ session
++ * بتاعته، وإن اللي بيسحبه (producerId) تابع لمشارك تاني في *نفس* الاجتماع. سر السيرفر مابيسيبش لارافيل أبدًا.
++ *
++ * التدفق (mediasoup-client):
++ *   1) POST session                      → rtpCapabilities + sendTransport + recvTransport + ice_servers
++ *   2) POST sessions/{id}/transports/{t}/connect {dtlsParameters}   (لما transport.on('connect'))
++ *   3) POST sessions/{id}/produce {transportId, kind, rtpParameters, source}  (لما transport.on('produce')) → {id}
++ *   4) POST sessions/{id}/consume {transportId, producerId, rtpCapabilities}  → {id, producerId, kind, rtpParameters}
++ *      POST sessions/{id}/consumers/{c}/resume                      (بعد ما الـ consumer يجهز عند العميل)
++ *   5) POST sessions/{id}/producers/{p}/close   (إيقاف كاميرا/مايك/مشاركة شاشة)
++ *   6) POST sfu/leave (المشترك مع Cloudflare)   → بيحرّر الـ peer على السيرفر كمان
++ * قايمة الناشرين (GET sfu/peers) بترجع نفس الشكل: trackName = producerId، وفيه source (mic|camera|screen|screen_audio).
++ */
++class MeetingsMediasoupApiController extends Controller
++{
++    /** peerId اللي لارافيل بيولّده: ms_ + 24 حرف/رقم. */
++    private const SESSION_RE = '/^ms_[A-Za-z0-9]{24}$/';
++    /** معرّفات mediasoup (transport/producer/consumer) كلها UUID. */
++    private const UUID_RE = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
++    private const MAX_TRACKS_PER_PEER = 6; // مايك + كاميرا + شاشة + صوت الشاشة + هامش
++    private const MAX_PARAMS_BYTES = 40000;
++
++    public function __construct(
++        private MeetingRepository $meetings,
++        private MeetingSignalingService $signaling,
++        private MeetingTransportService $transport,
++        private SfuManager $manager,
++        private SelfHostedSfuService $sfu
++    ) {
++    }
++
++    private function authUserId(Request $request): ?int
++    {
++        $id = $request->attributes->get('uip_user_id');
++
++        return $id !== null ? (int) $id : null;
++    }
++
++    /** @return array{0:mixed,1:array}|JsonResponse [meeting, actor] */
++    private function context(Request $request, string $uuid)
++    {
++        $meeting = $this->meetings->findByUuid($uuid);
++        if (!$meeting) {
++            return $this->apiError('Meeting not found.', null, 404);
++        }
++        try {
++            $actor = $this->signaling->resolveActor($meeting, $this->authUserId($request), $request->input('guest_token'));
++        } catch (\RuntimeException $e) {
++            return $this->apiError($e->getMessage(), null, 403);
++        }
++        if ($this->manager->provider() !== 'selfhosted' || !$this->sfu->enabled()) {
++            return $this->apiError('The self-hosted SFU is not active.', ['code' => 'sfu_provider_inactive', 'provider' => $this->manager->provider()], 409);
++        }
++
++        return [$meeting, $actor];
++    }
++
++    private function owned($meeting, array $actor, string $sessionId): bool
++    {
++        return preg_match(self::SESSION_RE, $sessionId) === 1
++            && $this->transport->ownsSession($meeting, $actor['key'], $sessionId);
++    }
++
++    private function tooBig(mixed $value): bool
++    {
++        return strlen((string) json_encode($value)) > self::MAX_PARAMS_BYTES;
++    }
++
++    private function upstream(array $r, string $what): JsonResponse
++    {
++        if (!$r['ok']) {
++            // 401 من السيرفر = مشكلة إعداد عندنا (السر غلط)، مايتبعتش للمتصفح كـ 401 عشان مايتفسرش كإن المستخدم اتفصل.
++            $s = (int) $r['status'];
++            $http = in_array($s, [400, 404, 503, 504], true) ? $s : 502;
++
++            return $this->apiError("SFU {$what} failed.", [
++                'code'            => $r['data']['error'] ?? 'sfu_error',
++                'upstream_status' => $s,
++                'upstream_detail' => mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200),
++            ], $http);
++        }
++
++        return $this->apiSuccess($r['data'], 'OK');
++    }
++
++    /** POST ms/session — بيفتح peer جديد (transportين) على السيرفر ويسجّله باسم المشارك. */
++    public function session(Request $request, string $uuid)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        $roomId = SelfHostedSfuService::roomId($meeting->uuid);
++
++        // إعادة دخول/تحديث صفحة: نحرّر الـ peer القديم الأول عشان مايفضلش يستهلك موارد.
++        $old = $this->transport->publisherSession($meeting, $actor['key']);
++        if ($old !== null && str_starts_with($old, 'ms_')) {
++            $this->sfu->leave($roomId, $old);
++        }
++
++        $peerId = 'ms_' . Str::random(24);
++        $r = $this->sfu->createSession($roomId, $peerId);
++        if (!$r['ok'] || empty($r['data']['sendTransport']['id']) || empty($r['data']['recvTransport']['id'])) {
++            return $this->upstream(['ok' => false] + $r, 'session');
++        }
++        $this->transport->registerSession($meeting, $actor['key'], $peerId, 'pub');
++
++        return $this->apiSuccess([
++            'session_id'              => $peerId,
++            'provider'                => 'selfhosted',
++            'router_rtp_capabilities' => $r['data']['routerRtpCapabilities'] ?? null,
++            'send_transport'          => $r['data']['sendTransport'],
++            'recv_transport'          => $r['data']['recvTransport'],
++            'ice_servers'             => $this->signaling->iceServers(),
++            'max_video_subscriptions' => MeetingAdminSettings::sfu()['max_video_subscriptions'],
++        ], 'SFU session created.');
++    }
++
++    /** POST ms/sessions/{sessionId}/transports/{transportId}/connect {dtlsParameters} */
++    public function connectTransport(Request $request, string $uuid, string $sessionId, string $transportId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId) || preg_match(self::UUID_RE, $transportId) !== 1) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++        $v = Validator::make($request->all(), [
++            'dtlsParameters'              => 'required|array',
++            'dtlsParameters.fingerprints' => 'required|array|min:1',
++            'dtlsParameters.role'         => 'nullable|in:auto,client,server',
++        ]);
++        if ($v->fails() || $this->tooBig($request->input('dtlsParameters'))) {
++            return $this->apiError($v->errors()->first() ?: 'Invalid parameters.', $v->errors()->toArray(), 422);
++        }
++
++        return $this->upstream($this->sfu->connectTransport(
++            SelfHostedSfuService::roomId($meeting->uuid),
++            $sessionId,
++            $transportId,
++            (array) $request->input('dtlsParameters')
++        ), 'connect');
++    }
++
++    /** POST ms/sessions/{sessionId}/transports/{transportId}/restart-ice — لما الشبكة تتغيّر (واي فاي → 4G). */
++    public function restartIce(Request $request, string $uuid, string $sessionId, string $transportId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId) || preg_match(self::UUID_RE, $transportId) !== 1) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++
++        return $this->upstream($this->sfu->restartIce(SelfHostedSfuService::roomId($meeting->uuid), $sessionId, $transportId), 'restart-ice');
++    }
++
++    /** POST ms/sessions/{sessionId}/produce {transportId, kind, rtpParameters, source?} */
++    public function produce(Request $request, string $uuid, string $sessionId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId)) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++        $v = Validator::make($request->all(), [
++            'transportId'   => ['required', 'string', 'regex:' . self::UUID_RE],
++            'kind'          => 'required|in:audio,video',
++            'rtpParameters' => 'required|array',
++            'source'        => 'nullable|in:mic,camera,screen,screen_audio',
++        ]);
++        if ($v->fails() || $this->tooBig($request->input('rtpParameters'))) {
++            return $this->apiError($v->errors()->first() ?: 'Invalid parameters.', $v->errors()->toArray(), 422);
++        }
++        if ($this->transport->trackCount($meeting, $actor['key']) >= self::MAX_TRACKS_PER_PEER) {
++            return $this->apiError('Too many active tracks for this participant.', ['code' => 'too_many_tracks'], 422);
++        }
++
++        $kind = (string) $request->input('kind');
++        $source = (string) ($request->input('source') ?: ($kind === 'audio' ? 'mic' : 'camera'));
++
++        $r = $this->sfu->produce(
++            SelfHostedSfuService::roomId($meeting->uuid),
++            $sessionId,
++            (string) $request->input('transportId'),
++            $kind,
++            (array) $request->input('rtpParameters')
++        );
++        $producerId = $r['data']['id'] ?? null;
++        if ($r['ok'] && is_string($producerId) && preg_match(self::UUID_RE, $producerId) === 1) {
++            $this->transport->recordTracks($meeting, $actor['key'], [['trackName' => $producerId, 'kind' => $kind, 'source' => $source]]);
++        }
++
++        return $this->upstream($r, 'produce');
++    }
++
++    /** POST ms/sessions/{sessionId}/consume {transportId, producerId, rtpCapabilities} */
++    public function consume(Request $request, string $uuid, string $sessionId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId)) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++        $v = Validator::make($request->all(), [
++            'transportId'            => ['required', 'string', 'regex:' . self::UUID_RE],
++            'producerId'             => ['required', 'string', 'regex:' . self::UUID_RE],
++            'rtpCapabilities'        => 'required|array',
++            'rtpCapabilities.codecs' => 'required|array|min:1',
++        ]);
++        if ($v->fails() || $this->tooBig($request->input('rtpCapabilities'))) {
++            return $this->apiError($v->errors()->first() ?: 'Invalid parameters.', $v->errors()->toArray(), 422);
++        }
++        $producerId = (string) $request->input('producerId');
++        if (!$this->transport->isOtherPeerTrack($meeting, $actor['key'], $producerId)) {
++            return $this->apiError('Producer does not belong to this meeting.', null, 403);
++        }
++
++        return $this->upstream($this->sfu->consume(
++            SelfHostedSfuService::roomId($meeting->uuid),
++            $sessionId,
++            (string) $request->input('transportId'),
++            $producerId,
++            (array) $request->input('rtpCapabilities')
++        ), 'consume');
++    }
++
++    /** POST ms/sessions/{sessionId}/consumers/{consumerId}/resume */
++    public function resumeConsumer(Request $request, string $uuid, string $sessionId, string $consumerId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId) || preg_match(self::UUID_RE, $consumerId) !== 1) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++
++        return $this->upstream($this->sfu->resumeConsumer(SelfHostedSfuService::roomId($meeting->uuid), $sessionId, $consumerId), 'resume');
++    }
++
++    /** POST ms/sessions/{sessionId}/producers/{producerId}/close — إيقاف مايك/كاميرا/مشاركة شاشة. */
++    public function closeProducer(Request $request, string $uuid, string $sessionId, string $producerId)
++    {
++        $ctx = $this->context($request, $uuid);
++        if ($ctx instanceof JsonResponse) {
++            return $ctx;
++        }
++        [$meeting, $actor] = $ctx;
++
++        if (!$this->owned($meeting, $actor, $sessionId) || preg_match(self::UUID_RE, $producerId) !== 1) {
++            return $this->apiError('Unknown SFU session.', null, 403);
++        }
++        if (!$this->transport->ownsTrack($meeting, $actor['key'], $producerId)) {
++            return $this->apiError('Unknown track.', null, 403);
++        }
++
++        $r = $this->sfu->closeProducer(SelfHostedSfuService::roomId($meeting->uuid), $sessionId, $producerId);
++        // نشيله من السجل حتى لو السيرفر رد 404 (الـ producer اتقفل لوحده): المهم ماحدش يفضل يشوفه ناشر.
++        if ($r['ok'] || $r['status'] === 404) {
++            $this->transport->removeTrack($meeting, $actor['key'], $producerId);
++
++            return $this->apiSuccess(null, 'OK');
++        }
++
++        return $this->upstream($r, 'close');
++    }
++}
+diff -ruN -x vendor -x node_modules orig/app/Http/Controllers/Api/MeetingsSfuApiController.php uip-laravel-main/app/Http/Controllers/Api/MeetingsSfuApiController.php
+--- orig/app/Http/Controllers/Api/MeetingsSfuApiController.php	2026-11-23 22:32:21.957626892 +0000
++++ uip-laravel-main/app/Http/Controllers/Api/MeetingsSfuApiController.php	2026-11-23 22:33:17.002101119 +0000
+@@ -7,6 +7,8 @@
+ use App\Services\CloudflareSfuService;
+ use App\Services\MeetingSignalingService;
+ use App\Services\MeetingTransportService;
++use App\Services\SelfHostedSfuService;
++use App\Services\SfuManager;
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\Validator;
+@@ -26,7 +28,8 @@
+         private MeetingRepository $meetings,
+         private MeetingSignalingService $signaling,
+         private CloudflareSfuService $sfu,
+-        private MeetingTransportService $transport
++        private MeetingTransportService $transport,
++        private SfuManager $manager
+     ) {
+     }
+ 
+@@ -111,7 +114,8 @@
+         $state = $this->transport->evaluate($meeting, $this->presentCount($meeting), false);
+ 
+         return $this->apiSuccess([
+-            'enabled'                 => $this->sfu->enabled(),
++            'enabled'                 => $this->manager->enabled(),
++            'provider'                => $this->manager->provider(),
+             'mode'                    => $state['mode'],
+             'epoch'                   => $state['epoch'],
+             'reason'                  => $state['reason'],
+@@ -143,6 +147,10 @@
+         }
+         [$meeting, $actor] = $ctx;
+ 
++        if ($this->manager->provider() !== 'cloudflare') {
++            return $this->apiError('The active SFU provider is not Cloudflare.', ['code' => 'sfu_provider_mismatch', 'provider' => $this->manager->provider()], 409);
++        }
++
+         $v = Validator::make($request->all(), ['role' => 'required|in:pub,sub']);
+         if ($v->fails()) {
+             return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
+@@ -328,7 +336,12 @@
+             return $ctx;
+         }
+         [$meeting, $actor] = $ctx;
++        $pub = $this->transport->publisherSession($meeting, $actor['key']);
+         $this->transport->removeActor($meeting, $actor['key']);
++        if ($pub !== null && str_starts_with($pub, 'ms_')) {
++            // جلسة mediasoup: نحرّر الـ peer على سيرفر الـ SFU كمان (لو وقع/اتأخر السيرفر بيتنضّف لوحده بعد شوية).
++            $this->manager->selfHosted()->leave(SelfHostedSfuService::roomId($meeting->uuid), $pub);
++        }
+ 
+         return $this->apiSuccess(null, 'OK');
+     }
+diff -ruN -x vendor -x node_modules orig/app/Services/CloudflareSfuService.php uip-laravel-main/app/Services/CloudflareSfuService.php
+--- orig/app/Services/CloudflareSfuService.php	2026-11-23 22:32:21.963682694 +0000
++++ uip-laravel-main/app/Services/CloudflareSfuService.php	2026-11-23 22:33:03.150093076 +0000
+@@ -2,6 +2,7 @@
+ 
+ namespace App\Services;
+ 
++use App\Contracts\SfuProvider;
+ use Illuminate\Http\Client\ConnectionException;
+ use Illuminate\Support\Facades\Http;
+ 
+@@ -17,8 +18,19 @@
+  * https://developers.cloudflare.com/realtime/sfu/https-api/ قبل الإنتاج، خصوصًا شكل ردّ tracks/close.
+  * كل ميثود بترجع ['ok'=>bool, 'status'=>int, 'data'=>array] ومابترميش exception، عشان الكنترولر يرد 502 نضيف.
+  */
+-class CloudflareSfuService
++class CloudflareSfuService implements SfuProvider
+ {
++    public function name(): string
++    {
++        return 'cloudflare';
++    }
++
++    /** فحص سريع: بيفتح session جديدة (نفس اللي زرار "Test" في اللوحة بيعمله). */
++    public function ping(): array
++    {
++        return $this->newSession();
++    }
++
+     public function enabled(): bool
+     {
+         $c = MeetingAdminSettings::sfu(); // اللوحة (Admin → Meetings Control → Video) تغلب الـ env
+diff -ruN -x vendor -x node_modules orig/app/Services/MeetingAdminSettings.php uip-laravel-main/app/Services/MeetingAdminSettings.php
+--- orig/app/Services/MeetingAdminSettings.php	2026-11-23 22:32:21.965780099 +0000
++++ uip-laravel-main/app/Services/MeetingAdminSettings.php	2026-11-23 22:33:03.150890990 +0000
+@@ -88,6 +88,7 @@
+ 
+             // -- الفيديو: Cloudflare Realtime SFU (الافتراضي من .env / config/webrtc.php، والتعديل من اللوحة بيغلب) --
+             'sfu_enabled'                 => ['group' => 'video', 'type' => 'bool', 'default' => (bool) config('webrtc.sfu.enabled', false)],
++            'sfu_provider'                => ['group' => 'video', 'type' => 'enum', 'default' => in_array(config('webrtc.sfu.provider'), ['cloudflare', 'selfhosted'], true) ? config('webrtc.sfu.provider') : 'cloudflare', 'options' => ['cloudflare', 'selfhosted']],
+             'sfu_mode'                    => ['group' => 'video', 'type' => 'enum', 'default' => in_array(config('webrtc.sfu.force'), ['auto', 'sfu', 'mesh'], true) ? config('webrtc.sfu.force') : 'auto', 'options' => ['auto', 'sfu', 'mesh']],
+             'sfu_min_participants'        => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.min_participants', 5), 'min' => 2, 'max' => 500],
+             'sfu_max_video_subscriptions' => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.max_video_subscriptions', 25), 'min' => 1, 'max' => 200],
+@@ -207,7 +208,7 @@
+ 
+     /**
+      * إعدادات الـ SFU الفعلية (اللوحة تغلب الـ env). app_id الفاضي = ارجع للـ env.
+-     * @return array{enabled:bool,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
++     * @return array{enabled:bool,provider:string,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
+      */
+     public static function sfu(): array
+     {
+@@ -218,6 +219,7 @@
+ 
+         return [
+             'enabled'                 => (bool) self::get('sfu_enabled'),
++            'provider'                => (string) self::get('sfu_provider'),
+             'app_id'                  => $appId,
+             'app_secret'              => (string) self::get('sfu_app_secret'),
+             'mode'                    => (string) self::get('sfu_mode'),
+diff -ruN -x vendor -x node_modules orig/app/Services/MeetingTransportService.php uip-laravel-main/app/Services/MeetingTransportService.php
+--- orig/app/Services/MeetingTransportService.php	2026-11-23 22:32:21.966003048 +0000
++++ uip-laravel-main/app/Services/MeetingTransportService.php	2026-11-23 22:33:03.151279446 +0000
+@@ -23,7 +23,7 @@
+     private const TTL = 21600; // 6 ساعات
+     private const FRESH_SECONDS = 30; // تقرير أقدم من كده مايتحسبش
+ 
+-    public function __construct(private CloudflareSfuService $sfu, private MeetingPolicyService $policy)
++    public function __construct(private SfuManager $sfu, private MeetingPolicyService $policy)
+     {
+     }
+ 
+@@ -265,6 +265,64 @@
+             Cache::put($this->key($meeting, 'registry'), $r, self::TTL);
+         });
+     }
++
++    /** جلسة النشر الحالية للمشارك (أو null). في mediasoup هي نفسها الـ peerId الوحيد بتاعه. */
++    public function publisherSession(Meeting $meeting, string $actorKey): ?string
++    {
++        $pub = $this->registry($meeting)[$actorKey]['pub'] ?? null;
++
++        return is_string($pub) && $pub !== '' ? $pub : null;
++    }
++
++    /** عدد الترَكات المسجّلة للمشارك (بيمنع واحد يفتح producers بلا حدود). */
++    public function trackCount(Meeting $meeting, string $actorKey): int
++    {
++        return count((array) ($this->registry($meeting)[$actorKey]['tracks'] ?? []));
++    }
++
++    /** الترَك (producerId في mediasoup) تابع للمشارك ده فعلًا؟ */
++    public function ownsTrack(Meeting $meeting, string $actorKey, string $trackName): bool
++    {
++        foreach ((array) ($this->registry($meeting)[$actorKey]['tracks'] ?? []) as $t) {
++            if (($t['trackName'] ?? null) === $trackName) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    /** الترَك ده تابع لمشارك *تاني* في نفس الاجتماع؟ (يمنع سحب ميديا اجتماع غير اجتماعه). */
++    public function isOtherPeerTrack(Meeting $meeting, string $actorKey, string $trackName): bool
++    {
++        foreach ($this->registry($meeting) as $k => $e) {
++            if ($k === $actorKey) {
++                continue;
++            }
++            foreach ((array) ($e['tracks'] ?? []) as $t) {
++                if (($t['trackName'] ?? null) === $trackName) {
++                    return true;
++                }
++            }
++        }
++
++        return false;
++    }
++
++    public function removeTrack(Meeting $meeting, string $actorKey, string $trackName): void
++    {
++        $this->locked($meeting, function () use ($meeting, $actorKey, $trackName) {
++            $r = $this->registry($meeting);
++            if (!isset($r[$actorKey])) {
++                return;
++            }
++            $r[$actorKey]['tracks'] = array_values(array_filter(
++                (array) $r[$actorKey]['tracks'],
++                fn ($t) => ($t['trackName'] ?? null) !== $trackName
++            ));
++            Cache::put($this->key($meeting, 'registry'), $r, self::TTL);
++        });
++    }
+ 
+     public function removeActor(Meeting $meeting, string $actorKey): void
+     {
+diff -ruN -x vendor -x node_modules orig/app/Services/SelfHostedSfuService.php uip-laravel-main/app/Services/SelfHostedSfuService.php
+--- orig/app/Services/SelfHostedSfuService.php	1970-01-01 00:00:00.000000000 +0000
++++ uip-laravel-main/app/Services/SelfHostedSfuService.php	2026-11-23 22:32:47.854395787 +0000
+@@ -0,0 +1,187 @@
++<?php
++
++namespace App\Services;
++
++use App\Contracts\SfuProvider;
++use Illuminate\Http\Client\ConnectionException;
++use Illuminate\Support\Facades\Http;
++use Illuminate\Support\Facades\Log;
++
++/**
++ * بروكسي رفيع فوق سيرفر mediasoup بتاعنا (مشروع uipe-sfu). السر (SFU_SELFHOSTED_SECRET) بيفضل هنا بس،
++ * والمتصفح مابيكلمش السيرفر ده مباشرة أبدًا — كل حاجة بتعدّي على MeetingsMediasoupApiController اللي بيتأكد الأول
++ * إن الطالب جوه الاجتماع.
++ *
++ * كل ميثود بترجع ['ok'=>bool, 'status'=>int, 'data'=>array] ومابترميش exception (نفس عقد CloudflareSfuService).
++ * مفيش إعادة محاولة تلقائية: كل العمليات (produce/consume/connect) مش آمنة تتكرر.
++ */
++class SelfHostedSfuService implements SfuProvider
++{
++    public function name(): string
++    {
++        return 'selfhosted';
++    }
++
++    /** الـ URL والسر موجودين (من غير ما نبص على زرار التشغيل في اللوحة). */
++    public function configured(): bool
++    {
++        return $this->baseUrl() !== '' && $this->secret() !== '';
++    }
++
++    public function enabled(): bool
++    {
++        return MeetingAdminSettings::sfu()['enabled'] && $this->configured();
++    }
++
++    /** اسم الغرفة على سيرفر الـ SFU (حروف آمنة بس، أقل من 64). */
++    public static function roomId(string $meetingUuid): string
++    {
++        return 'm_' . preg_replace('/[^A-Za-z0-9_-]/', '', $meetingUuid);
++    }
++
++    /** @return array{ok:bool,status:int,data:array<string,mixed>} */
++    public function ping(): array
++    {
++        if ($this->baseUrl() === '') {
++            return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_disabled']];
++        }
++        try {
++            $res = Http::acceptJson()->timeout(3)->get($this->baseUrl() . '/health');
++            $data = $res->json();
++            $ok = $res->successful() && is_array($data) && ($data['ok'] ?? false) === true;
++
++            return ['ok' => $ok, 'status' => $res->status(), 'data' => is_array($data) ? $data : []];
++        } catch (ConnectionException $e) {
++            return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
++        } catch (\Throwable $e) {
++            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
++        }
++    }
++
++    /**
++     * اختبار كامل للأدمن: /health (من غير سر) + إنشاء session تجريبية وقفلها (بيتحقق إن السر صح).
++     * @return array{ok:bool,status:int,data:array<string,mixed>}
++     */
++    public function test(): array
++    {
++        $p = $this->ping();
++        if (!$p['ok']) {
++            return $p;
++        }
++        $room = self::roomId('admin-test');
++        $r = $this->createSession($room, 'ms_admin_test');
++        $this->leave($room, 'ms_admin_test');
++
++        return $r;
++    }
++
++    // ------------------------------------------------------------------ media operations
++
++    /** @return array{ok:bool,status:int,data:array<string,mixed>} {routerRtpCapabilities, sendTransport, recvTransport} */
++    public function createSession(string $roomId, string $peerId): array
++    {
++        return $this->call('rooms/' . rawurlencode($roomId) . '/sessions', ['peerId' => $peerId]);
++    }
++
++    /** @param array<string,mixed> $dtlsParameters */
++    public function connectTransport(string $roomId, string $peerId, string $transportId, array $dtlsParameters): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/transports/' . rawurlencode($transportId) . '/connect', ['dtlsParameters' => $dtlsParameters]);
++    }
++
++    /** ICE restart (تغيّر الشبكة): بيرجّع iceParameters جديدة. */
++    public function restartIce(string $roomId, string $peerId, string $transportId): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/transports/' . rawurlencode($transportId) . '/restart-ice');
++    }
++
++    /** @param array<string,mixed> $rtpParameters */
++    public function produce(string $roomId, string $peerId, string $transportId, string $kind, array $rtpParameters): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/produce', [
++            'transportId'   => $transportId,
++            'kind'          => $kind,
++            'rtpParameters' => $rtpParameters,
++        ]);
++    }
++
++    /** @param array<string,mixed> $rtpCapabilities */
++    public function consume(string $roomId, string $peerId, string $transportId, string $producerId, array $rtpCapabilities): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/consume', [
++            'transportId'     => $transportId,
++            'producerId'      => $producerId,
++            'rtpCapabilities' => $rtpCapabilities,
++        ]);
++    }
++
++    public function resumeConsumer(string $roomId, string $peerId, string $consumerId): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/consumers/' . rawurlencode($consumerId) . '/resume');
++    }
++
++    public function closeProducer(string $roomId, string $peerId, string $producerId): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/producers/' . rawurlencode($producerId) . '/close');
++    }
++
++    public function leave(string $roomId, string $peerId): array
++    {
++        return $this->call($this->peerPath($roomId, $peerId) . '/leave');
++    }
++
++    // ------------------------------------------------------------------ internals
++
++    private function peerPath(string $roomId, string $peerId): string
++    {
++        return 'rooms/' . rawurlencode($roomId) . '/peers/' . rawurlencode($peerId);
++    }
++
++    private function baseUrl(): string
++    {
++        return rtrim((string) config('webrtc.selfhosted.url', ''), '/');
++    }
++
++    private function secret(): string
++    {
++        return (string) config('webrtc.selfhosted.secret', '');
++    }
++
++    /**
++     * @param array<string,mixed> $body
++     * @return array{ok:bool,status:int,data:array<string,mixed>}
++     */
++    private function call(string $path, array $body = []): array
++    {
++        if (!$this->configured()) {
++            return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_disabled']];
++        }
++
++        $url = $this->baseUrl() . '/' . ltrim($path, '/');
++        try {
++            $req = Http::withHeaders(['x-internal-secret' => $this->secret()])
++                ->acceptJson()
++                ->timeout((int) config('webrtc.selfhosted.timeout', 10));
++
++            // body فاضي = "{}" صريح (express.json بيقبله)، مش [] اللي لارافيل ممكن يبعتها بشكل مختلف.
++            $res = $body === []
++                ? $req->withBody('{}', 'application/json')->post($url)
++                : $req->asJson()->post($url, $body);
++        } catch (ConnectionException $e) {
++            Log::warning('Self-hosted SFU unreachable', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
++
++            return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
++        } catch (\Throwable $e) {
++            Log::warning('Self-hosted SFU call failed', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
++
++            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
++        }
++
++        $data = $res->json();
++        if (!$res->successful()) {
++            Log::warning('Self-hosted SFU non-2xx', ['path' => $path, 'status' => $res->status(), 'body' => mb_substr((string) $res->body(), 0, 300)]);
++        }
++
++        return ['ok' => $res->successful(), 'status' => $res->status(), 'data' => is_array($data) ? $data : []];
++    }
++}
+diff -ruN -x vendor -x node_modules orig/app/Services/SfuManager.php uip-laravel-main/app/Services/SfuManager.php
+--- orig/app/Services/SfuManager.php	1970-01-01 00:00:00.000000000 +0000
++++ uip-laravel-main/app/Services/SfuManager.php	2026-11-23 22:32:47.855207963 +0000
+@@ -0,0 +1,44 @@
++<?php
++
++namespace App\Services;
++
++use App\Contracts\SfuProvider;
++
++/**
++ * بيحدد مين المزوّد الفعّال دلوقتي (Cloudflare ولا mediasoup بتاعنا) حسب إعداد اللوحة `sfu_provider`.
++ * دلوقتي الاختيار ثابت من الإعدادات؛ الـ failover التلقائي (health check) بيتضاف هنا في الخطوة 6.
++ */
++class SfuManager
++{
++    public function __construct(
++        private CloudflareSfuService $cloudflare,
++        private SelfHostedSfuService $selfHosted
++    ) {
++    }
++
++    /** @return 'cloudflare'|'selfhosted' */
++    public function provider(): string
++    {
++        return MeetingAdminSettings::sfu()['provider'] === 'selfhosted' ? 'selfhosted' : 'cloudflare';
++    }
++
++    public function active(): SfuProvider
++    {
++        return $this->provider() === 'selfhosted' ? $this->selfHosted : $this->cloudflare;
++    }
++
++    public function enabled(): bool
++    {
++        return $this->active()->enabled();
++    }
++
++    public function cloudflare(): CloudflareSfuService
++    {
++        return $this->cloudflare;
++    }
++
++    public function selfHosted(): SelfHostedSfuService
++    {
++        return $this->selfHosted;
++    }
++}
+diff -ruN -x vendor -x node_modules orig/config/webrtc.php uip-laravel-main/config/webrtc.php
+--- orig/config/webrtc.php	2026-11-23 22:32:21.971394812 +0000
++++ uip-laravel-main/config/webrtc.php	2026-11-23 22:33:03.150467006 +0000
+@@ -70,6 +70,8 @@
+     */
+     'sfu' => [
+         'enabled'    => (bool) env('MEETINGS_SFU_ENABLED', false),
++        // مين المزوّد: 'cloudflare' (الحالي) | 'selfhosted' (mediasoup بتاعنا، راجع 'selfhosted' تحت). الأدمن يغيّره من اللوحة.
++        'provider'   => strtolower((string) env('MEETINGS_SFU_PROVIDER', 'cloudflare')),
+         'app_id'     => env('CF_SFU_APP_ID'),
+         'app_secret' => env('CF_SFU_APP_SECRET'),
+         'base_url'   => rtrim((string) env('CF_SFU_BASE_URL', 'https://rtc.live.cloudflare.com/v1'), '/'),
+@@ -86,4 +88,19 @@
+         // أقل مدة بين تحويلين (ثواني) — يمنع الرجوع والتحويل المتكرر.
+         'min_dwell_seconds' => (int) env('MEETINGS_SFU_MIN_DWELL', 30),
+     ],
++
++    /*
++    |--------------------------------------------------------------------------
++    | mediasoup SFU المستضاف عندنا (مشروع uipe-sfu على EC2)
++    |--------------------------------------------------------------------------
++    | url: عنوان سيرفر الـ SFU. لو لارافيل والـ SFU في نفس الـ VPC استخدم الـ private IP (http://172.31.x.x:4443)
++    | عشان السر مايعدّيش على الإنترنت بدون تشفير. لو عبر الإنترنت لازم https.
++    | secret: نفس قيمة INTERNAL_API_SECRET في .env بتاع سيرفر الـ SFU.
++    | الـ TURN بيتظبط من TURN_URLS / TURN_SECRET فوق (نفس coturn بيخدم الـ mesh والـ SFU).
++    */
++    'selfhosted' => [
++        'url'     => rtrim((string) env('SFU_SELFHOSTED_URL', ''), '/'),
++        'secret'  => env('SFU_SELFHOSTED_SECRET'),
++        'timeout' => (int) env('SFU_SELFHOSTED_TIMEOUT', 10),
++    ],
+ ];
+diff -ruN -x vendor -x node_modules orig/routes/api.php uip-laravel-main/routes/api.php
+--- orig/routes/api.php	2026-11-23 22:32:21.992833833 +0000
++++ uip-laravel-main/routes/api.php	2026-11-23 22:33:17.003775732 +0000
+@@ -891,6 +891,18 @@
+         Route::put('sessions/{sessionId}/tracks/close', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'closeTracks']);
+         Route::post('report', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'report']);
+         Route::post('leave', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'leave']);
++
++        // mediasoup المستضاف عندنا (لما sfu/config بيرجّع provider = selfhosted). config/peers/report/leave فوق مشتركين بين المزوّدين.
++        Route::prefix('ms')->group(function () {
++            $c = \App\Http\Controllers\Api\MeetingsMediasoupApiController::class;
++            Route::post('session', [$c, 'session']);
++            Route::post('sessions/{sessionId}/transports/{transportId}/connect', [$c, 'connectTransport']);
++            Route::post('sessions/{sessionId}/transports/{transportId}/restart-ice', [$c, 'restartIce']);
++            Route::post('sessions/{sessionId}/produce', [$c, 'produce']);
++            Route::post('sessions/{sessionId}/consume', [$c, 'consume']);
++            Route::post('sessions/{sessionId}/consumers/{consumerId}/resume', [$c, 'resumeConsumer']);
++            Route::post('sessions/{sessionId}/producers/{producerId}/close', [$c, 'closeProducer']);
++        });
+     });
+ 
+     // التحكم عن بُعد في الشاشة المشاركة (زي Zoom) — لازم موافقة صاحب الشاشة، متحكم واحد في المرة.

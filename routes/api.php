@@ -891,6 +891,18 @@ Route::prefix('v1')->group(function () {
         Route::put('sessions/{sessionId}/tracks/close', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'closeTracks']);
         Route::post('report', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'report']);
         Route::post('leave', [\App\Http\Controllers\Api\MeetingsSfuApiController::class, 'leave']);
+
+        // mediasoup المستضاف عندنا (لما sfu/config بيرجّع provider = selfhosted). config/peers/report/leave فوق مشتركين بين المزوّدين.
+        Route::prefix('ms')->group(function () {
+            $c = \App\Http\Controllers\Api\MeetingsMediasoupApiController::class;
+            Route::post('session', [$c, 'session']);
+            Route::post('sessions/{sessionId}/transports/{transportId}/connect', [$c, 'connectTransport']);
+            Route::post('sessions/{sessionId}/transports/{transportId}/restart-ice', [$c, 'restartIce']);
+            Route::post('sessions/{sessionId}/produce', [$c, 'produce']);
+            Route::post('sessions/{sessionId}/consume', [$c, 'consume']);
+            Route::post('sessions/{sessionId}/consumers/{consumerId}/resume', [$c, 'resumeConsumer']);
+            Route::post('sessions/{sessionId}/producers/{producerId}/close', [$c, 'closeProducer']);
+        });
     });
 
     // التحكم عن بُعد في الشاشة المشاركة (زي Zoom) — لازم موافقة صاحب الشاشة، متحكم واحد في المرة.

@@ -90,8 +90,30 @@ class AdminMeetingsControlApiController extends Controller
     /** POST sfu/test — بيعمل session تجريبية على Cloudflare بالإعدادات المحفوظة حاليًا ويقول الاتصال سليم ولا لأ (من غير ما يكشف السر). */
     public function testSfu(Request $request)
     {
-        $svc = app(\App\Services\CloudflareSfuService::class);
         $cfg = MeetingAdminSettings::sfu();
+
+        // المزوّد الفعّال = mediasoup بتاعنا: نختبره هو (health + إنشاء session تجريبية بالسر).
+        if ($cfg['provider'] === 'selfhosted') {
+            $own = app(\App\Services\SelfHostedSfuService::class);
+            if (!$own->configured()) {
+                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'Self-hosted SFU URL / secret are not set (SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET).');
+            }
+            if (!$cfg['enabled']) {
+                return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
+            }
+            $r = $own->test();
+            $code = $r['ok'] ? 'ok' : match (true) {
+                in_array($r['status'], [401, 403], true) => 'bad_secret',
+                $r['status'] === 504 => 'unreachable',
+                default => 'error',
+            };
+            $this->log($request, 'sfu_tested', null, null, ['result' => $code, 'provider' => 'selfhosted'], 'MeetingSettings');
+            $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
+
+            return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to the self-hosted SFU.' : 'Could not connect to the self-hosted SFU.');
+        }
+
+        $svc = app(\App\Services\CloudflareSfuService::class);
         if ($cfg['app_id'] === '' || $cfg['app_secret'] === '') {
             return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'App ID / secret are not set.');
         }
