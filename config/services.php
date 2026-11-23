@@ -85,7 +85,7 @@ return [
     'sandbox' => [
         'url'       => env('SANDBOX_URL', ''),
         'secret'    => env('SANDBOX_JWT_SECRET', ''),
-        'token_ttl' => (int) env('SANDBOX_TOKEN_TTL', 120),
+        'token_ttl' => (int) env('SANDBOX_TOKEN_TTL', 90), // clamped to 30..120 s by App\\Support\\SandboxTokenSigner
     ],
 
     // Desktop Browser app: web search page. Google's own Custom Search API ends on 2027-01-01, so the default is Serper (Google results).

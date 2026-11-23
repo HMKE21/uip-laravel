@@ -524,23 +524,13 @@ class DriveApiController extends Controller
             return $d;
         }
         return $this->guard($request, function ($uid) use ($id) {
-            $url    = rtrim((string) config('services.sandbox.url'), '/');
-            $secret = (string) config('services.sandbox.secret');
-            if ($url === '' || strlen($secret) < 32) {
-                return $this->apiError('The sandbox is not configured on this server.', null, 503);
-            }
             // a folder (code editor) OR a ZIP file opened in the viewer: ownership is what matters; the id only keys the session
             $node = $this->drive->find($uid, (int) $id);
-            $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
-            $now = time();
-            $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-            $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
-            $body = $b64(json_encode([
-                'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $uid, 'pid' => 'drive-' . (int) $node->id,
-                'iat' => $now, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(8)),
-            ]));
-            $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
-            return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
+            $t = \App\Support\SandboxTokenSigner::issue($uid, 'drive-' . (int) $node->id, 'project');
+            if ($t === null) {
+                return $this->apiError('The sandbox is not configured on this server.', null, 503);
+            }
+            return $this->apiSuccess($t, 'Sandbox token issued.');
         });
     }
 
@@ -551,21 +541,11 @@ class DriveApiController extends Controller
             return $d;
         }
         return $this->guard($request, function ($uid) {
-            $url    = rtrim((string) config('services.sandbox.url'), '/');
-            $secret = (string) config('services.sandbox.secret');
-            if ($url === '' || strlen($secret) < 32) {
+            $t = \App\Support\SandboxTokenSigner::issue($uid, 'terminal', 'terminal');
+            if ($t === null) {
                 return $this->apiError('The sandbox is not configured on this server.', null, 503);
             }
-            $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
-            $now = time();
-            $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-            $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
-            $body = $b64(json_encode([
-                'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $uid, 'pid' => 'terminal',
-                'iat' => $now, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(8)),
-            ]));
-            $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
-            return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
+            return $this->apiSuccess($t, 'Sandbox token issued.');
         });
     }
 
@@ -587,21 +567,12 @@ class DriveApiController extends Controller
             return $d;
         }
         return $this->guard($request, function ($uid) use ($app) {
-            $url    = rtrim((string) config('services.sandbox.url'), '/');
-            $secret = (string) config('services.sandbox.secret');
-            if ($url === '' || strlen($secret) < 32) {
+            // the gateway lets terminal / vscode / browser run side by side, keyed by this pid
+            $t = \App\Support\SandboxTokenSigner::issue($uid, $app, $app);
+            if ($t === null) {
                 return $this->apiError('The sandbox is not configured on this server.', null, 503);
             }
-            $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
-            $now = time();
-            $b64 = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-            $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
-            $body = $b64(json_encode([
-                'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $uid, 'pid' => $app, // the gateway lets terminal / vscode / browser run side by side
-                'iat' => $now, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(8)),
-            ]));
-            $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
-            return $this->apiSuccess(['url' => $url, 'token' => "{$head}.{$body}.{$sig}", 'expires_in' => $ttl], 'Sandbox token issued.');
+            return $this->apiSuccess($t, 'Sandbox token issued.');
         });
     }
 

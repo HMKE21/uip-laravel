@@ -28,9 +28,7 @@ class SandboxApiController extends Controller
 
     public function token(Request $request, $id)
     {
-        $url    = rtrim((string) config('services.sandbox.url'), '/');
-        $secret = (string) config('services.sandbox.secret');
-        if ($url === '' || strlen($secret) < 32) {
+        if (\App\Support\SandboxTokenSigner::config() === null) {
             return $this->apiError('The sandbox is not configured on this server.', null, 503);
         }
 
@@ -40,31 +38,12 @@ class SandboxApiController extends Controller
             return $this->apiError('Project not found.', null, 404);
         }
 
-        $ttl = max(30, (int) config('services.sandbox.token_ttl', 120));
-        $now = time();
-        $claims = [
-            'iss' => 'uip-api',
-            'aud' => 'uip-sandbox',
-            'sub' => (string) $userId,
-            'pid' => (string) $id,
-            'iat' => $now,
-            'exp' => $now + $ttl,
-            'jti' => bin2hex(random_bytes(8)),
-        ];
+        // $id is only a session key for the gateway; findAccessible() above is the access check
+        $token = \App\Support\SandboxTokenSigner::issue($userId, (string) $id, 'project');
+        if ($token === null) {
+            return $this->apiError('The sandbox is not configured on this server.', null, 503);
+        }
 
-        return $this->apiSuccess([
-            'url'        => $url,
-            'token'      => $this->signHs256($claims, $secret),
-            'expires_in' => $ttl,
-        ], 'Sandbox token issued.');
-    }
-
-    private function signHs256(array $claims, string $secret): string
-    {
-        $b64  = static fn (string $s): string => rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
-        $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
-        $body = $b64(json_encode($claims));
-        $sig  = $b64(hash_hmac('sha256', "{$head}.{$body}", $secret, true));
-        return "{$head}.{$body}.{$sig}";
+        return $this->apiSuccess($token, 'Sandbox token issued.');
     }
 }
