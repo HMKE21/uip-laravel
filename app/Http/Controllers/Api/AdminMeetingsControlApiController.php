@@ -121,7 +121,7 @@ class AdminMeetingsControlApiController extends Controller
             return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
         }
 
-        $r = $svc->newSession();
+        $r = $svc->newSession(true); // force: اختبار الأدمن يتخطى الدايرة المفتوحة
         $code = $r['ok'] ? 'ok' : match (true) {
             in_array($r['status'], [401, 403], true) => 'bad_secret',
             $r['status'] === 404 => 'bad_app_id',
@@ -134,6 +134,40 @@ class AdminMeetingsControlApiController extends Controller
         $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
 
         return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
+    }
+
+    /**
+     * GET sfu/health — حالة المزوّدين (الخطوة 6): واقع؟ لحد امتى؟ آخر خطأ؟ وأنهي مزوّد هتاخده الاجتماعات الجديدة دلوقتي.
+     * مفيهاش أسرار ولا عناوين السيرفرات.
+     */
+    public function sfuHealth(Request $request)
+    {
+        $mgr = app(\App\Services\SfuManager::class);
+        $providers = [];
+        foreach (\App\Services\SfuHealth::PROVIDERS as $p) {
+            $providers[$p] = ['enabled' => $mgr->service($p)->enabled()] + \App\Services\SfuHealth::snapshot($p);
+        }
+
+        return $this->apiSuccess([
+            'preferred'     => $mgr->preferred(),
+            'failover'      => $mgr->failoverEnabled(),
+            'new_rooms_use' => $mgr->pick(),
+            'providers'     => $providers,
+        ], 'SFU health retrieved successfully.');
+    }
+
+    /** POST sfu/health/reset {provider} — يقفل الدايرة يدويًا بعد ما الأدمن يصلّح المشكلة (من غير ما يستنى الـ cooldown). */
+    public function resetSfuHealth(Request $request)
+    {
+        $v = Validator::make($request->all(), ['provider' => 'required|in:cloudflare,selfhosted']);
+        if ($v->fails()) {
+            return $this->apiError($v->errors()->first(), $v->errors()->toArray(), 422);
+        }
+        $provider = (string) $request->input('provider');
+        \App\Services\SfuHealth::reset($provider);
+        $this->log($request, 'sfu_health_reset', null, null, ['provider' => $provider], 'MeetingSettings');
+
+        return $this->sfuHealth($request);
     }
 
     public function resetSettings(Request $request)

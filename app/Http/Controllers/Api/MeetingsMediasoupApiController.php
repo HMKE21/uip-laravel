@@ -66,8 +66,10 @@ class MeetingsMediasoupApiController extends Controller
         } catch (\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, 403);
         }
-        if ($this->manager->provider() !== 'selfhosted' || !$this->sfu->enabled()) {
-            return $this->apiError('The self-hosted SFU is not active.', ['code' => 'sfu_provider_inactive', 'provider' => $this->manager->provider()], 409);
+        // مزوّد الغرفة (متثبّت لكل اجتماع + failover تلقائي). لو اتحوّلت لـ Cloudflare العميل يشوف provider في الـ 409 ويتحوّل.
+        $provider = $this->transport->providerFor($meeting);
+        if ($provider !== 'selfhosted' || !$this->sfu->enabled()) {
+            return $this->apiError('The self-hosted SFU is not active for this meeting.', ['code' => 'sfu_provider_inactive', 'provider' => $provider], 409);
         }
 
         return [$meeting, $actor];

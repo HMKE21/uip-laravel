@@ -1107,6 +1107,8 @@ Route::prefix('v1')->group(function () {
             Route::put('settings', [$c, 'updateSettings'])->middleware('throttle:admin-control-write');
             Route::delete('settings', [$c, 'resetSettings'])->middleware('throttle:admin-control-write');
             Route::post('sfu/test', [$c, 'testSfu'])->middleware('throttle:admin-control-test');
+            Route::get('sfu/health', [$c, 'sfuHealth']);
+            Route::post('sfu/health/reset', [$c, 'resetSfuHealth'])->middleware('throttle:admin-control-write');
 
             Route::get('blocked-users', [$c, 'blockedUsers']);
             Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:admin-control-write');

@@ -112,10 +112,13 @@ class MeetingsSfuApiController extends Controller
         [$meeting, $actor] = $ctx;
 
         $state = $this->transport->evaluate($meeting, $this->presentCount($meeting), false);
+        // المزوّد بتاع *الغرفة دي* (متثبّت لكل اجتماع، وبيتحوّل تلقائيًا لو اللي عليه وقع). العميل لازم يمشي على القيمة دي.
+        $provider = $this->transport->providerFor($meeting);
 
         return $this->apiSuccess([
-            'enabled'                 => $this->manager->enabled(),
-            'provider'                => $this->manager->provider(),
+            'enabled'                 => $this->manager->usable($provider),
+            'provider'                => $provider,
+            'failover'                => $this->manager->failoverEnabled(),
             'mode'                    => $state['mode'],
             'epoch'                   => $state['epoch'],
             'reason'                  => $state['reason'],
@@ -147,8 +150,9 @@ class MeetingsSfuApiController extends Controller
         }
         [$meeting, $actor] = $ctx;
 
-        if ($this->manager->provider() !== 'cloudflare') {
-            return $this->apiError('The active SFU provider is not Cloudflare.', ['code' => 'sfu_provider_mismatch', 'provider' => $this->manager->provider()], 409);
+        $provider = $this->transport->providerFor($meeting);
+        if ($provider !== 'cloudflare') {
+            return $this->apiError('This meeting is not using the Cloudflare SFU.', ['code' => 'sfu_provider_mismatch', 'provider' => $provider], 409);
         }
 
         $v = Validator::make($request->all(), ['role' => 'required|in:pub,sub']);

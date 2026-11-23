@@ -48,7 +48,7 @@ class SelfHostedSfuService implements SfuProvider
         try {
             $res = Http::acceptJson()->timeout(3)->get($this->baseUrl() . '/health');
             $data = $res->json();
-            $ok = $res->successful() && is_array($data) && ($data['ok'] ?? false) === true;
+            $ok = $res->successful() && is_array($data) && ($data['ok'] ?? false) === true && (int) ($data['workers'] ?? 1) >= 1;
 
             return ['ok' => $ok, 'status' => $res->status(), 'data' => is_array($data) ? $data : []];
         } catch (ConnectionException $e) {
@@ -56,6 +56,22 @@ class SelfHostedSfuService implements SfuProvider
         } catch (\Throwable $e) {
             return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
         }
+    }
+
+    /**
+     * فحص دوري (أمر sfu:health): ping + تسجيل النتيجة في SfuHealth.
+     * @return array{ok:bool,status:int,data:array<string,mixed>}
+     */
+    public function probe(): array
+    {
+        $r = $this->ping();
+        if ($r['ok']) {
+            SfuHealth::recordSuccess('selfhosted', true);
+        } else {
+            SfuHealth::recordFailure('selfhosted', (string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ('http_' . $r['status'])), true);
+        }
+
+        return $r;
     }
 
     /**
@@ -69,8 +85,8 @@ class SelfHostedSfuService implements SfuProvider
             return $p;
         }
         $room = self::roomId('admin-test');
-        $r = $this->createSession($room, 'ms_admin_test');
-        $this->leave($room, 'ms_admin_test');
+        $r = $this->createSession($room, 'ms_admin_test', true); // force: الأدمن يختبر السيرفر حتى لو الدايرة مفتوحة
+        $this->leave($room, 'ms_admin_test', true);
 
         return $r;
     }
@@ -78,9 +94,9 @@ class SelfHostedSfuService implements SfuProvider
     // ------------------------------------------------------------------ media operations
 
     /** @return array{ok:bool,status:int,data:array<string,mixed>} {routerRtpCapabilities, sendTransport, recvTransport} */
-    public function createSession(string $roomId, string $peerId): array
+    public function createSession(string $roomId, string $peerId, bool $force = false): array
     {
-        return $this->call('rooms/' . rawurlencode($roomId) . '/sessions', ['peerId' => $peerId]);
+        return $this->call('rooms/' . rawurlencode($roomId) . '/sessions', ['peerId' => $peerId], null, $force);
     }
 
     /** @param array<string,mixed> $dtlsParameters */
@@ -125,9 +141,10 @@ class SelfHostedSfuService implements SfuProvider
         return $this->call($this->peerPath($roomId, $peerId) . '/producers/' . rawurlencode($producerId) . '/close');
     }
 
-    public function leave(string $roomId, string $peerId): array
+    /** timeout قصير (3 ثواني): الخروج مايستاهلش نعطّل المستخدم، والسيرفر بينضّف الـ peer لوحده لو الطلب ماوصلش. */
+    public function leave(string $roomId, string $peerId, bool $force = false): array
     {
-        return $this->call($this->peerPath($roomId, $peerId) . '/leave');
+        return $this->call($this->peerPath($roomId, $peerId) . '/leave', [], 3, $force);
     }
 
     // ------------------------------------------------------------------ internals
@@ -151,17 +168,21 @@ class SelfHostedSfuService implements SfuProvider
      * @param array<string,mixed> $body
      * @return array{ok:bool,status:int,data:array<string,mixed>}
      */
-    private function call(string $path, array $body = []): array
+    private function call(string $path, array $body = [], ?int $timeout = null, bool $force = false): array
     {
         if (!$this->configured()) {
             return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_disabled']];
+        }
+        // الدايرة مفتوحة (السيرفر واقع): نفشل فورًا بدل ما كل طلب يستنى الـ timeout. مابنسجّلش ده كفشل جديد.
+        if (!$force && SfuHealth::isDown('selfhosted')) {
+            return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_circuit_open']];
         }
 
         $url = $this->baseUrl() . '/' . ltrim($path, '/');
         try {
             $req = Http::withHeaders(['x-internal-secret' => $this->secret()])
                 ->acceptJson()
-                ->timeout((int) config('webrtc.selfhosted.timeout', 10));
+                ->timeout($timeout ?? (int) config('webrtc.selfhosted.timeout', 10));
 
             // body فاضي = "{}" صريح (express.json بيقبله)، مش [] اللي لارافيل ممكن يبعتها بشكل مختلف.
             $res = $body === []
@@ -169,15 +190,22 @@ class SelfHostedSfuService implements SfuProvider
                 : $req->asJson()->post($url, $body);
         } catch (ConnectionException $e) {
             Log::warning('Self-hosted SFU unreachable', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
+            SfuHealth::recordFailure('selfhosted', 'unreachable: ' . $e->getMessage());
 
             return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
         } catch (\Throwable $e) {
             Log::warning('Self-hosted SFU call failed', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
+            SfuHealth::recordFailure('selfhosted', 'error: ' . $e->getMessage());
 
             return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
         }
 
         $data = $res->json();
+        if (SfuHealth::failureStatus($res->status())) {
+            SfuHealth::recordFailure('selfhosted', 'http_' . $res->status());
+        } else {
+            SfuHealth::recordSuccess('selfhosted'); // أي رد "سليم" (حتى 4xx/500 لطلب غلط) = السيرفر شغّال
+        }
         if (!$res->successful()) {
             Log::warning('Self-hosted SFU non-2xx', ['path' => $path, 'status' => $res->status(), 'body' => mb_substr((string) $res->body(), 0, 300)]);
         }

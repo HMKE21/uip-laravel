@@ -28,7 +28,23 @@ class CloudflareSfuService implements SfuProvider
     /** فحص سريع: بيفتح session جديدة (نفس اللي زرار "Test" في اللوحة بيعمله). */
     public function ping(): array
     {
-        return $this->newSession();
+        return $this->newSession(true);
+    }
+
+    /**
+     * فحص دوري (أمر sfu:health): بيفتح session حقيقية (فبيتشغّل أقل من mediasoup) ويسجّل النتيجة في SfuHealth.
+     * @return array{ok:bool,status:int,data:array<string,mixed>}
+     */
+    public function probe(): array
+    {
+        $r = $this->newSession(true);
+        if ($r['ok']) {
+            SfuHealth::recordSuccess('cloudflare', true);
+        } else {
+            SfuHealth::recordFailure('cloudflare', (string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ('http_' . $r['status'])), true);
+        }
+
+        return $r;
     }
 
     public function enabled(): bool
@@ -39,9 +55,9 @@ class CloudflareSfuService implements SfuProvider
     }
 
     /** @return array{ok:bool,status:int,data:array<string,mixed>} */
-    public function newSession(): array
+    public function newSession(bool $force = false): array
     {
-        return $this->call('POST', 'sessions/new', []);
+        return $this->call('POST', 'sessions/new', [], $force);
     }
 
     /** @param array<string,mixed> $body */
@@ -63,10 +79,14 @@ class CloudflareSfuService implements SfuProvider
     }
 
     /** @param array<string,mixed> $body */
-    private function call(string $method, string $path, array $body): array
+    private function call(string $method, string $path, array $body, bool $force = false): array
     {
         if (!$this->enabled()) {
             return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_disabled']];
+        }
+        // الدايرة مفتوحة (Cloudflare واقع/رافض): نفشل فورًا. مابنسجّلش ده كفشل جديد.
+        if (!$force && SfuHealth::isDown('cloudflare')) {
+            return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_circuit_open']];
         }
 
         $c = MeetingAdminSettings::sfu();
@@ -101,16 +121,23 @@ class CloudflareSfuService implements SfuProvider
                     continue;
                 }
                 \Illuminate\Support\Facades\Log::warning('Meetings SFU unreachable', ['path' => $path, 'error' => mb_substr($e->getMessage(), 0, 200)]);
+                SfuHealth::recordFailure('cloudflare', 'unreachable: ' . $e->getMessage());
 
                 return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('Meetings SFU call failed', ['path' => $path, 'error' => $e->getMessage()]);
+                SfuHealth::recordFailure('cloudflare', 'error: ' . $e->getMessage());
 
                 return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error', 'errorDescription' => mb_substr($e->getMessage(), 0, 200)]];
             }
         }
 
         $data = $res->json();
+        if (SfuHealth::failureStatus($res->status())) {
+            SfuHealth::recordFailure('cloudflare', 'http_' . $res->status());
+        } else {
+            SfuHealth::recordSuccess('cloudflare');
+        }
         if (!$res->successful()) {
             \Illuminate\Support\Facades\Log::warning('Meetings SFU non-2xx', ['path' => $path, 'status' => $res->status(), 'body' => mb_substr((string) $res->body(), 0, 500)]);
         }

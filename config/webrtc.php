@@ -103,4 +103,25 @@ return [
         'secret'  => env('SFU_SELFHOSTED_SECRET'),
         'timeout' => (int) env('SFU_SELFHOSTED_TIMEOUT', 10),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Failover التلقائي بين مزوّدي الـ SFU (Cloudflare <-> mediasoup بتاعنا) — الخطوة 6
+    |--------------------------------------------------------------------------
+    | كل مزوّد ليه circuit breaker: بعد `fail_threshold` فشل متتالي (من جهة السيرفر: مفيش اتصال / 502 / 503 / 504 / 401)
+    | بيتقفل `cooldown_seconds` (بيتضاعف مع كل فشل زيادة لحد `max_cooldown_seconds`) والاجتماعات اللي شغالة عليه بتتحول للمزوّد التاني.
+    | رد 500 من سيرفر الـ SFU مابيتحسبش فشل (ممكن يكون بسبب باراميترز غلط من عميل واحد، ومانسمحش لأي مستخدم يوقّع المزوّد على الكل).
+    | الأدمن يقدر يقفل الـ failover من اللوحة (sfu_failover) — الافتراضي من SFU_FAILOVER.
+    */
+    'failover' => [
+        'enabled'                   => filter_var(env('SFU_FAILOVER', true), FILTER_VALIDATE_BOOLEAN),
+        'fail_threshold'            => (int) env('SFU_FAIL_THRESHOLD', 3),
+        'cooldown_seconds'          => (int) env('SFU_COOLDOWN_SECONDS', 30),
+        'max_cooldown_seconds'      => (int) env('SFU_MAX_COOLDOWN_SECONDS', 300),
+        // أمر sfu:health: كل كام ثانية يفحص mediasoup (طلب /health خفيف). و Cloudflare بيتفحص أقل (بيفتح session حقيقية) — 0 = مايتفحصش.
+        'probe_interval'            => (int) env('SFU_PROBE_INTERVAL', 10),
+        'cloudflare_probe_interval' => (int) env('SFU_CF_PROBE_INTERVAL', 120),
+        // لو آخر فحص أقدم من كده (الـ scheduler واقف مثلًا) الأدمن يشوف الحالة "قديمة" في /sfu/health.
+        'stale_seconds'             => (int) env('SFU_HEALTH_STALE_SECONDS', 180),
+    ],
 ];

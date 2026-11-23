@@ -47,6 +47,10 @@ Schedule::command('exams:notify-upcoming')->everyFiveMinutes()->withoutOverlappi
 // إيميلات إشعارات مشاريع التخرج (تقديم/قرار/تقييم/ملاحظة) + تذكيرات قرب موعد التسليم — مفعّلة هنا،
 // ومحتاجة نفس cron السيرفر اللي فوق (schedule:run كل دقيقة) أو عملية `php artisan schedule:work` دايمة.
 Schedule::command('notifications:send-emails')->everyMinute()->withoutOverlapping();
+
+// فحص صحة مزوّدي الـ SFU (Failover — الخطوة 6). الأمر نفسه بيعيد الفحص كل SFU_PROBE_INTERVAL ثانية جوه الدقيقة،
+// و withoutOverlapping بيمنع تداخل دقيقتين. من غير الـ scheduler الـ failover لسه بيشتغل من فشل الطلبات الفعلية بس.
+Schedule::command('sfu:health')->everyMinute()->withoutOverlapping(2);
 Schedule::command('projects:send-deadline-reminders')->hourly()->withoutOverlapping();
 
 // Keep the disposable-email blocklist fresh (new temp-mail domains appear all the time).

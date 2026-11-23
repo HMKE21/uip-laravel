@@ -17,11 +17,19 @@ use Illuminate\Support\Facades\Cache;
  *   5) غير كده → mesh (أرخص وأقل تأخير في الغرف الصغيرة)
  * Hysteresis: بعد ما نتحول SFU منرجعش mesh إلا لما العدد ينزل لـ 2 أو أقل، وبعد min_dwell_seconds على الأقل.
  * decide() دالة نقية (من غير cache/DB) عشان تتختبر لوحدها.
+ *
+ * الخطوة 6 — الـ failover بين المزوّدين (Cloudflare <-> mediasoup): كل غرفة متثبّتة على مزوّد واحد (state.provider) طول ما هي شغّالة.
+ *   - لو المزوّد وقع (SfuHealth: الدايرة اتفتحت) أو فشل عند عملاء الغرفة → الغرفة بتتحول للمزوّد التاني: الـ registry بيتمسح
+ *     (الجلسات القديمة ماتنفعش على المزوّد الجديد)، epoch بيزيد، وبيتبث MeetingTransportChanged فيه provider الجديد.
+ *   - لو المزوّدين الاتنين واقعين → mesh زي الأول (sfu_unavailable / sfu_blocked).
+ *   - الغرفة اللي اتحوّلت بتفضل على المزوّد الجديد (grace دقيقتين حتى لو فاضية) — مافيش رجوع تلقائي لنص اجتماع (ده يسبّب split)؛
+ *     الاجتماعات الجديدة بس هي اللي بترجع للمفضّل لما يتعافى.
  */
 class MeetingTransportService
 {
     private const TTL = 21600; // 6 ساعات
     private const FRESH_SECONDS = 30; // تقرير أقدم من كده مايتحسبش
+    private const PROVIDER_GRACE = 120; // بعد تعيين/تحويل المزوّد، الغرفة تعتبر "شغّالة" (ثابتة) المدة دي حتى لو الـ registry فاضي
 
     public function __construct(private SfuManager $sfu, private MeetingPolicyService $policy)
     {
@@ -86,7 +94,7 @@ class MeetingTransportService
     {
         $s = Cache::get($this->key($meeting, 'state'));
 
-        return is_array($s) ? $s : ['mode' => 'mesh', 'epoch' => 0, 'reason' => 'init', 'changed_at' => 0, 'blocked_until' => 0, 'reports' => []];
+        return is_array($s) ? $s : ['mode' => 'mesh', 'epoch' => 0, 'reason' => 'init', 'changed_at' => 0, 'blocked_until' => 0, 'reports' => [], 'provider' => null, 'provider_at' => 0, 'bad_providers' => []];
     }
 
     private function save(Meeting $meeting, array $state): void
@@ -99,12 +107,122 @@ class MeetingTransportService
         return 'meeting_sfu:' . $meeting->id . ':' . $part;
     }
 
-    /** @return array{mode:string,epoch:int,reason:string} */
+    /** @return array{mode:string,epoch:int,reason:string,provider:?string} */
     public function current(Meeting $meeting): array
     {
         $s = $this->state($meeting);
+        $p = $s['provider'] ?? null;
 
-        return ['mode' => (string) $s['mode'], 'epoch' => (int) $s['epoch'], 'reason' => (string) $s['reason']];
+        return [
+            'mode'     => (string) $s['mode'],
+            'epoch'    => (int) $s['epoch'],
+            'reason'   => (string) $s['reason'],
+            // العميل بيعرف المزوّد الحالي من كل report حتى لو فاته حدث المحوّل
+            'provider' => in_array($p, SfuHealth::PROVIDERS, true) ? $p : null,
+        ];
+    }
+
+    // ------------------------------------------------------------------ provider (الخطوة 6: failover)
+
+    /**
+     * المزوّد اللي الغرفة دي عليه دلوقتي (بيعيّنه لو لسه، ولو الحالي وقع بيحوّل الغرفة للتاني ويبثّ الحدث).
+     * المسار السريع (من غير تغيير) قراءة cache بس؛ الـ lock بيتاخد بس لو في تغيير فعلًا.
+     * @return 'cloudflare'|'selfhosted'
+     */
+    public function providerFor(Meeting $meeting): string
+    {
+        $now = time();
+        $peek = $this->state($meeting);
+        $r = $this->settle($meeting, $peek, $now);
+        if (!$r['dirty']) {
+            return $r['provider'];
+        }
+
+        $result = $r['provider'];
+        $changed = null;
+        $this->locked($meeting, function () use ($meeting, $now, &$result, &$changed) {
+            $s = $this->state($meeting);
+            $r = $this->settle($meeting, $s, $now);
+            $result = $r['provider'];
+            if ($r['failover']) {
+                $changed = $this->applyFailover($meeting, $s, $now);
+            }
+            $this->save($meeting, $s);
+        });
+        $this->announce($meeting, $changed);
+
+        return $result;
+    }
+
+    /** المزوّدين اللي فشلوا عند عملاء الغرفة دي ولسه في فترة الحظر. @return string[] */
+    private function badProviders(array $s, int $now): array
+    {
+        $bad = [];
+        foreach ((array) ($s['bad_providers'] ?? []) as $p => $until) {
+            if ((int) $until > $now) {
+                $bad[] = (string) $p;
+            }
+        }
+
+        return $bad;
+    }
+
+    /**
+     * يحدد مزوّد الغرفة ويكتبه في $s (من غير أي side effect تاني).
+     * @param array<string,mixed> $s
+     * @return array{provider:string,dirty:bool,failover:bool} failover = تحويل فعلي لغرفة شغّالة (محتاج applyFailover)
+     */
+    private function settle(Meeting $meeting, array &$s, int $now): array
+    {
+        $cur = in_array($s['provider'] ?? null, SfuHealth::PROVIDERS, true) ? $s['provider'] : null;
+        $active = $this->registry($meeting) !== [] || ($now - (int) ($s['provider_at'] ?? 0)) < self::PROVIDER_GRACE;
+        $pick = $this->sfu->pick($active ? $cur : null, $this->badProviders($s, $now));
+        $dirty = $pick !== $cur;
+        if ($dirty) {
+            $s['provider'] = $pick;
+            $s['provider_at'] = $now;
+        }
+
+        return ['provider' => $pick, 'dirty' => $dirty, 'failover' => $dirty && $active && $cur !== null];
+    }
+
+    /**
+     * الغرفة اتحوّلت لمزوّد تاني: الجلسات/الترَكات القديمة تخص المزوّد القديم فنمسحها (كل عميل هيسجّل جلسة جديدة)،
+     * ونصفّر أعلام فشل العملاء. لو الغرفة SFU بنزوّد epoch عشان العملاء يعيدوا الاتصال.
+     * @param array<string,mixed> $s
+     * @return array{mode:string,epoch:int,reason:string,provider:?string}|null الحدث اللي لازم يتبث (أو null)
+     */
+    private function applyFailover(Meeting $meeting, array &$s, int $now): ?array
+    {
+        Cache::forget($this->key($meeting, 'registry'));
+        foreach ((array) ($s['reports'] ?? []) as $k => $_) {
+            $s['reports'][$k]['sfu_failed'] = false;
+        }
+        $s['failovers'] = (int) ($s['failovers'] ?? 0) + 1;
+        $s['failover_at'] = $now;
+        \Illuminate\Support\Facades\Log::warning('Meetings: SFU failover', ['meeting' => $meeting->id, 'to' => $s['provider'] ?? null, 'mode' => $s['mode'] ?? null]);
+
+        if (($s['mode'] ?? 'mesh') !== 'sfu') {
+            return null; // الغرفة mesh: مفيش عملاء على المزوّد، التحويل صامت
+        }
+        $s['epoch'] = (int) $s['epoch'] + 1;
+        $s['changed_at'] = $now;
+        $s['reason'] = 'sfu_failover';
+
+        return ['mode' => 'sfu', 'epoch' => (int) $s['epoch'], 'reason' => 'sfu_failover', 'provider' => $s['provider'] ?? null];
+    }
+
+    /** @param array{mode:string,epoch:int,reason:string,provider:?string}|null $changed */
+    private function announce(Meeting $meeting, ?array $changed): void
+    {
+        if (!$changed) {
+            return;
+        }
+        try {
+            broadcast(new MeetingTransportChanged($meeting->uuid, $changed['mode'], $changed['epoch'], $changed['reason'], $changed['provider'] ?? null));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Meetings: transport broadcast failed', ['error' => $e->getMessage()]);
+        }
     }
 
     /**
@@ -131,7 +249,7 @@ class MeetingTransportService
         return $this->evaluate($meeting, $presentCount, false);
     }
 
-    /** يقيّم ويحدّث الحالة ويبثّ حدث لو الوضع اتغيّر. */
+    /** يقيّم ويحدّث الحالة ويبثّ حدث لو الوضع (أو المزوّد) اتغيّر. */
     public function evaluate(Meeting $meeting, int $presentCount, bool $force = true): array
     {
         if (!$force && !Cache::add($this->key($meeting, 'eval'), 1, 3)) {
@@ -142,8 +260,16 @@ class MeetingTransportService
         $this->locked($meeting, function () use ($meeting, $presentCount, &$changed) {
             $s = $this->state($meeting);
             $now = time();
-            $fresh = array_filter((array) $s['reports'], fn ($r) => ($now - (int) ($r['at'] ?? 0)) <= self::FRESH_SECONDS);
-            $s['reports'] = $fresh; // نمسح القديم
+            $cfg = MeetingAdminSettings::sfu();
+            $s['reports'] = array_filter((array) $s['reports'], fn ($r) => ($now - (int) ($r['at'] ?? 0)) <= self::FRESH_SECONDS); // نمسح القديم
+
+            // 1) مزوّد الغرفة: لو اللي عليه وقع (الدايرة اتفتحت) نحوّل للتاني قبل ما نحسب أي حاجة.
+            $r = $this->settle($meeting, $s, $now);
+            if ($r['failover']) {
+                $changed = $this->applyFailover($meeting, $s, $now) ?? $changed;
+            }
+
+            $fresh = (array) $s['reports']; // بعد applyFailover (أعلام الفشل اتصفّرت لو حصل تحويل)
             $n = max(1, count($fresh));
 
             $maxMesh = max(2, $this->policy->maxMeshParticipants());
@@ -154,19 +280,31 @@ class MeetingTransportService
             $sfuOk = count(array_filter($probed, fn ($r) => $r['sfu_ok'] === true));
             $sfuSampleOk = $probed ? ($sfuOk / count($probed)) >= 0.6 : true;
 
-            // فشل SFU: غرفة صغيرة (mesh ينفع) → فشل واحد يكفي. غرفة كبيرة → لازم ≥30% (وإلا العميل الواحد يعيد المحاولة بس).
+            // فشل SFU عند العملاء: غرفة صغيرة (mesh ينفع) → فشل واحد يكفي. غرفة كبيرة → لازم ≥30% (وإلا العميل الواحد يعيد المحاولة بس).
             $blockNow = $presentCount <= $maxMesh ? $failed >= 1 : ($failed / $n) >= 0.3;
             if ($blockNow) {
-                $s['blocked_until'] = $now + MeetingAdminSettings::sfu()['block_seconds'];
+                // 2) فشل على مستوى الغرفة (مش عالمي: عميل واحد شبكته وحشة مايوقّعش المزوّد على الكل). نجرّب المزوّد التاني
+                //    مرة واحدة؛ لو هو كمان فشل (أو مش متاح / failover مقفول) → نرجع mesh زي الأول.
+                $cur = (string) ($s['provider'] ?? $this->sfu->pick(null));
+                $s['bad_providers'][$cur] = $now + $cfg['block_seconds'];
+                $next = $this->sfu->pick($cur, $this->badProviders($s, $now));
+                if ($next !== $cur && $this->sfu->usable($next)) {
+                    $s['provider'] = $next;
+                    $s['provider_at'] = $now;
+                    $changed = $this->applyFailover($meeting, $s, $now) ?? $changed;
+                    $blockNow = false;
+                } else {
+                    $s['blocked_until'] = $now + $cfg['block_seconds'];
+                }
             }
 
-            $cfg = MeetingAdminSettings::sfu();
+            $provider = (string) ($s['provider'] ?? $this->sfu->pick(null));
             $d = self::decide([
                 'current'          => (string) $s['mode'],
                 'changed_at'       => (int) $s['changed_at'],
                 'now'              => $now,
                 'count'            => $presentCount,
-                'sfu_available'    => $this->sfu->enabled(),
+                'sfu_available'    => $this->sfu->usable($provider),
                 'blocked'          => $now < (int) $s['blocked_until'],
                 'force'            => $cfg['mode'],
                 'min_participants' => $cfg['min_participants'],
@@ -181,18 +319,12 @@ class MeetingTransportService
                 $s['epoch'] = (int) $s['epoch'] + 1;
                 $s['changed_at'] = $now;
                 $s['reason'] = $d['reason'];
-                $changed = ['mode' => $s['mode'], 'epoch' => $s['epoch'], 'reason' => $s['reason']];
+                $changed = ['mode' => $s['mode'], 'epoch' => $s['epoch'], 'reason' => $s['reason'], 'provider' => $provider];
             }
             $this->save($meeting, $s);
         });
 
-        if ($changed) {
-            try {
-                broadcast(new MeetingTransportChanged($meeting->uuid, $changed['mode'], $changed['epoch'], $changed['reason']));
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning('Meetings: transport broadcast failed', ['error' => $e->getMessage()]);
-            }
-        }
+        $this->announce($meeting, $changed);
 
         return $this->current($meeting);
     }
