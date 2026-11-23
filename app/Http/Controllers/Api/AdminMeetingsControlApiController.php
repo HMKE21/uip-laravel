@@ -96,7 +96,7 @@ class AdminMeetingsControlApiController extends Controller
         if ($cfg['provider'] === 'selfhosted') {
             $own = app(\App\Services\SelfHostedSfuService::class);
             if (!$own->configured()) {
-                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials', 'provider' => $cfg['provider']], 'Self-hosted SFU URL / secret are not set (SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET).');
+                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials', 'provider' => $cfg['provider']], 'Self-hosted SFU URL / secret are not set (set them in the panel or SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET in .env).');
             }
             if (!$cfg['enabled']) {
                 return $this->apiSuccess(['ok' => false, 'code' => 'disabled', 'provider' => $cfg['provider']], 'SFU is switched off. Turn it on and save first.');

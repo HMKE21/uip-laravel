@@ -97,6 +97,9 @@ class MeetingAdminSettings
             'sfu_min_dwell_seconds'       => ['group' => 'video', 'type' => 'int', 'default' => (int) config('webrtc.sfu.min_dwell_seconds', 30), 'min' => 0, 'max' => 600],
             'sfu_app_id'                  => ['group' => 'video', 'type' => 'string', 'default' => (string) config('webrtc.sfu.app_id', ''), 'max_length' => 64],
             'sfu_app_secret'              => ['group' => 'video', 'type' => 'secret', 'default' => (string) config('webrtc.sfu.app_secret', ''), 'max_length' => 200],
+            // سيرفرنا (mediasoup / uipe-sfu): العنوان والسر من اللوحة (بيغلبوا SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET في .env). فاضي = ارجع للـ .env.
+            'sfu_selfhosted_url'          => ['group' => 'video', 'type' => 'string', 'default' => rtrim((string) config('webrtc.selfhosted.url', ''), '/'), 'max_length' => 200, 'pattern' => '#^https?://[A-Za-z0-9.\-\[\]:]+(/[^\s]*)?$#', 'rtrim_slash' => true],
+            'sfu_selfhosted_secret'       => ['group' => 'video', 'type' => 'secret', 'default' => (string) config('webrtc.selfhosted.secret', ''), 'max_length' => 200],
         ];
     }
 
@@ -209,13 +212,17 @@ class MeetingAdminSettings
 
     /**
      * إعدادات الـ SFU الفعلية (اللوحة تغلب الـ env). app_id الفاضي = ارجع للـ env.
-     * @return array{enabled:bool,provider:string,failover:bool,app_id:string,app_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
+     * @return array{enabled:bool,provider:string,failover:bool,app_id:string,app_secret:string,selfhosted_url:string,selfhosted_secret:string,mode:string,min_participants:int,max_video_subscriptions:int,block_seconds:int,min_dwell_seconds:int}
      */
     public static function sfu(): array
     {
         $appId = trim((string) self::get('sfu_app_id'));
         if ($appId === '') {
             $appId = (string) config('webrtc.sfu.app_id', '');
+        }
+        $ownUrl = rtrim(trim((string) self::get('sfu_selfhosted_url')), '/');
+        if ($ownUrl === '') {
+            $ownUrl = rtrim((string) config('webrtc.selfhosted.url', ''), '/');
         }
 
         return [
@@ -224,6 +231,8 @@ class MeetingAdminSettings
             'failover'                => (bool) self::get('sfu_failover'),
             'app_id'                  => $appId,
             'app_secret'              => (string) self::get('sfu_app_secret'),
+            'selfhosted_url'          => $ownUrl,
+            'selfhosted_secret'       => (string) self::get('sfu_selfhosted_secret'),
             'mode'                    => (string) self::get('sfu_mode'),
             'min_participants'        => (int) self::get('sfu_min_participants'),
             'max_video_subscriptions' => (int) self::get('sfu_max_video_subscriptions'),
@@ -407,8 +416,14 @@ class MeetingAdminSettings
                 return [true, $n, ''];
             case 'string':
                 $s = trim((string) $raw);
+                if (!empty($def['rtrim_slash'])) {
+                    $s = rtrim($s, '/');
+                }
                 if (isset($def['max_length']) && mb_strlen($s) > $def['max_length']) {
                     return [false, null, 'Maximum length is ' . $def['max_length'] . '.'];
+                }
+                if (isset($def['pattern']) && $s !== '' && !preg_match($def['pattern'], $s)) {
+                    return [false, null, 'Must be a valid http(s) address, e.g. https://sfu.example.com or http://1.2.3.4:4443.'];
                 }
 
                 return [true, $s, ''];
@@ -421,8 +436,8 @@ class MeetingAdminSettings
                 if ($s === '') {
                     return [false, null, 'Secret cannot be empty (use Reset to go back to the .env value).'];
                 }
-                if (!preg_match('/^[A-Za-z0-9._\-]{16,200}$/', $s)) {
-                    return [false, null, 'Secret must be 16–200 letters/digits with no spaces.'];
+                if (!preg_match('/^[A-Za-z0-9._\-+\/=~]{16,200}$/', $s)) {
+                    return [false, null, 'Secret must be 16–200 characters (letters, digits and . _ - + / = ~) with no spaces.'];
                 }
 
                 return [true, $s, ''];

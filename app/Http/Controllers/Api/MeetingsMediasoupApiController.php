@@ -277,6 +277,27 @@ class MeetingsMediasoupApiController extends Controller
         return $this->upstream($this->sfu->resumeConsumer(SelfHostedSfuService::roomId($meeting->uuid), $sessionId, $consumerId), 'resume');
     }
 
+    /** POST ms/sessions/{sessionId}/consumers/{consumerId}/close — العميل وقف سحب ترَك (بيحرّر موارد السيرفر). 404 من السيرفر = اتقفل لوحده = نجاح. */
+    public function closeConsumer(Request $request, string $uuid, string $sessionId, string $consumerId)
+    {
+        $ctx = $this->context($request, $uuid);
+        if ($ctx instanceof JsonResponse) {
+            return $ctx;
+        }
+        [$meeting, $actor] = $ctx;
+
+        if (!$this->owned($meeting, $actor, $sessionId) || preg_match(self::UUID_RE, $consumerId) !== 1) {
+            return $this->apiError('Unknown SFU session.', null, 403);
+        }
+
+        $r = $this->sfu->closeConsumer(SelfHostedSfuService::roomId($meeting->uuid), $sessionId, $consumerId);
+        if ($r['ok'] || $r['status'] === 404) {
+            return $this->apiSuccess(null, 'OK');
+        }
+
+        return $this->upstream($r, 'close-consumer');
+    }
+
     /** POST ms/sessions/{sessionId}/producers/{producerId}/close — إيقاف مايك/كاميرا/مشاركة شاشة. */
     public function closeProducer(Request $request, string $uuid, string $sessionId, string $producerId)
     {

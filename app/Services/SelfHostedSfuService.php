@@ -136,6 +136,11 @@ class SelfHostedSfuService implements SfuProvider
         return $this->call($this->peerPath($roomId, $peerId) . '/consumers/' . rawurlencode($consumerId) . '/resume');
     }
 
+    public function closeConsumer(string $roomId, string $peerId, string $consumerId): array
+    {
+        return $this->call($this->peerPath($roomId, $peerId) . '/consumers/' . rawurlencode($consumerId) . '/close');
+    }
+
     public function closeProducer(string $roomId, string $peerId, string $producerId): array
     {
         return $this->call($this->peerPath($roomId, $peerId) . '/producers/' . rawurlencode($producerId) . '/close');
@@ -156,12 +161,13 @@ class SelfHostedSfuService implements SfuProvider
 
     private function baseUrl(): string
     {
-        return rtrim((string) config('webrtc.selfhosted.url', ''), '/');
+        // اللوحة (Admin → Meetings → سيرفرات الفيديو) بتغلب الـ .env؛ فاضي = ارجع لـ SFU_SELFHOSTED_URL
+        return rtrim((string) (MeetingAdminSettings::sfu()['selfhosted_url'] ?? config('webrtc.selfhosted.url', '')), '/');
     }
 
     private function secret(): string
     {
-        return (string) config('webrtc.selfhosted.secret', '');
+        return (string) (MeetingAdminSettings::sfu()['selfhosted_secret'] ?? config('webrtc.selfhosted.secret', ''));
     }
 
     /**

@@ -901,6 +901,7 @@ Route::prefix('v1')->group(function () {
             Route::post('sessions/{sessionId}/produce', [$c, 'produce']);
             Route::post('sessions/{sessionId}/consume', [$c, 'consume']);
             Route::post('sessions/{sessionId}/consumers/{consumerId}/resume', [$c, 'resumeConsumer']);
+            Route::post('sessions/{sessionId}/consumers/{consumerId}/close', [$c, 'closeConsumer']);
             Route::post('sessions/{sessionId}/producers/{producerId}/close', [$c, 'closeProducer']);
         });
     });
