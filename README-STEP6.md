@@ -16,3 +16,4 @@
 - Failover لـ Cloudflare محتاج `sfu_enabled` + CF App ID/Secret متظبطين.
 - ملاحظة: عميل الاجتماع نفسه (mediasoup-client) لسه مش مكتوب؛ لما يتكتب لازم يسمع `provider` في الحدث ويفتح session جديدة لما `reason=sfu_failover`.
 - اتضاف label الفرونت (`src/components/admin/meetingsControl/shared.jsx`) لـ `sfu_provider` و`sfu_failover`.
+- إصلاح: زرار "اختبار الاتصال" كان بيكتب "الاتصال بـ Cloudflare شغّال" حتى لو المفضّل mediasoup (النص كان ثابت في SettingsTab.jsx). دلوقتي الباك إند بيرجّع `provider` والفرونت بيعرض رسالة سيرفرنا. ملف: src/components/admin/meetingsControl/SettingsTab.jsx.

@@ -96,10 +96,10 @@ class AdminMeetingsControlApiController extends Controller
         if ($cfg['provider'] === 'selfhosted') {
             $own = app(\App\Services\SelfHostedSfuService::class);
             if (!$own->configured()) {
-                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'Self-hosted SFU URL / secret are not set (SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET).');
+                return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials', 'provider' => $cfg['provider']], 'Self-hosted SFU URL / secret are not set (SFU_SELFHOSTED_URL / SFU_SELFHOSTED_SECRET).');
             }
             if (!$cfg['enabled']) {
-                return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
+                return $this->apiSuccess(['ok' => false, 'code' => 'disabled', 'provider' => $cfg['provider']], 'SFU is switched off. Turn it on and save first.');
             }
             $r = $own->test();
             $code = $r['ok'] ? 'ok' : match (true) {
@@ -110,15 +110,15 @@ class AdminMeetingsControlApiController extends Controller
             $this->log($request, 'sfu_tested', null, null, ['result' => $code, 'provider' => 'selfhosted'], 'MeetingSettings');
             $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
 
-            return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to the self-hosted SFU.' : 'Could not connect to the self-hosted SFU.');
+            return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'provider' => $cfg['provider'], 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to the self-hosted SFU.' : 'Could not connect to the self-hosted SFU.');
         }
 
         $svc = app(\App\Services\CloudflareSfuService::class);
         if ($cfg['app_id'] === '' || $cfg['app_secret'] === '') {
-            return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials'], 'App ID / secret are not set.');
+            return $this->apiSuccess(['ok' => false, 'code' => 'missing_credentials', 'provider' => $cfg['provider']], 'App ID / secret are not set.');
         }
         if (!$cfg['enabled']) {
-            return $this->apiSuccess(['ok' => false, 'code' => 'disabled'], 'SFU is switched off. Turn it on and save first.');
+            return $this->apiSuccess(['ok' => false, 'code' => 'disabled', 'provider' => $cfg['provider']], 'SFU is switched off. Turn it on and save first.');
         }
 
         $r = $svc->newSession(true); // force: اختبار الأدمن يتخطى الدايرة المفتوحة
@@ -133,7 +133,7 @@ class AdminMeetingsControlApiController extends Controller
         // تفاصيل الخطأ اللي رجعت من Cloudflare (مفيهاش السر) عشان الأدمن يعرف السبب الحقيقي.
         $detail = $r['ok'] ? '' : mb_substr((string) ($r['data']['errorDescription'] ?? $r['data']['error'] ?? ''), 0, 200);
 
-        return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
+        return $this->apiSuccess(['ok' => $r['ok'], 'code' => $code, 'provider' => $cfg['provider'], 'status' => $r['status'], 'detail' => $detail], $r['ok'] ? 'Connected to Cloudflare SFU.' : 'Could not connect to Cloudflare SFU.');
     }
 
     /**
