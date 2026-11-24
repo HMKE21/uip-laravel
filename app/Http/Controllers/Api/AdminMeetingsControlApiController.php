@@ -150,6 +150,7 @@ class AdminMeetingsControlApiController extends Controller
 
         return $this->apiSuccess([
             'preferred'     => $mgr->preferred(),
+            'selfhosted_percent' => $mgr->selfHostedPercent(),
             'failover'      => $mgr->failoverEnabled(),
             'new_rooms_use' => $mgr->pick(),
             'providers'     => $providers,

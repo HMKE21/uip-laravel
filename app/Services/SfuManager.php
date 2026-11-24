@@ -77,18 +77,47 @@ class SfuManager
         return $current ?? $preferred;
     }
 
+    /** نسبة الاجتماعات الجديدة اللي تبدأ على سيرفرنا (0–100) من اللوحة. بتأثّر بس لما المفضّل = selfhosted. */
+    public function selfHostedPercent(): int
+    {
+        return MeetingAdminSettings::sfu()['selfhosted_percent'];
+    }
+
     /**
-     * @param string|null $current  المزوّد اللي الغرفة عليه دلوقتي (null = غرفة جديدة)
-     * @param string[]    $exclude  مزوّدين نتجنبهم (فشلوا عند عملاء الغرفة دي)
+     * الإطلاق التدريجي (canary): دالة نقية. لما المفضّل selfhosted ونسبته أقل من 100، الاجتماع (بالـ seed بتاعه، مثلًا id) بيتوزّع
+     * ثابتًا على سيرفرنا أو Cloudflare: نفس الاجتماع ياخد نفس الجهة طول ما النسبة ثابتة، ورفع النسبة بيضيف اجتماعات من غير ما يشيل اللي على سيرفرنا.
+     * ده بيحدد "المفضّل الفعلي" للغرفة الجديدة بس؛ choose() لسه بيعمل failover لو الجهة دي واقعة.
      */
-    public function pick(?string $current = null, array $exclude = []): string
+    public static function canaryPreferred(string $preferred, int $percent, int|string $seed): string
+    {
+        if ($preferred !== 'selfhosted' || $percent >= 100) {
+            return $preferred;
+        }
+        if ($percent <= 0) {
+            return 'cloudflare';
+        }
+
+        return (crc32('sfu-canary:' . $seed) % 100) < $percent ? 'selfhosted' : 'cloudflare';
+    }
+
+    /**
+     * @param string|null     $current  المزوّد اللي الغرفة عليه دلوقتي (null = غرفة جديدة)
+     * @param string[]        $exclude  مزوّدين نتجنبهم (فشلوا عند عملاء الغرفة دي)
+     * @param int|string|null $seed     هوية الاجتماع (للإطلاق التدريجي لغرفة جديدة). null = من غير توزيع (المفضّل زي ما هو).
+     */
+    public function pick(?string $current = null, array $exclude = [], int|string|null $seed = null): string
     {
         $usable = [];
         foreach (SfuHealth::PROVIDERS as $p) {
             $usable[$p] = !in_array($p, $exclude, true) && $this->usable($p);
         }
 
-        return self::choose($this->preferred(), $current, $usable, $this->failoverEnabled());
+        $preferred = $this->preferred();
+        if ($current === null && $seed !== null) {
+            $preferred = self::canaryPreferred($preferred, $this->selfHostedPercent(), $seed);
+        }
+
+        return self::choose($preferred, $current, $usable, $this->failoverEnabled());
     }
 
     // ---- توافق مع الخطوة 5: القرار العام (لغرفة جديدة)

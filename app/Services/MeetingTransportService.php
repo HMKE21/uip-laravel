@@ -176,7 +176,7 @@ class MeetingTransportService
     {
         $cur = in_array($s['provider'] ?? null, SfuHealth::PROVIDERS, true) ? $s['provider'] : null;
         $active = $this->registry($meeting) !== [] || ($now - (int) ($s['provider_at'] ?? 0)) < self::PROVIDER_GRACE;
-        $pick = $this->sfu->pick($active ? $cur : null, $this->badProviders($s, $now));
+        $pick = $this->sfu->pick($active ? $cur : null, $this->badProviders($s, $now), $meeting->id);
         $dirty = $pick !== $cur;
         if ($dirty) {
             $s['provider'] = $pick;
