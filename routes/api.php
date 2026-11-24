@@ -1111,6 +1111,18 @@ Route::prefix('v1')->group(function () {
             Route::get('sfu/health', [$c, 'sfuHealth']);
             Route::post('sfu/health/reset', [$c, 'resetSfuHealth'])->middleware('throttle:admin-control-write');
 
+            // UIPE Realtime Apps: إصدار App ID / App Secret لتطبيقات خارجية (أدمن بس). راجع AdminSfuAppsApiController.
+            $a = \App\Http\Controllers\Api\AdminSfuAppsApiController::class;
+            Route::prefix('sfu-apps')->group(function () use ($a) {
+                Route::get('/', [$a, 'index']);
+                Route::post('/', [$a, 'store'])->middleware('throttle:admin-control-write');
+                Route::get('{id}', [$a, 'show'])->where('id', '[0-9a-f]{32}');
+                Route::patch('{id}', [$a, 'update'])->middleware('throttle:admin-control-write')->where('id', '[0-9a-f]{32}');
+                Route::post('{id}/rotate-secret', [$a, 'rotateSecret'])->middleware('throttle:admin-control-write')->where('id', '[0-9a-f]{32}');
+                Route::post('{id}/close-rooms', [$a, 'closeRooms'])->middleware('throttle:admin-control-write')->where('id', '[0-9a-f]{32}');
+                Route::delete('{id}', [$a, 'destroy'])->middleware('throttle:admin-control-write')->where('id', '[0-9a-f]{32}');
+            });
+
             Route::get('blocked-users', [$c, 'blockedUsers']);
             Route::post('blocked-users', [$c, 'blockUser'])->middleware('throttle:admin-control-write');
             Route::delete('blocked-users/{id}', [$c, 'unblockUser'])->where('id', '[0-9]+');

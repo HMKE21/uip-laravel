@@ -152,6 +152,36 @@ class SelfHostedSfuService implements SfuProvider
         return $this->call($this->peerPath($roomId, $peerId) . '/leave', [], 3, $force);
     }
 
+
+    /**
+     * طلب إدارة (لوحة الأدمن → UIPE Realtime Apps). بيستخدم نفس العنوان والسر الداخلي، لكن مابيدخلش في الـ circuit breaker
+     * (فشل إدارة تطبيق مايخليش الاجتماعات تتحول لمزوّد تاني).
+     *
+     * @param array<string,mixed> $body
+     * @return array{ok:bool,status:int,data:array<string,mixed>}
+     */
+    public function adminRequest(string $method, string $path, array $body = []): array
+    {
+        if (!$this->configured()) {
+            return ['ok' => false, 'status' => 503, 'data' => ['error' => 'sfu_not_configured']];
+        }
+        try {
+            $req = Http::withHeaders(['x-internal-secret' => $this->secret()])->acceptJson()->timeout(8);
+            $url = $this->baseUrl() . '/' . ltrim($path, '/');
+            $method = strtoupper($method);
+            $res = $method === 'GET'
+                ? $req->get($url, $body)
+                : $req->withBody($body === [] ? '{}' : json_encode($body), 'application/json')->send($method, $url);
+        } catch (ConnectionException $e) {
+            return ['ok' => false, 'status' => 504, 'data' => ['error' => 'sfu_unreachable']];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'status' => 502, 'data' => ['error' => 'sfu_error']];
+        }
+        $data = $res->json();
+
+        return ['ok' => $res->successful(), 'status' => $res->status(), 'data' => is_array($data) ? $data : []];
+    }
+
     // ------------------------------------------------------------------ internals
 
     private function peerPath(string $roomId, string $peerId): string
