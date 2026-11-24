@@ -28,7 +28,10 @@ use Illuminate\Http\Request;
  *  POST   /{id}/videos/{vid}/progress               — body: ranges [[s,e],..], position, duration?, started?  [الطالب]
  *  GET    /{id}/videos/{vid}/viewers                — مين شاف الفيديو وقد إيه  [مديرو المادة]
  *  GET    /{id}/videos/report                       — تقرير كل الطلاب × كل الفيديوهات  [مديرو المادة]
+ *  POST   /{id}/videos/{vid}/cover                  — تغيير/تسجيل غلاف الفيديو (+ المدة والأبعاد)  [مديرو المادة]
+ *  POST   /{id}/videos/reorder                      — حفظ ترتيب الفيديوهات  body: ids[]  [مديرو المادة]
  *  GET    /courses/videos/stream/{id}?u=&s=&signature=  — بث الملف (Range) — بره uip.auth، التوقيع هو الصلاحية
+ *  GET    /courses/videos/thumb/{id}?s=&v=&signature=   — صورة الغلاف — نفس فكرة البث
  */
 class CourseVideosApiController extends Controller
 {
@@ -101,13 +104,25 @@ class CourseVideosApiController extends Controller
     public function store(Request $request, $id)
     {
         return $this->withScope($request, function ($s, $l) use ($request, $id) {
-            return $this->respond($this->videos->create($s, $id, $request->only(['upload_id', 'title', 'description', 'password', 'status']), $l));
+            return $this->respond($this->videos->create($s, $id, $request->only(['upload_id', 'title', 'description', 'password', 'status', 'thumbnail', 'duration_seconds', 'width', 'height']), $l));
         });
     }
 
     public function update(Request $request, $id, $vid)
     {
         return $this->withScope($request, fn ($s, $l) => $this->respond($this->videos->update($s, $id, $vid, $request->only(['title', 'description', 'status', 'sort_order', 'password', 'remove_password']), $l)));
+    }
+
+    /** POST /{id}/videos/{vid}/cover — body: thumbnail (data URL jpeg/png/webp), duration_seconds?, width?, height?  [مديرو المادة] */
+    public function cover(Request $request, $id, $vid)
+    {
+        return $this->withScope($request, fn ($s, $l) => $this->respond($this->videos->setCover($s, $id, $vid, $request->only(['thumbnail', 'duration_seconds', 'width', 'height']), $l)));
+    }
+
+    /** POST /{id}/videos/reorder — body: ids [..] بالترتيب الجديد  [مديرو المادة] */
+    public function reorder(Request $request, $id)
+    {
+        return $this->withScope($request, fn ($s, $l) => $this->respond($this->videos->reorder($s, $id, (array) $request->input('ids', []), $l)));
     }
 
     public function destroy(Request $request, $id, $vid)
@@ -208,6 +223,25 @@ class CourseVideosApiController extends Controller
             'Content-Disposition'    => "inline; filename*=UTF-8''" . rawurlencode('video.' . $ext),
             'X-Content-Type-Options' => 'nosniff',
             'Cache-Control'          => 'private, max-age=0, must-revalidate',
+        ]);
+    }
+
+    /** GET /courses/videos/thumb/{id}?s=&v=&expires=&signature= — بعد signed:relative. الرابط ثابت طول الساعة فالكاش بيشتغل. */
+    public function thumb(Request $request, $id)
+    {
+        $rel = $this->videos->coverFile((int) $id, max(0, (int) $request->query('s')));
+        if (!$rel) {
+            return $this->apiError('Cover not found.', null, 404);
+        }
+        $path = FileUploadService::absolutePath($rel);
+        if (!is_file($path)) {
+            return $this->apiError('Cover not found.', null, 404);
+        }
+        $mime = ['jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp'][strtolower(pathinfo($path, PATHINFO_EXTENSION))] ?? 'image/jpeg';
+        return response()->file($path, [
+            'Content-Type'           => $mime,
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'private, max-age=3600',
         ]);
     }
 }

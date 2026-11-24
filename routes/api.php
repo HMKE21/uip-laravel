@@ -1641,6 +1641,8 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/videos/uploads/{uid}/chunk', [CourseVideosApiController::class, 'uploadChunk'])->where(['id' => '[0-9]+', 'uid' => '[a-f0-9]{32}'])->middleware('throttle:1200,1');
         Route::delete('/{id}/videos/uploads/{uid}', [CourseVideosApiController::class, 'uploadCancel'])->where(['id' => '[0-9]+', 'uid' => '[a-f0-9]{32}']);
         Route::post('/{id}/videos', [CourseVideosApiController::class, 'store'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+        Route::post('/{id}/videos/reorder', [CourseVideosApiController::class, 'reorder'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/{id}/videos/{vid}/cover', [CourseVideosApiController::class, 'cover'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:60,1');
         Route::patch('/{id}/videos/{vid}', [CourseVideosApiController::class, 'update'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+']);
         Route::delete('/{id}/videos/{vid}', [CourseVideosApiController::class, 'destroy'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+']);
         Route::post('/{id}/videos/{vid}/play', [CourseVideosApiController::class, 'play'])->where(['id' => '[0-9]+', 'vid' => '[0-9]+'])->middleware('throttle:30,1');
@@ -1811,6 +1813,12 @@ Route::prefix('v1')->group(function () {
         ->where('id', '[0-9]+')
         ->middleware(['signed:relative', 'throttle:1200,1'])
         ->name('course.videos.stream');
+
+    // غلاف فيديو المادة: رابط موقّع نسبي (<img> مابيبعتش Authorization). نفس شروط البث بتتفحص جوه CourseVideoService::coverFile.
+    Route::get('/courses/videos/thumb/{id}', [CourseVideosApiController::class, 'thumb'])
+        ->where('id', '[0-9]+')
+        ->middleware(['signed:relative', 'throttle:1200,1'])
+        ->name('course.videos.thumb');
 
     // Social Posts (منفصل عن University Feed أعلاه) — /api/v1/posts/*. راجع PostsApiController / PostMediaApiController.
     // رابط موقّع نسبي لمرفقات المنشورات: بره uip.auth عمدًا (<video> وpdf.js والتطبيق الأصلي مابيبعتوش Authorization)؛

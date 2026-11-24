@@ -90,7 +90,7 @@ class CourseVideoService
 
     // ---------------------------------------------------------------- presenting
 
-    private function present(object $v, bool $canManage, ?object $mine = null, ?object $agg = null): array
+    private function present(object $v, bool $canManage, ?object $mine = null, ?object $agg = null, int $studentId = 0): array
     {
         $out = [
             'id'               => (int) $v->id,
@@ -100,6 +100,9 @@ class CourseVideoService
             'duration_seconds' => $v->duration_seconds !== null ? (int) $v->duration_seconds : null,
             'file_name'        => $v->file_name,
             'file_size'        => $v->file_size !== null ? (int) $v->file_size : null,
+            'width'            => !empty($v->width) ? (int) $v->width : null,
+            'height'           => !empty($v->height) ? (int) $v->height : null,
+            'thumbnail_url'    => $this->thumbnailUrl($v, $canManage ? 0 : (int) $studentId),
             'has_password'     => !empty($v->password_hash),
             'sort_order'       => (int) $v->sort_order,
             'status'           => $v->status,
@@ -129,6 +132,160 @@ class CourseVideoService
             'first_watched_at' => $r->first_watched_at ? date('c', strtotime($r->first_watched_at)) : null,
             'last_watched_at' => $r->last_watched_at ? date('c', strtotime($r->last_watched_at)) : null,
         ];
+    }
+
+
+    // ------------------------------------------------------------------- cover
+
+    public const MAX_COVER_BYTES = 2097152; // 2MB بعد فك الـ base64
+
+    /**
+     * رابط غلاف موقّع نسبي. الانتهاء بيتقرّب لبداية الساعة فيفضل الرابط ثابت طول الساعة (كاش المتصفح بيشتغل)،
+     * و v = وقت آخر تعديل فيتغيّر الرابط لو الغلاف اتبدّل.
+     */
+    private function thumbnailUrl(object $v, int $studentId): ?string
+    {
+        if (empty($v->thumbnail_path)) {
+            return null;
+        }
+        $ttl = max(3600, (int) config('upload.course_video_url_ttl', 7200));
+        $params = ['id' => (int) $v->id, 's' => $studentId, 'v' => (int) strtotime((string) ($v->updated_at ?? 'now'))] + TenantContext::signedParams();
+        return URL::temporarySignedRoute('course.videos.thumb', now()->startOfHour()->addSeconds($ttl + 3600), $params, absolute: false);
+    }
+
+    /**
+     * يحفظ غلاف جاي من المتصفح كـ data URL (jpeg/png/webp). بنتحقق إنه صورة فعلًا، وبنعيد ترميزه JPEG نضيف
+     * (GD لو متاح) فمفيش محتوى مخفي ولا SVG. بيرجّع المسار النسبي أو null.
+     */
+    private function storeCover(Course $course, ?string $dataUrl): ?string
+    {
+        if (!is_string($dataUrl) || $dataUrl === '' || !preg_match('#^data:image/(jpeg|png|webp);base64,#i', $dataUrl, $m)) {
+            return null;
+        }
+        $raw = base64_decode(substr($dataUrl, strlen($m[0])), true);
+        if ($raw === false || $raw === '' || strlen($raw) > self::MAX_COVER_BYTES) {
+            return null;
+        }
+        $info = @getimagesizefromstring($raw);
+        if (!$info || !in_array($info[2], [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP], true) || $info[0] < 16 || $info[1] < 16 || $info[0] > 6000 || $info[1] > 6000) {
+            return null;
+        }
+
+        $bytes = $raw;
+        $ext = [IMAGETYPE_JPEG => 'jpg', IMAGETYPE_PNG => 'png', IMAGETYPE_WEBP => 'webp'][$info[2]];
+        if (function_exists('imagecreatefromstring') && function_exists('imagejpeg')) {
+            $img = @imagecreatefromstring($raw);
+            if ($img) {
+                $w = imagesx($img);
+                $h = imagesy($img);
+                $max = 960;
+                if ($w > $max) {
+                    $scaled = imagescale($img, $max, (int) max(1, round($h * $max / $w)));
+                    if ($scaled) {
+                        imagedestroy($img);
+                        $img = $scaled;
+                    }
+                }
+                ob_start();
+                imagejpeg($img, null, 82);
+                $out = (string) ob_get_clean();
+                imagedestroy($img);
+                if ($out !== '') {
+                    $bytes = $out;
+                    $ext = 'jpg';
+                }
+            }
+        }
+
+        $rel = 'uploads/course-videos/covers/c' . (int) $course->id . '/' . bin2hex(random_bytes(16)) . '.' . $ext;
+        $abs = FileUploadService::diskDir($rel);
+        $dir = dirname($abs);
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return null;
+        }
+        if (@file_put_contents($abs, $bytes) === false) {
+            return null;
+        }
+        \App\Support\UploadMirror::push($rel, $abs);
+        return $rel;
+    }
+
+    private function dim($v): ?int
+    {
+        return (is_numeric($v) && $v >= 1 && $v <= 16000) ? (int) $v : null;
+    }
+
+    /** غلاف الفيديو (للمدرّس): data URL جديد + (اختياريًا) المدة والأبعاد اللي المتصفح قرأها. */
+    public function setCover(array $scope, $courseId, $vid, array $d, string $l): array
+    {
+        $acc = $this->access($scope, $courseId, $l);
+        if (isset($acc['success'])) {
+            return $acc;
+        }
+        [$course, $canManage] = $acc;
+        if (!$canManage) {
+            return $this->fail($l, 'مش مسموحلك.', 'Not allowed.', 403);
+        }
+        $v = $this->find($course, $vid, true);
+        if (!$v) {
+            return $this->fail($l, 'الفيديو غير موجود.', 'Video not found.', 404);
+        }
+
+        $upd = [];
+        if (!empty($d['thumbnail'])) {
+            $rel = $this->storeCover($course, (string) $d['thumbnail']);
+            if ($rel === null) {
+                return $this->fail($l, 'صورة الغلاف غير صالحة (JPEG/PNG/WebP حتى 2MB).', 'Invalid cover image (JPEG/PNG/WebP up to 2MB).');
+            }
+            $upd['thumbnail_path'] = $rel;
+        }
+        if ($v->duration_seconds === null && isset($d['duration_seconds']) && is_numeric($d['duration_seconds']) && $d['duration_seconds'] >= 1) {
+            $upd['duration_seconds'] = min((int) ceil((float) $d['duration_seconds']), self::MAX_DURATION);
+        }
+        if (empty($v->width) && $this->dim($d['width'] ?? null) && $this->dim($d['height'] ?? null)) {
+            $upd['width'] = $this->dim($d['width']);
+            $upd['height'] = $this->dim($d['height']);
+        }
+        if ($upd) {
+            $upd['updated_at'] = now();
+            DB::table('course_videos')->where('id', $v->id)->update($upd);
+            if (isset($upd['thumbnail_path']) && !empty($v->thumbnail_path)) {
+                try {
+                    $this->uploader->delete((string) $v->thumbnail_path);
+                } catch (\Throwable $e) {
+                }
+            }
+        }
+        return $this->ok($this->present(DB::table('course_videos')->find($v->id), true), $this->ar($l) ? 'تم تحديث الغلاف.' : 'Cover updated.');
+    }
+
+    /** ترتيب الفيديوهات: ids بالترتيب الجديد (اللي مش مذكور بيفضل في آخر القائمة بنفس ترتيبه). */
+    public function reorder(array $scope, $courseId, array $ids, string $l): array
+    {
+        $acc = $this->access($scope, $courseId, $l);
+        if (isset($acc['success'])) {
+            return $acc;
+        }
+        [$course, $canManage] = $acc;
+        if (!$canManage) {
+            return $this->fail($l, 'مش مسموحلك.', 'Not allowed.', 403);
+        }
+        $all = DB::table('course_videos')->where('course_id', $course->id)->orderBy('sort_order')->orderBy('id')->pluck('id')->map(fn ($x) => (int) $x)->all();
+        $want = array_values(array_unique(array_filter(array_map('intval', $ids), fn ($x) => in_array($x, $all, true))));
+        $order = array_merge($want, array_values(array_diff($all, $want)));
+        DB::transaction(function () use ($order) {
+            foreach ($order as $i => $id) {
+                DB::table('course_videos')->where('id', $id)->update(['sort_order' => $i + 1]);
+            }
+        });
+        return $this->ok(['order' => $order], $this->ar($l) ? 'تم حفظ الترتيب.' : 'Order saved.');
+    }
+
+    /** للمسار الموقّع للغلاف: نفس شروط البث (طالب مسجّل + فيديو منشور). */
+    public function coverFile(int $videoId, int $studentId): ?string
+    {
+        $v = $this->streamable($videoId, $studentId);
+        return ($v && !empty($v->thumbnail_path)) ? (string) $v->thumbnail_path : null;
     }
 
     // -------------------------------------------------------------------- list
@@ -161,7 +318,7 @@ class CourseVideoService
 
         $items = [];
         foreach ($videos as $v) {
-            $items[] = $this->present($v, $canManage, $mine->get($v->id), $agg->get($v->id));
+            $items[] = $this->present($v, $canManage, $mine->get($v->id), $agg->get($v->id), (int) ($scope['studentId'] ?? 0));
         }
         return $this->ok(['videos' => $items, 'can_manage' => $canManage]);
     }
@@ -209,21 +366,37 @@ class CourseVideoService
             // مجلد الأجزاء المؤقت بيتنضف لوحده (prune)
         }
 
+        // المدة: ffprobe لو موجود، وإلا القيمة اللي قراها المتصفح وقت الرفع، وإلا بتتسجّل بعدين من أول مشغّل.
         $duration = null;
+        $cover = null;
         try {
             $probe = app(MediaProbeService::class);
             if ($probe->available()) {
                 $duration = $probe->duration(FileUploadService::absolutePath($stored['stored_path']));
             }
         } catch (\Throwable $e) {
-            // المدة بتتسجّل بعدين من أول مشغّل (progress)
         }
+        if (!$duration && isset($d['duration_seconds']) && is_numeric($d['duration_seconds']) && $d['duration_seconds'] >= 1) {
+            $duration = (int) ceil((float) $d['duration_seconds']);
+        }
+        // الغلاف: اللي اختاره المدرّس/المتصفح أولًا، وإلا فريم من ffmpeg لو متاح.
+        $cover = $this->storeCover($course, $d['thumbnail'] ?? null);
+        if ($cover === null) {
+            try {
+                $probe ??= app(MediaProbeService::class);
+                $cover = $probe->videoThumbnail(FileUploadService::absolutePath($stored['stored_path']), 'uploads/course-videos/covers/c' . (int) $course->id);
+            } catch (\Throwable $e) {
+            }
+        }
+        $w = $this->dim($d['width'] ?? null);
+        $h = $this->dim($d['height'] ?? null);
 
         $now = now();
         $id = DB::table('course_videos')->insertGetId([
             'course_id' => $course->id, 'title' => $title, 'description' => trim((string) ($d['description'] ?? '')) ?: null,
             'file_path' => $stored['stored_path'], 'file_name' => $stored['original_name'], 'file_mime' => $stored['mime_type'],
-            'file_size' => $stored['size_bytes'], 'duration_seconds' => ($duration && $duration > 0) ? min((int) $duration, self::MAX_DURATION) : null,
+            'file_size' => $stored['size_bytes'], 'thumbnail_path' => $cover, 'width' => ($w && $h) ? $w : null, 'height' => ($w && $h) ? $h : null,
+            'duration_seconds' => ($duration && $duration > 0) ? min((int) $duration, self::MAX_DURATION) : null,
             'password_hash' => $password !== '' ? Hash::make($password) : null,
             'sort_order' => (int) (DB::table('course_videos')->where('course_id', $course->id)->max('sort_order') ?? 0) + 1,
             'status' => $status, 'created_by_user_id' => $userId, 'created_at' => $now, 'updated_at' => $now,
@@ -305,9 +478,14 @@ class CourseVideoService
         }
         DB::table('course_video_views')->where('video_id', $v->id)->delete();
         DB::table('course_videos')->where('id', $v->id)->delete();
-        try {
-            $this->uploader->delete((string) $v->file_path);
-        } catch (\Throwable $e) {
+        foreach ([$v->file_path ?? null, $v->thumbnail_path ?? null] as $f) {
+            if (!$f) {
+                continue;
+            }
+            try {
+                $this->uploader->delete((string) $f);
+            } catch (\Throwable $e) {
+            }
         }
         return $this->ok(null, $this->ar($l) ? 'تم حذف الفيديو.' : 'Video deleted.');
     }
