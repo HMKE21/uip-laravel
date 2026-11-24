@@ -1494,8 +1494,19 @@ class DriveService
             }
         }
 
-        $tmpZip = tempnam(sys_get_temp_dir(), 'drz') . '.zip';
+        $tmpBase = tempnam(sys_get_temp_dir(), 'drz');
+        $tmpZip = $tmpBase . '.zip';
+        @unlink($tmpBase); // tempnam() بتنشئ ملف فاضي — محتاجين بس الاسم الفريد
         $temps = [];
+        if ($entries === []) {
+            // مجلد فاضي (أو اتفتح كـ root): ZipArchive ما بيكتبش ملف لأرشيف من غير عناصر فكان الـ download بيرمي 500.
+            // أصغر ZIP صالح = End-Of-Central-Directory بس (22 بايت) — فاتح في أي محرر/فك ضغط.
+            if (@file_put_contents($tmpZip, "PK\x05\x06" . str_repeat("\0", 18)) === false) {
+                throw new DriveException('Could not create the archive.', 500);
+            }
+            $label = count($nodes) === 1 ? $nodes[0]->name : 'Archive';
+            return [$tmpZip, $label . '.zip'];
+        }
         $zip = new ZipArchive();
         if ($zip->open($tmpZip, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
             throw new DriveException('Could not create the archive.', 500);
