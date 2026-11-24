@@ -50,7 +50,8 @@ Schedule::command('notifications:send-emails')->everyMinute()->withoutOverlappin
 
 // فحص صحة مزوّدي الـ SFU (Failover — الخطوة 6). الأمر نفسه بيعيد الفحص كل SFU_PROBE_INTERVAL ثانية جوه الدقيقة،
 // و withoutOverlapping بيمنع تداخل دقيقتين. من غير الـ scheduler الـ failover لسه بيشتغل من فشل الطلبات الفعلية بس.
-Schedule::command('sfu:health')->everyMinute()->withoutOverlapping(2);
+// runInBackground: الأمر بيفضل شغّال ~52 ثانية (بيكرر الفحص جواه) — من غير الخلفية كان بيحجز كل الأوامر اللي بعده في نفس الدورة (mail:process وغيره).
+Schedule::command('sfu:health')->everyMinute()->withoutOverlapping(2)->runInBackground();
 Schedule::command('projects:send-deadline-reminders')->hourly()->withoutOverlapping();
 
 // Keep the disposable-email blocklist fresh (new temp-mail domains appear all the time).
@@ -85,7 +86,7 @@ Schedule::command('activity:prune')->dailyAt('04:30')->withoutOverlapping();
 
 // UIPE Mail (المرحلة 3): تسليم الرسائل المجدولة / اللي فترة Undo بتاعتها خلصت، وإيقاظ المؤجّلات — كل دقيقة (محتاج cron schedule:run).
 // حتى لو الـ scheduler واقف، GET /api/v1/mail/account بيسلّم رسائل صندوق المستخدم الحالي لوحده (تسليم كسول).
-Schedule::command('mail:process')->everyMinute()->withoutOverlapping();
+Schedule::command('mail:process')->everyMinute()->withoutOverlapping()->runInBackground();
 // مسح سلة البريد النهائي بعد mailbox.trash_days (30 يوم).
 Schedule::command('mail:process --purge')->dailyAt('04:10')->withoutOverlapping();
 
