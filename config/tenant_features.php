@@ -24,6 +24,9 @@ return [
         'device-status', 'platform',
         // هوية العميل (branding) + فحص الدومين: الفرونت محتاجهم قبل أي ميزة (white-label).
         'dev/v1/tenant',
+        // Public developer docs (no secrets, no data): the OpenAPI file, the webhook-verification guide and the SDK downloads must load
+        // inside a workspace tab as well, even when that workspace has the 'developer' feature off (otherwise the API Explorer stays blank: 403).
+        'dev/v1/openapi.json', 'dev/v1/docs', 'dev/v1/sdks',
         // الأدمن العام (مستخدمين، أدوار، سياسات...). الأجزاء الخاصة بميزة بعينها بتتسحب منها تحت.
         'admin',
     ],
