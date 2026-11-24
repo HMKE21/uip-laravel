@@ -11,9 +11,64 @@ class MailQueueService
 {
     public const HEARTBEAT = 'mail:queue:heartbeat';
 
-    public function heartbeat(array $stats = []): void
+    public const FALLBACK_LOCK = 'mail:queue:fallback-lock';
+
+    /** $source: 'scheduler' (الأمر mail:process من cron) أو 'fallback' (تشغيل احتياطي من طلب أدمن لما الـ scheduler واقف). */
+    public function heartbeat(array $stats = [], string $source = 'scheduler'): void
     {
-        Cache::put(self::HEARTBEAT, ['at' => now()->toIso8601String()] + $stats, now()->addDay());
+        $now = now()->toIso8601String();
+        $prev = (array) Cache::get(self::HEARTBEAT, []);
+        $payload = ['at' => $now, 'source' => $source] + $stats;
+        $payload['scheduler_at'] = $source === 'scheduler' ? $now : ($prev['scheduler_at'] ?? null);
+        Cache::put(self::HEARTBEAT, $payload, now()->addDay());
+    }
+
+    /**
+     * تشغيل احتياطي: لو الـ scheduler (schedule:run) واقف أو مش متظبّط على السيرفر، لوحة الأمان بتسلّم المستحق
+     * وبتسجّل نبضة بدل ما الطابور يفضل واقف. محمي بـ lock وبيشتغل مرة كل ~60 ثانية بالكتير.
+     */
+    public function runFallbackIfStale(): void
+    {
+        try {
+            $hb = (array) Cache::get(self::HEARTBEAT, []);
+            $schedAt = $this->schedulerAt($hb);
+            if ($schedAt && Carbon::parse($schedAt)->gt(now()->subSeconds(90))) {
+                return; // الـ scheduler شغّال
+            }
+            $lock = Cache::lock(self::FALLBACK_LOCK, 55);
+            if (!$lock->get()) {
+                return;
+            }
+            try {
+                $mail = app(MailboxService::class);
+                $r = $mail->processDue(null, 200);
+                $woke = $mail->wakeSnoozed();
+                $retried = $mail->retryExternal(25);
+                $this->heartbeat(['sent' => (int) $r['sent'], 'failed' => (int) $r['failed'], 'woke' => (int) $woke, 'retried' => $retried], 'fallback');
+            } finally {
+                $lock->release();
+            }
+        } catch (\Throwable $e) {
+            report($e); // عمره ما يكسر لوحة الأمان
+        }
+    }
+
+    /** آخر مرة الـ scheduler الحقيقي اشتغل (نبضات قديمة من غير source اتعاملت كأنها من الـ scheduler). */
+    private function schedulerAt(array $hb): ?string
+    {
+        if (!empty($hb['scheduler_at'])) {
+            return (string) $hb['scheduler_at'];
+        }
+        return ($hb['source'] ?? 'scheduler') === 'scheduler' ? ($hb['at'] ?? null) : null;
+    }
+
+    private function workerMode(array $hb): string
+    {
+        $fresh = fn ($t) => $t && Carbon::parse($t)->gt(now()->subMinutes(5));
+        if ($fresh($this->schedulerAt($hb))) {
+            return 'scheduler';
+        }
+        return $fresh($hb['at'] ?? null) ? 'fallback' : 'stopped';
     }
 
     public function stats(?int $universityId): array
@@ -28,7 +83,10 @@ class MailQueueService
         return [
             'worker' => [
                 'last_run_at' => $lastAt, 'healthy' => $lastAt ? Carbon::parse($lastAt)->gt(now()->subMinutes(5)) : false,
-                'last_result' => array_diff_key((array) $hb, ['at' => 1]),
+                // scheduler = الـ cron شغّال | fallback = شغّال احتياطيًا من اللوحة (الـ cron واقف) | stopped = ولا واحد
+                'mode' => $this->workerMode((array) $hb),
+                'scheduler_last_run_at' => $hb['scheduler_at'] ?? null,
+                'last_result' => array_diff_key((array) $hb, ['at' => 1, 'source' => 1, 'scheduler_at' => 1]),
             ],
             'pending' => [
                 'scheduled' => (int) $due()->where('m.send_state', 'scheduled')->count(),

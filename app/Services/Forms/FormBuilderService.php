@@ -190,7 +190,8 @@ class FormBuilderService
         if ($type === 'email') {
             $out['config']['allow_disposable'] = !empty($cfg['allow_disposable']);
             // format: any | domains (only listed domains) | regex
-            $fmt = in_array($cfg['format'] ?? 'any', ['any', 'domains', 'regex'], true) ? $cfg['format'] : 'any';
+            $fmtIn = $cfg['format'] ?? 'any';
+            $fmt = is_string($fmtIn) && in_array($fmtIn, ['any', 'domains', 'regex'], true) ? $fmtIn : 'any';
             $out['config']['format'] = $fmt;
             $out['config']['domains'] = array_values(array_filter(array_map(fn ($d) => ltrim(mb_strtolower(trim((string) $d)), '@'), (array) ($cfg['domains'] ?? []))));
             $rx = trim((string) ($cfg['regex'] ?? ''));

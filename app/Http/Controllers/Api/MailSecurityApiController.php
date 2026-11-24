@@ -81,6 +81,7 @@ class MailSecurityApiController extends Controller
     {
         return $this->run($r, function ($s) {
             $u = $s['universityId'];
+            $this->queue->runFallbackIfStale();
             $out = ['scope' => $u === null ? 'platform' : 'university', 'university_id' => $u,
                 'security' => $this->security->overview($u), 'bounces' => $this->bounces->stats($u), 'queue' => $this->queue->stats($u)];
             if ($u !== null) {
