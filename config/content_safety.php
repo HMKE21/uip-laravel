@@ -80,6 +80,11 @@ return [
     'extra_block' => env('CONTENT_SAFETY_EXTRA_WORDS', ''),
     'allow'       => env('CONTENT_SAFETY_ALLOW_WORDS', ''),
 
+    // مراجعة الأدمن: نسخة الملف المحجوب بتتحفظ في storage/app/private/csafe-quarantine وبتتمسح تلقائي.
+    'quarantine_enabled'  => (bool) env('CONTENT_SAFETY_QUARANTINE', true),
+    'quarantine_max_mb'   => (int) env('CONTENT_SAFETY_QUARANTINE_MAX_MB', 100),
+    'quarantine_days'     => (int) env('CONTENT_SAFETY_QUARANTINE_DAYS', 30),
+
     // عدد المخالفات في 24 ساعة اللي يطلّع تنبيه للأدمن.
     'strike_alert' => (int) env('CONTENT_SAFETY_STRIKE_ALERT', 5),
 

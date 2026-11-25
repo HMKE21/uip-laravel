@@ -1273,6 +1273,9 @@ Route::prefix('v1')->group(function () {
         Route::get('/', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'index']);
         Route::post('/test-text', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'testText'])->middleware('throttle:60,1');
         Route::post('/test-file', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'testFile'])->middleware('throttle:30,1');
+        Route::get('/events/{id}/file', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'file'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::post('/events/{id}/allow', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'allow'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+        Route::delete('/allowlist/{id}', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'revoke'])->where('id', '[0-9]+')->middleware('throttle:60,1');
         Route::delete('/events/{id}', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'destroy'])->where('id', '[0-9]+')->middleware('throttle:120,1');
         Route::delete('/events', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'clear'])->middleware('throttle:10,1');
     });

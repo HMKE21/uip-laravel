@@ -50,9 +50,119 @@ class ContentSafetyService
     {
         $hit = $this->checkText($text, $strict, $extra);
         if ($hit) {
-            $this->record($kind, $hit['category'], $hit['term']);
+            $hash = sha1(trim($text));
+            if ($this->isAllowed('text', $hash)) { // الأدمن راجع النص ده بالظبط وسمح بيه
+                return;
+            }
+            $this->record($kind, $hit['category'], $hit['term'], true, ['sample' => $this->excerpt($text, (string) $hit['term']), 'content_hash' => $hash]);
             throw new ContentBlockedException($this->message($hit['category']), $hit['category'], $kind);
         }
+    }
+
+    // ───────────── مراجعة الأدمن: مسموح + حجر الملفات ─────────────
+
+    /** @return string[] "type:hash" */
+    private function allowedSet(): array
+    {
+        try {
+            return Cache::remember('csafe:allowlist', 60, fn () => DB::table('content_safety_allowlist')->get(['type', 'hash'])->map(fn ($r) => $r->type . ':' . $r->hash)->all());
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    public function isAllowed(string $type, string $hash): bool
+    {
+        return $hash !== '' && in_array($type . ':' . $hash, $this->allowedSet(), true);
+    }
+
+    public function forgetAllowlist(): void
+    {
+        Cache::forget('csafe:allowlist');
+    }
+
+    private function excerpt(string $text, string $term): string
+    {
+        $text = trim((string) preg_replace('/\s+/u', ' ', $text));
+        if (strlen($text) > 200 && preg_match('#^[A-Za-z0-9+/=]+$#', substr($text, 0, 400))) {
+            return '[base64]';
+        }
+        $pos = $term !== '' ? mb_stripos($text, $term) : false;
+        if ($pos === false) {
+            return mb_substr($text, 0, 300);
+        }
+        $start = max(0, $pos - 120);
+
+        return ($start > 0 ? '…' : '') . mb_substr($text, $start, 300);
+    }
+
+    private function quarantineDir(): string
+    {
+        return storage_path('app/private/csafe-quarantine');
+    }
+
+    private function quarantine(string $path, string $sha): bool
+    {
+        if ($sha === '' || !config('content_safety.quarantine_enabled', true)) {
+            return false;
+        }
+        $size = @filesize($path);
+        if ($size === false || $size > max(1, (int) config('content_safety.quarantine_max_mb', 100)) * 1048576) {
+            return false;
+        }
+        $dir = $this->quarantineDir();
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            return false;
+        }
+        $dst = $dir . '/' . $sha . '.bin';
+
+        return is_file($dst) || @copy($path, $dst);
+    }
+
+    public function quarantinePath(string $sha): ?string
+    {
+        if (!preg_match('/^[a-f0-9]{40}$/', $sha)) {
+            return null;
+        }
+        $f = $this->quarantineDir() . '/' . $sha . '.bin';
+
+        return is_file($f) ? $f : null;
+    }
+
+    public function dropQuarantine(string $sha): void
+    {
+        if ($f = $this->quarantinePath($sha)) {
+            @unlink($f);
+        }
+    }
+
+    public function purgeQuarantine(): int
+    {
+        $n = 0;
+        $cut = time() - max(1, (int) config('content_safety.quarantine_days', 30)) * 86400;
+        foreach (glob($this->quarantineDir() . '/*.bin') ?: [] as $f) {
+            if (@filemtime($f) !== false && filemtime($f) < $cut && @unlink($f)) {
+                $n++;
+                try {
+                    DB::table('content_safety_events')->where('content_hash', basename($f, '.bin'))->update(['has_file' => false]);
+                } catch (\Throwable $e) {
+                }
+            }
+        }
+
+        return $n;
+    }
+
+    /** @throws ContentBlockedException */
+    private function blockFile(string $kind, string $category, string $detail, string $path, string $displayName, ?string $sha): void
+    {
+        $sha = $sha ?: (string) @sha1_file($path);
+        $kept = $this->quarantine($path, $sha);
+        $this->record($kind, $category, $detail, true, [
+            'content_hash' => $sha ?: null, 'file_name' => $displayName, 'file_mime' => (string) (@mime_content_type($path) ?: ''),
+            'file_size' => (int) @filesize($path), 'has_file' => $kept,
+        ]);
+        throw new ContentBlockedException($this->message($category), $category, $kind);
     }
 
     private function isArabic(): bool
@@ -158,8 +268,17 @@ class ContentSafetyService
         if (!$this->enabled() || !is_file($path)) {
             return;
         }
+        $sha = null;
+        if ($this->allowedSet()) { // ملف الأدمن سمح بيه (بالهاش) بيعدّي من كل الفحوصات
+            $sha = @sha1_file($path) ?: null;
+            if ($sha && $this->isAllowed('file', $sha)) {
+                return;
+            }
+        }
         $base = pathinfo($displayName, PATHINFO_FILENAME);
-        $this->assertText(str_replace(['_', '-', '.'], ' ', $base), false, 'filename');
+        if ($hit = $this->checkText(str_replace(['_', '-', '.'], ' ', $base), false)) {
+            $this->blockFile('filename', $hit['category'], $hit['term'], $path, $displayName, $sha);
+        }
 
         $ext = strtolower(pathinfo($displayName, PATHINFO_EXTENSION));
         if ($ext === 'svg' && filesize($path) < 1_500_000) {
@@ -172,14 +291,14 @@ class ContentSafetyService
         if ($kind === null) {
             return;
         }
-        $key = 'csafe:file:' . $this->provider() . ':' . @sha1_file($path); // المزوّد في المفتاح: لما الأدمن يفعّل فاحص، النتايج القديمة "نضيف" متتعتبرش
+        $sha = $sha ?: (@sha1_file($path) ?: null);
+        $key = 'csafe:file:' . $this->provider() . ':' . $sha;
         $cached = Cache::get($key);
         if ($cached === 'ok') {
             return;
         }
         if (is_array($cached)) {
-            $this->record($kind, $cached['category'], $cached['reason'] . ' (cached)');
-            throw new ContentBlockedException($this->message($cached['category']), $cached['category'], $kind);
+            $this->blockFile($kind, $cached['category'], $cached['reason'] . ' (cached)', $path, $displayName, $sha);
         }
         $verdict = $this->moderateMedia($path, $kind);
         if ($verdict === null) {
@@ -188,8 +307,7 @@ class ContentSafetyService
             return;
         }
         Cache::put($key, $verdict, now()->addDays(7));
-        $this->record($kind, $verdict['category'], $verdict['reason']);
-        throw new ContentBlockedException($this->message($verdict['category']), $verdict['category'], $kind);
+        $this->blockFile($kind, $verdict['category'], $verdict['reason'], $path, $displayName, $sha);
     }
 
     /** @throws ContentBlockedException */
@@ -1035,7 +1153,7 @@ class ContentSafetyService
     // ───────────────────────── تسجيل المخالفات ─────────────────────────
 
     /** يسجّل مخالفة (مفيش نص المحتوى بيتخزّن — بس الكلمة/السبب). Never throws. */
-    public function record(string $kind, string $category, string $detail = '', bool $strike = true): void
+    public function record(string $kind, string $category, string $detail = '', bool $strike = true, array $extra = []): void
     {
         try {
             $uid = $this->currentUserId();
@@ -1043,10 +1161,22 @@ class ContentSafetyService
             $route = $req ? mb_substr('/' . ltrim($req->path(), '/'), 0, 190) : null;
             $ip = $req ? mb_substr((string) $req->ip(), 0, 60) : null;
             SecurityLog::write('Content safety block: ' . $kind . '/' . $category, ['user_id' => $uid, 'route' => $route, 'detail' => mb_substr($detail, 0, 80)]);
-            DB::table('content_safety_events')->insert([
+            $row = [
                 'user_id' => $uid, 'kind' => mb_substr($kind, 0, 30), 'category' => mb_substr($category, 0, 30), 'detail' => mb_substr($detail, 0, 190),
                 'route' => $route, 'ip' => $ip, 'created_at' => now(),
-            ]);
+            ];
+            if ($extra && $this->hasReviewColumns()) {
+                foreach (['sample' => 600, 'content_hash' => 40, 'file_name' => 190, 'file_mime' => 100] as $k => $max) {
+                    if (isset($extra[$k]) && $extra[$k] !== '') {
+                        $row[$k] = mb_substr((string) $extra[$k], 0, $max);
+                    }
+                }
+                if (isset($extra['file_size'])) {
+                    $row['file_size'] = (int) $extra['file_size'];
+                }
+                $row['has_file'] = !empty($extra['has_file']);
+            }
+            DB::table('content_safety_events')->insert($row);
             if ($uid && $strike) {
                 $k = 'csafe:strikes:' . $uid;
                 Cache::add($k, 0, now()->addDay());
@@ -1059,6 +1189,16 @@ class ContentSafetyService
             }
         } catch (\Throwable $e) {
             // التسجيل مايكسرش الحجب
+        }
+    }
+
+    private function hasReviewColumns(): bool
+    {
+        static $has = null;
+        try {
+            return $has ??= \Illuminate\Support\Facades\Schema::hasColumn('content_safety_events', 'sample');
+        } catch (\Throwable $e) {
+            return false;
         }
     }
 

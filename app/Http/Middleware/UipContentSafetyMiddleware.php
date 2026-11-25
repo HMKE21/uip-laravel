@@ -85,6 +85,14 @@ class UipContentSafetyMiddleware
         if (stripos($value, 'data:image/') !== false) {
             $this->safety->assertDataImagesIn($value);
         }
+        // أي data:...;base64 (غلاف الفيديو، ستوري…) بيتفحص كصورة فوق — مينفعش كنص: الـ base64 العشوائي بيطابق كلمات القاموس
+        // بالصدفة ("porn"/"xnxx") فيتحجب فيديو نضيف. بنشيل الـ payload ونفحص باقي النص بس.
+        if (stripos($value, ';base64,') !== false) {
+            $value = (string) preg_replace('#data:[A-Za-z0-9.+\-]+/[A-Za-z0-9.+\-]+(?:;[A-Za-z0-9=.+\-]+)*;base64,[A-Za-z0-9+/=\r\n]*#i', ' ', $value);
+            if (strlen(trim($value)) < 2) {
+                return;
+            }
+        }
         // blob base64 طويل (مش كلام). ⚠️ لازم يكون من غير مسافات/تاب (الـ base64 بيتقسّم بس بأسطر جديدة) — قبل كده أي رسالة
         // طويلة حروف وأرقام ومسافات بس كانت بتعدّي من الفحص بالكامل (تحايل: نص +2000 حرف من غير علامات ترقيم).
         if (strlen($value) > 2000 && preg_match('/^[A-Za-z0-9+\/=\r\n]+$/', substr($value, 0, 4000))) {

@@ -135,3 +135,6 @@ Schedule::command('tenants:run', ['mail:retention', '--feature=mail'])->dailyAt(
 
 // دومينات العملاء: تفعيل تلقائي (فحص DNS) + طلب/فحص شهادة SSL بدون تدخل يدوي. بيحتاج schedule:run كل دقيقة.
 Schedule::command('tenant:domains-check')->everyMinute()->withoutOverlapping();
+
+// مسح نسخ الملفات المحجوبة (حجر Content Safety) الأقدم من CONTENT_SAFETY_QUARANTINE_DAYS.
+Schedule::call(fn () => app(\App\Services\ContentSafetyService::class)->purgeQuarantine())->name('content-safety:purge-quarantine')->daily();
