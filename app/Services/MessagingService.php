@@ -396,7 +396,16 @@ class MessagingService
         // One transaction: a concurrent poll() must never see the message row
         // before its attachments exist (it would be delivered as an empty bubble
         // and never re-fetched, because the client's since_id moves past it).
-        $message = DB::transaction(function () use ($conversationId, $userId, $body, $options, $hasAttachments) {
+        // المنشن (@اسم / @all): بنحسمه قبل الـ transaction عشان نستخدمه في الحفظ وفي الإشعارات.
+        $mentionedIds = $this->resolveMentions(
+            $conversationId,
+            (array) ($options['mentioned_user_ids'] ?? []),
+            !empty($options['mention_all']),
+            (int) $userId
+        );
+        $mentionAll = !empty($options['mention_all']) && $this->isGroupConversation($conversationId);
+
+        $message = DB::transaction(function () use ($conversationId, $userId, $body, $options, $hasAttachments, $mentionedIds) {
             // رسالة جديدة في محادثة محذوفة (في السلة) بترجّعها لقايمة الرسائل لكل الأعضاء.
             DB::table('conversation_participants')->where('conversation_id', $conversationId)->whereNotNull('deleted_at')->update(['deleted_at' => null]);
             $message = $this->messages->create(
@@ -414,7 +423,7 @@ class MessagingService
                 $this->messages->recordHashtags((int) $message->id, $body);
             }
 
-            foreach ($this->resolveMentions($conversationId, $options['mentioned_user_ids'] ?? []) as $mentionedId) {
+            foreach ($mentionedIds as $mentionedId) {
                 $this->messages->recordMention((int) $message->id, $mentionedId);
             }
 
@@ -436,7 +445,10 @@ class MessagingService
 
         $sender = $this->users->findById($userId);
         foreach ($this->conversations->otherParticipants($conversationId, $userId) as $participant) {
-            if ($this->isMuted($conversationId, $participant['id'])) {
+            $isMentioned = in_array((int) $participant['id'], $mentionedIds, true);
+            // المنشن المباشر (@اسمي) بيعدّي حتى لو المحادثة مكتومة؛ @all بيحترم الكتم.
+            $breaksMute = $isMentioned && !$mentionAll;
+            if (!$breaksMute && $this->isMuted($conversationId, $participant['id'])) {
                 continue;
             }
             $np = $this->chatSettings->notifyPrefs((int) $participant['id']);
@@ -446,7 +458,9 @@ class MessagingService
             $this->notifications->notify(
                 $participant['id'],
                 'new_message',
-                'New message from ' . ($sender->full_name ?? 'a user'),
+                $isMentioned
+                    ? ($sender->full_name ?? 'a user') . ' mentioned you'
+                    : 'New message from ' . ($sender->full_name ?? 'a user'),
                 !$np['preview'] ? '(message)' : ($body !== '' ? mb_substr($body, 0, 140) : '(attachment)'),
                 $this->messagesLinkFor($participant['id'], $conversationId)
             );
@@ -858,14 +872,28 @@ class MessagingService
         }
     }
 
-    /** @param array<int,int|string> $explicitMentionIds ids جاهزة من الـ tag-picker — بتتأكد إنهم فعلاً أعضاء في المحادثة بس */
-    private function resolveMentions(int $conversationId, array $explicitMentionIds): array
+    /**
+     * @param array<int,int|string> $explicitMentionIds ids جاهزة من الـ tag-picker — بتتأكد إنهم فعلاً أعضاء في المحادثة بس
+     * @param bool $mentionAll @all — كل أعضاء الجروب (مش المرسل)؛ بيتجاهل في المحادثات الفردية
+     * @return int[]
+     */
+    private function resolveMentions(int $conversationId, array $explicitMentionIds, bool $mentionAll = false, int $senderId = 0): array
     {
-        if (!$explicitMentionIds) {
+        if (!$explicitMentionIds && !$mentionAll) {
             return [];
         }
-        $participantIds = array_column($this->allParticipants($conversationId), 'id');
-        return array_values(array_intersect(array_map('strval', $explicitMentionIds), array_map('strval', $participantIds)));
+        $participantIds = array_map('intval', array_column($this->allParticipants($conversationId), 'id'));
+        $ids = array_map('intval', array_intersect(array_map('strval', $explicitMentionIds), array_map('strval', $participantIds)));
+        if ($mentionAll && $this->isGroupConversation($conversationId)) {
+            $ids = array_merge($ids, $participantIds);
+        }
+        // مفيش معنى إنك تعمل منشن لنفسك.
+        return array_values(array_unique(array_filter($ids, fn ($id) => $id > 0 && $id !== $senderId)));
+    }
+
+    private function isGroupConversation(int $conversationId): bool
+    {
+        return (bool) DB::table('conversations')->where('id', $conversationId)->value('is_group');
     }
 
     private function isMuted(int $conversationId, $userId): bool

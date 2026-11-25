@@ -240,7 +240,7 @@ class MessagingController extends Controller
         });
     }
 
-    /** POST /api/v1/messaging/conversations/{id}/messages — multipart: body, parent_message_id?, forwarded_from_id?, mentioned_user_ids[]?, attachments[]? */
+    /** POST /api/v1/messaging/conversations/{id}/messages — multipart: body, parent_message_id?, forwarded_from_id?, mentioned_user_ids[]?, mention_all?, attachments[]? */
     public function send(Request $request, $id)
     {
         return $this->handle(function () use ($request, $id) {
@@ -255,6 +255,7 @@ class MessagingController extends Controller
                 'parent_message_id'   => $request->filled('parent_message_id') ? (int) $request->input('parent_message_id') : null,
                 'forwarded_from_id'   => $request->filled('forwarded_from_id') ? (int) $request->input('forwarded_from_id') : null,
                 'mentioned_user_ids'  => (array) $request->input('mentioned_user_ids', []),
+                'mention_all'         => filter_var($request->input('mention_all', false), FILTER_VALIDATE_BOOLEAN),
                 'attachments'         => $files,
                 // denoise[] = '1'/'0' لكل ملف بنفس ترتيب attachments[] (عزل الضوضاء بعد الرفع).
                 // view_mode[] = 'once'|'timer'|'' و view_seconds[] لكل ملف بنفس ترتيب attachments[] (صور/فيديو بس).
