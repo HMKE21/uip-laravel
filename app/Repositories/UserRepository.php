@@ -165,8 +165,10 @@ class UserRepository
                 }
             });
 
+        // الإيميل مايتبعتش لغير الأدمن لو صاحبه قافل email_searchable (حتى لو اتلاقى بالاسم/اليوزرنيم).
+        $emailSql = $isAdmin ? 'u.email' : 'CASE WHEN COALESCE(ns.email_searchable, 1) = 1 THEN u.email ELSE NULL END';
         return $q->selectRaw(
-            'u.id, u.uuid, u.full_name, u.username, u.email, u.avatar_path,
+            'u.id, u.uuid, u.full_name, u.username, ' . $emailSql . ' AS email, u.avatar_path,
              (SELECT r.slug FROM user_roles ur2 JOIN roles r ON r.id = ur2.role_id WHERE ur2.user_id = u.id ORDER BY ur2.assigned_at ASC LIMIT 1) AS role,
              COALESCE(uni.official_name_en, s.faculty) AS org_en,
              COALESCE(uni.official_name_ar, s.faculty) AS org_ar'
