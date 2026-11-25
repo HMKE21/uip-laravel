@@ -251,9 +251,36 @@ class DriveApiController extends Controller
         $download = $request->boolean('download');
         $name = (string) $node->name;
         $ascii = preg_replace('/[^\x20-\x7E]/', '_', str_replace(['"', '\\'], '_', $name));
+        $size = (int) $node->size_bytes;
+
+        // HTTP Range (single "bytes=a-b" / "bytes=a-" / "bytes=-n"): lets the app read just the head of a huge CSV / log, and lets
+        // <video> / <audio> seek, instead of pulling the whole file over the network every time.
+        $status = 200;
+        $start = 0;
+        $length = $size;
+        $range = trim((string) $request->header('Range'));
+        if ($range !== '' && !$download && $size > 0 && preg_match('/^bytes=(\d*)-(\d*)$/', $range, $m) && ($m[1] !== '' || $m[2] !== '')) {
+            if ($m[1] === '') {
+                $start = max(0, $size - (int) $m[2]);
+                $end = $size - 1;
+            } else {
+                $start = (int) $m[1];
+                $end = $m[2] !== '' ? min((int) $m[2], $size - 1) : $size - 1;
+            }
+            if ($start > $end || $start >= $size) {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+                return response('', 416, ['Content-Range' => 'bytes */' . $size, 'Accept-Ranges' => 'bytes']);
+            }
+            $status = 206;
+            $length = $end - $start + 1;
+        }
+
         $headers = [
             'Content-Type'            => $node->mime_type ?: 'application/octet-stream',
-            'Content-Length'          => (string) (int) $node->size_bytes,
+            'Content-Length'          => (string) $length,
+            'Accept-Ranges'           => 'bytes',
             'Content-Disposition'     => ($download ? 'attachment' : 'inline') . '; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name),
             // ملف طالب = محتوى غير موثوق: مفيش sniffing ولا تنفيذ سكربتات لو اتفتح مباشرة في تبويب.
             'X-Content-Type-Options'  => 'nosniff',
@@ -261,12 +288,41 @@ class DriveApiController extends Controller
             'Cache-Control'           => 'private, no-cache',
             'ETag'                    => $etag,
         ];
-        return response()->stream(function () use ($stream) {
-            fpassthru($stream);
+        if ($status === 206) {
+            $headers['Content-Range'] = 'bytes ' . $start . '-' . ($start + $length - 1) . '/' . $size;
+        }
+
+        return response()->stream(function () use ($stream, $start, $length) {
+            if ($start > 0 && @fseek($stream, $start) !== 0) {
+                // non-seekable stream (some cloud drivers): skip the unwanted bytes without keeping them
+                $skip = $start;
+                while ($skip > 0 && !feof($stream)) {
+                    $got = fread($stream, min(1048576, $skip));
+                    if ($got === false || $got === '') {
+                        break;
+                    }
+                    $skip -= strlen($got);
+                }
+            }
+            $left = $length;
+            while ($left > 0 && !feof($stream)) {
+                $chunk = fread($stream, min(1048576, $left));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                echo $chunk;
+                $left -= strlen($chunk);
+                if (function_exists('flush')) {
+                    @flush();
+                }
+                if (connection_aborted()) { // the app cancelled (closed the window / enough bytes read): stop reading the file
+                    break;
+                }
+            }
             if (is_resource($stream)) {
                 fclose($stream);
             }
-        }, 200, $headers);
+        }, $status, $headers);
     }
 
     public function saveContent(Request $request, $id)
