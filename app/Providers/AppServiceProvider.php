@@ -6,6 +6,7 @@ use App\Mail\Transport\BrevoTransport;
 use App\Support\PersistentStorage;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
@@ -29,6 +30,19 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // Production safety net: debug pages print environment values and SQL, and an APP_KEY that was ever published lets anyone
+        // forge encrypted values. Debug is forced off; a known key is logged loudly.
+        if ($this->app->environment('production')) {
+            if (config('app.debug')) {
+                config(['app.debug' => false]);
+                Log::critical('APP_DEBUG was true in production and has been forced to false. Fix the .env file.');
+            }
+            $knownKeys = ['base64:Vn0BUqC6NtMBThG77BiTHsmg04EdgSs+q7DPKZXLVBY='];
+            if (in_array((string) config('app.key'), $knownKeys, true)) {
+                Log::critical('APP_KEY is a key that was published in .env.example. Run php artisan key:generate --force and restart (users are signed out once).');
+            }
+        }
+
         // الخطوة 5: الجوبز تتخزّن في المنصة الأم وتشيل tenant_id، والـ worker يفعّل العميل حوالين كل جوب.
         \App\Services\Tenancy\TenantQueue::register();
 

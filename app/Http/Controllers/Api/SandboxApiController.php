@@ -38,8 +38,8 @@ class SandboxApiController extends Controller
             return $this->apiError('Project not found.', null, 404);
         }
 
-        // $id is only a session key for the gateway; findAccessible() above is the access check
-        $token = \App\Support\SandboxTokenSigner::issue($userId, (string) $id, 'project');
+        // findAccessible() above is the access check. The session key is the project's own id, not the raw URL value.
+        $token = \App\Support\SandboxTokenSigner::issue($userId, (string) ($project->id ?? $id), 'project');
         if ($token === null) {
             return $this->apiError('The sandbox is not configured on this server.', null, 503);
         }

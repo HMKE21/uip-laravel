@@ -61,4 +61,14 @@ class SandboxTokenSignerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         SandboxTokenSigner::issue(1, "../etc/passwd");
     }
+
+    public function test_token_carries_its_kind_and_unknown_kinds_are_refused(): void
+    {
+        $this->cfg();
+        foreach (['terminal', 'project', 'vscode', 'browser'] as $k) {
+            $this->assertSame($k, $this->claims(SandboxTokenSigner::issue(1, 'terminal', $k)['token'])['knd']);
+        }
+        $this->expectException(\InvalidArgumentException::class);
+        SandboxTokenSigner::issue(1, 'terminal', 'root');
+    }
 }

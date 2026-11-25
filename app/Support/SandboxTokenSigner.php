@@ -46,6 +46,9 @@ class SandboxTokenSigner
      */
     public static function issue(int $userId, string $pid, string $kind = 'terminal'): ?array
     {
+        if (!in_array($kind, ['terminal', 'project', 'vscode', 'browser'], true)) {
+            throw new \InvalidArgumentException('bad sandbox token kind');
+        }
         $cfg = self::config();
         if ($cfg === null) {
             return null;
@@ -60,6 +63,8 @@ class SandboxTokenSigner
         $head = $b64(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
         $body = $b64(json_encode([
             'iss' => 'uip-api', 'aud' => 'uip-sandbox', 'sub' => (string) $userId, 'pid' => $pid,
+            // what this token may open: terminal | project | vscode | browser (the gateway refuses a VS Code / browser session on any other kind)
+            'knd' => $kind,
             'iat' => $now, 'nbf' => $now - 5, 'exp' => $now + $ttl, 'jti' => bin2hex(random_bytes(16)),
         ]));
         $sig = $b64(hash_hmac('sha256', "{$head}.{$body}", $cfg['secret'], true));
