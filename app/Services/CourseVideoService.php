@@ -477,6 +477,7 @@ class CourseVideoService
             return $this->fail($l, 'الفيديو غير موجود.', 'Video not found.', 404);
         }
         DB::table('course_video_views')->where('video_id', $v->id)->delete();
+        try { DB::table('course_video_unlocks')->where('video_id', $v->id)->delete(); } catch (\Throwable) { /* الجدول لسه مش موجود */ }
         DB::table('course_videos')->where('id', $v->id)->delete();
         foreach ([$v->file_path ?? null, $v->thumbnail_path ?? null] as $f) {
             if (!$f) {
@@ -492,6 +493,36 @@ class CourseVideoService
 
     // -------------------------------------------------------------------- play
 
+    /** هل الطالب فتح الفيديو ده بالباسورد الحالي قبل كده؟ (لو الباسورد اتغيّر يرجع false) */
+    private function isUnlocked(object $v, int $studentId): bool
+    {
+        if ($studentId <= 0) {
+            return false;
+        }
+        try {
+            $sig = DB::table('course_video_unlocks')->where('video_id', $v->id)->where('student_id', $studentId)->value('pw_sig');
+        } catch (\Throwable) {
+            return false;   // الـ migration لسه ماتشغّلتش: نفس السلوك القديم
+        }
+        return $sig !== null && hash_equals((string) $sig, sha1((string) $v->password_hash));
+    }
+
+    private function rememberUnlock(object $v, int $studentId): void
+    {
+        if ($studentId <= 0) {
+            return;
+        }
+        try {
+            $now = now();
+            DB::table('course_video_unlocks')->updateOrInsert(
+                ['video_id' => $v->id, 'student_id' => $studentId],
+                ['pw_sig' => sha1((string) $v->password_hash), 'updated_at' => $now, 'created_at' => $now]
+            );
+        } catch (\Throwable) {
+            // مش مشكلة: هيتسأل عن الباسورد المرة الجاية
+        }
+    }
+
     /**
      * يتحقق من الصلاحية + الباسورد، ويرجّع رابط مشاهدة موقّع (يدعم التقديم/الاستكمال) + آخر موضع وصله الطالب.
      */
@@ -506,13 +537,14 @@ class CourseVideoService
         if (!$v) {
             return $this->fail($l, 'الفيديو غير موجود.', 'Video not found.', 404);
         }
-        if (!$canManage && !empty($v->password_hash)) {
+        if (!$canManage && !empty($v->password_hash) && !$this->isUnlocked($v, (int) $scope['studentId'])) {
             if ($password === null || $password === '') {
                 return ['success' => false, 'message' => $this->ar($l) ? 'الفيديو ده محمي بباسورد.' : 'This video is password-protected.', 'code' => 423, 'data' => ['password_required' => true]];
             }
             if (!Hash::check($password, $v->password_hash)) {
                 return ['success' => false, 'message' => $this->ar($l) ? 'الباسورد غلط.' : 'Wrong password.', 'code' => 403, 'data' => ['password_required' => true]];
             }
+            $this->rememberUnlock($v, (int) $scope['studentId']);   // باسورد صح مرة واحدة كفاية
         }
 
         $ttl = (int) config('upload.course_video_url_ttl', 7200);
