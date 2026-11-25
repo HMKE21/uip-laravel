@@ -2317,6 +2317,7 @@ Route::prefix('v1')->group(function () {
         Route::delete('/stories/{id}', [StoriesApiController::class, 'destroy'])->where('id', '[0-9]+');
         Route::post('/stories/{id}/view', [StoriesApiController::class, 'view'])->where('id', '[0-9]+');
         Route::get('/stories/{id}/viewers', [StoriesApiController::class, 'viewers'])->where('id', '[0-9]+');
+        Route::get('/stories/{id}/media/{variant}', [StoriesApiController::class, 'mediaAuth'])->where(['id' => '[0-9]+', 'variant' => 'file|thumbnail']);
         Route::post('/stories/{id}/react', [StoriesApiController::class, 'react'])->where('id', '[0-9]+');
         Route::post('/stories/{id}/reply', [StoriesApiController::class, 'reply'])->where('id', '[0-9]+');
         // المكالمات 1:1 (صوت أولًا): signaling بـ polling + STUN/TURN. الثابتة (poll/ice) قبل /{id}.

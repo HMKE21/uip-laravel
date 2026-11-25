@@ -98,16 +98,29 @@ class StoriesApiController extends Controller
      */
     public function media(Request $request, $id, $variant)
     {
-        $uid = (int) $request->query('u');
+        return $this->serveMedia((int) $request->query('u'), (int) $id, (string) $variant);
+    }
+
+    /**
+     * GET /messaging/stories/{id}/media/{variant} — نفس الوسائط بس بتوكن المستخدم (Bearer) بدل الرابط الموقّع.
+     * بيتستخدم كـ fallback من الفرونت لو الرابط الموقّع فشل (توقيع/بروكسي/انتهاء). فحص الرؤية نفسه بيتطبّق.
+     */
+    public function mediaAuth(Request $request, $id, $variant)
+    {
+        return $this->serveMedia($this->uid($request), (int) $id, (string) $variant);
+    }
+
+    private function serveMedia(int $uid, int $id, string $variant)
+    {
         if ($uid <= 0 || !in_array($variant, ['file', 'thumbnail'], true)) {
             return $this->apiError('Story media not found.', null, 404);
         }
-        $rel = $this->stories->mediaPathForServing($uid, (int) $id, (string) $variant);
+        $rel = $this->stories->mediaPathForServing($uid, $id, $variant);
         if ($rel === null) {
             return $this->apiError('Story media not found.', null, 404);
         }
-        $path = \App\Services\FileUploadService::absolutePath($rel);
-        if (!is_file($path)) {
+        $path = \App\Support\SafeFile::resolve(\App\Services\FileUploadService::absolutePath($rel));
+        if ($path === null) {
             return $this->apiError('File not found on server.', null, 404);
         }
         $mimes = [
