@@ -225,7 +225,7 @@ class ContentSafetyService
                 file_put_contents($tmp, $bin);
                 $this->assertFileSafe($tmp, 'inline.img', true);
             } finally {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
             }
         }
     }
@@ -411,7 +411,7 @@ class ContentSafetyService
         } finally {
             if ($tmpDir) {
                 foreach (glob($tmpDir . '/*') ?: [] as $f) {
-                    @unlink($f);
+                    \App\Support\SafePath::delete($f);
                 }
                 @rmdir($tmpDir);
             }
@@ -473,12 +473,9 @@ class ContentSafetyService
             '/usr/local/ffmpeg/ffmpeg',
             '/usr/bin/ffmpeg',
         ];
-        if (function_exists('exec')) {
-            $out = [];
-            @exec('command -v ffmpeg 2>/dev/null', $out);
-            if (!empty($out[0])) {
-                $cands[] = $out[0];
-            }
+        $inPath = \App\Support\Cmd::find('ffmpeg');
+        if ($inPath !== null) {
+            $cands[] = $inPath;
         }
         $list = [];
         foreach ($cands as $c) {
@@ -504,9 +501,8 @@ class ContentSafetyService
         }
         $has = false;
         foreach ($this->ffmpegCandidates() as $bin) {
-            $out = [];
-            @exec(escapeshellarg($bin) . ' -hide_banner -decoders 2>&1', $out);
-            foreach ($out as $line) {
+            $res = \App\Support\Cmd::run([$bin, '-hide_banner', '-decoders'], 20, true);
+            foreach ($res['lines'] as $line) {
                 if (preg_match('/\bhevc\b/i', $line) && preg_match('/^\s*V/', $line)) {
                     return $has = true;
                 }
@@ -540,10 +536,7 @@ class ContentSafetyService
         if (is_file($sibling) && is_executable($sibling)) {
             return $sibling;
         }
-        $out = [];
-        @exec('command -v ffprobe 2>/dev/null', $out);
-
-        return !empty($out[0]) ? $out[0] : null;
+        return \App\Support\Cmd::find('ffprobe');
     }
 
     /**
@@ -553,22 +546,21 @@ class ContentSafetyService
     private function grabFrame(string $ff, string $path, float $t, string $dst, int $timeout): bool
     {
         $vf = "scale='min(768,iw)':-2,format=yuvj420p";
-        $ss = escapeshellarg(number_format($t, 2, '.', ''));
-        $in = escapeshellarg($path);
-        $out = escapeshellarg($dst);
-        $bin = escapeshellarg($ff);
+        $ss = number_format($t, 2, '.', '');
+        $tail = ['-an', '-sn', '-dn', '-frames:v', '1', '-vf', $vf, '-strict', 'unofficial', '-q:v', '4', '-y', $dst];
         $variants = [
             // seek سريع قبل الإدخال
-            "timeout $timeout $bin -nostdin -v error -ss $ss -i $in -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+            array_merge([$ff, '-nostdin', '-v', 'error', '-ss', $ss, '-i', $path], $tail),
             // seek بعد الإدخال (أبطأ بس أدق مع ملفات moov-at-end / seek مكسور)
-            "timeout $timeout $bin -nostdin -v error -i $in -ss $ss -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+            array_merge([$ff, '-nostdin', '-v', 'error', '-i', $path, '-ss', $ss], $tail),
             // أول إطار من غير أي seek
-            "timeout $timeout $bin -nostdin -v error -i $in -an -sn -dn -frames:v 1 -vf \"$vf\" -strict unofficial -q:v 4 -y $out 2>&1",
+            array_merge([$ff, '-nostdin', '-v', 'error', '-i', $path], $tail),
         ];
-        foreach ($variants as $cmd) {
-            @unlink($dst);
-            $log = [];
-            @exec($cmd, $log, $code);
+        foreach ($variants as $argv) {
+            \App\Support\SafePath::delete($dst);
+            $res = \App\Support\Cmd::run($argv, $timeout, true);
+            $log = $res['lines'];
+            $code = $res['code'];
             if (is_file($dst) && filesize($dst) > 200) {
                 return true;
             }
@@ -598,10 +590,10 @@ class ContentSafetyService
         $dur = 0.0;
         $probe = $this->ffprobe();
         if ($probe !== null) {
-            $out = [];
-            @exec(escapeshellarg($probe) . ' -v error -show_entries format=duration -of csv=p=0 ' . escapeshellarg($path) . ' 2>/dev/null', $out);
-            if (!empty($out[0]) && is_numeric($out[0])) {
-                $dur = (float) $out[0];
+            $res = \App\Support\Cmd::run([$probe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', $path], 20);
+            $first = $res['lines'][0] ?? '';
+            if ($first !== '' && is_numeric($first)) {
+                $dur = (float) $first;
             }
         }
         $timeout = max(8, (int) config('content_safety.timeout', 12) * 2);
@@ -710,16 +702,16 @@ class ContentSafetyService
                 if ($dst !== $img) {
                     imagedestroy($dst);
                 }
-                register_shutdown_function(fn () => @unlink($tmp));
+                register_shutdown_function(fn () => \App\Support\SafePath::delete($tmp));
 
                 return $tmp;
             }
         }
         if ($this->ffmpeg() !== null) {
             $tmp = tempnam(sys_get_temp_dir(), 'csi') . '.jpg';
-            @exec(sprintf('timeout 20 %s -v error -i %s -frames:v 1 -vf "scale=\'min(1024,iw)\':-2,format=yuvj420p" -strict unofficial -q:v 4 -y %s 2>&1', escapeshellarg($this->ffmpeg()), escapeshellarg($path), escapeshellarg($tmp)));
+            \App\Support\Cmd::run([$this->ffmpeg(), '-v', 'error', '-i', $path, '-frames:v', '1', '-vf', "scale='min(1024,iw)':-2,format=yuvj420p", '-strict', 'unofficial', '-q:v', '4', '-y', $tmp], 20, true);
             if (is_file($tmp) && filesize($tmp) > 200) {
-                register_shutdown_function(fn () => @unlink($tmp));
+                register_shutdown_function(fn () => \App\Support\SafePath::delete($tmp));
 
                 return $tmp;
             }

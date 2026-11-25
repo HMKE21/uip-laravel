@@ -16,7 +16,7 @@ class SecurityDataPortalsSeeder extends Seeder
     public function run(): void
     {
         foreach ($this->statements() as $statement) {
-            DB::unprepared($statement);
+            DB::unprepared(DemoPasswordHash::apply($statement, $this->command));
         }
     }
 
@@ -122,12 +122,11 @@ SQL,
 
             <<<'SQL'
 -- 7. Demo accounts -------------------------------------------------------------
--- Password: Passw0rd@2026 — bcrypt hash below was generated and verified
--- (cost factor 10, same as the rest of the seeded demo accounts) and is
--- verifiable with PHP's password_verify('Passw0rd@2026', $hash).
+-- Password: from DEMO_ACCOUNTS_PASSWORD (or a random one printed once) — the bcrypt hash is generated
+-- at seed time by DemoPasswordHash, never stored in the source.
 INSERT INTO users (uuid, full_name, email, password_hash, status, email_verified_at) VALUES
-(UUID(), 'Security Administrator (Demo)', 'security@uip.demo',    '$2b$10$/je0yLNggES2qBBU5PPRzeqM2PZy8//vup3pcPbRz3.M8fXxeqzue', 'active', NOW()),
-(UUID(), 'Data Analyst (Demo)',           'data.analyst@uip.demo','$2b$10$/je0yLNggES2qBBU5PPRzeqM2PZy8//vup3pcPbRz3.M8fXxeqzue', 'active', NOW())
+(UUID(), 'Security Administrator (Demo)', 'security@uip.demo',    '__DEMO_PASSWORD_HASH__', 'active', NOW()),
+(UUID(), 'Data Analyst (Demo)',           'data.analyst@uip.demo','__DEMO_PASSWORD_HASH__', 'active', NOW())
 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name);
 SQL,
 

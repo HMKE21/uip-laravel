@@ -52,7 +52,7 @@ final class SdkPackager
             }
             return (string) file_get_contents($tmp);
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
     }
 }

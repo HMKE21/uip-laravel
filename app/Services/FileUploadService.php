@@ -143,8 +143,8 @@ class FileUploadService
     /** Best-effort delete of a previously stored file (paths are relative to public/ — or to storage/app/private for private categories). */
     public function delete(string $relativePath): void
     {
-        $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
-        if ($rel === '' || str_contains($rel, '..')) {
+        $rel = \App\Support\SafePath::clean($relativePath);
+        if ($rel === null) {
             return;
         }
         // الخاص أولًا، وبعدين public/ (ملفات قديمة لسه ماتنقلتش).
@@ -154,7 +154,7 @@ class FileUploadService
         }
         foreach ($candidates as $full) {
             if (is_file($full)) {
-                @unlink($full);
+                \App\Support\SafePath::delete($full);
             }
         }
         \App\Support\UploadMirror::forget($rel);
@@ -190,7 +190,10 @@ class FileUploadService
     /** المجلد الفعلي على الديسك لمجلد نسبي (خاص => storage/app/private/..، عام => public/..). */
     public static function diskDir(string $relativeDir): string
     {
-        $rel = ltrim(str_replace('\\', '/', $relativeDir), '/');
+        $rel = \App\Support\SafePath::clean($relativeDir);
+        if ($rel === null) { // فاضي / فيه .. / مسار مطلق => مسار مش موجود جوه public/
+            return \App\Support\SafePath::publicPath(null);
+        }
         return self::isPrivatePath($rel) ? self::privateRoot() . '/' . $rel : public_path($rel);
     }
 
@@ -200,7 +203,10 @@ class FileUploadService
      */
     public static function absolutePath(string $relativePath): string
     {
-        $rel = ltrim(str_replace('\\', '/', $relativePath), '/');
+        $rel = \App\Support\SafePath::clean($relativePath);
+        if ($rel === null) { // path traversal / NUL / مسار مطلق: نرجّع مسار مش موجود (الكولر بيعمل is_file => 404)
+            return \App\Support\SafePath::publicPath(null);
+        }
         if (!self::isPrivatePath($rel)) {
             $pub = public_path($rel);
             // الديسك اتمسح بعد Deploy؟ نرجّع الملف من S3.
@@ -352,14 +358,9 @@ class FileUploadService
             return;
         }
 
-        $command = sprintf(
-            'timeout %d %s --no-summary %s 2>&1',
-            max(1, $timeout),
-            escapeshellcmd($binary),
-            escapeshellarg($tmpPath)
-        );
-
-        exec($command, $output, $exitCode);
+        $scan = \App\Support\Cmd::run([$binary, '--no-summary', $tmpPath], max(1, $timeout), true);
+        $output = $scan['lines'];
+        $exitCode = $scan['code'];
 
         if ($exitCode === 1) {
             SecurityLog::write("Malware detected in uploaded file: {$originalName} — upload rejected", [
@@ -435,13 +436,13 @@ class FileUploadService
                 $findings = \App\Support\PdfActiveContentScanner::findings($path);
             }
 
-            if (config('upload.antivirus.enabled', true) && function_exists('exec')) {
+            if (config('upload.antivirus.enabled', true) && \App\Support\Cmd::available()) {
                 $binary = (string) config('upload.antivirus.binary', 'clamscan');
                 if ($this->commandExists($binary)) {
                     $timeout = max(1, (int) config('upload.antivirus.timeout', 30));
-                    $out = [];
-                    $code = 0;
-                    exec(sprintf('timeout %d %s --no-summary %s 2>&1', $timeout, escapeshellcmd($binary), escapeshellarg($path)), $out, $code);
+                    $scan = \App\Support\Cmd::run([$binary, '--no-summary', $path], $timeout, true);
+                    $out = $scan['lines'];
+                    $code = $scan['code'];
                     if ($code === 1) {
                         SecurityLog::write("Malware detected when opening stored file: {$displayName} — access blocked", [
                             'file' => $displayName, 'scanner_output' => implode(' | ', $out),
@@ -475,12 +476,8 @@ class FileUploadService
         $required = (bool) config('upload.antivirus.required', false);
 
         $available = false;
-        if ($enabled && function_exists('exec')) {
-            $checkCmd = DIRECTORY_SEPARATOR === '\\'
-                ? 'where ' . escapeshellarg($binary) . ' 2>NUL'
-                : 'command -v ' . escapeshellarg($binary) . ' 2>/dev/null';
-            @exec($checkCmd, $output, $exitCode);
-            $available = $exitCode === 0 && !empty($output);
+        if ($enabled) {
+            $available = \App\Support\Cmd::exists($binary);
         }
 
         return ['enabled' => $enabled, 'binary' => $binary, 'available' => $available, 'required' => $required];
@@ -488,16 +485,7 @@ class FileUploadService
 
     private function commandExists(string $binary): bool
     {
-        if (!function_exists('exec')) {
-            return false;
-        }
-
-        $checkCmd = DIRECTORY_SEPARATOR === '\\'
-            ? 'where ' . escapeshellarg($binary) . ' 2>NUL'
-            : 'command -v ' . escapeshellarg($binary) . ' 2>/dev/null';
-
-        @exec($checkCmd, $output, $exitCode);
-        return $exitCode === 0 && !empty($output);
+        return \App\Support\Cmd::exists($binary);
     }
 
     private function errorMessage(int $code): string

@@ -113,9 +113,9 @@ class ReportService
         }
 
         if ($report->file_path) {
-            $fullPath = public_path(ltrim($report->file_path, '/'));
+            $fullPath = \App\Support\SafePath::publicPath($report->file_path);
             if (is_file($fullPath)) {
-                @unlink($fullPath);
+                \App\Support\SafePath::delete($fullPath);
             }
         }
 

@@ -60,7 +60,7 @@ class UniversityBrandingService
             $stored = $this->uploads->store($cleanUpload, 'branding', (string) $university->id, self::MAX_KB);
         } finally {
             if (is_file($clean)) {
-                @unlink($clean);
+                \App\Support\SafePath::delete($clean);
             }
         }
 

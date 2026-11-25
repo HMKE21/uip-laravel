@@ -181,7 +181,7 @@ class ChunkedUploadService
     {
         $dir = $this->dir($userId, $id);
         foreach (glob($dir . '/*') ?: [] as $f) {
-            @unlink($f);
+            \App\Support\SafePath::delete($f);
         }
         @rmdir($dir);
     }
@@ -192,7 +192,7 @@ class ChunkedUploadService
         foreach (glob($this->base() . '/[0-9]*/*', GLOB_ONLYDIR) ?: [] as $d) {
             if (filemtime($d) < time() - $ttl && (!is_file($d . '/meta.json') || filemtime($d . '/meta.json') < time() - $ttl)) {
                 foreach (glob($d . '/*') ?: [] as $f) {
-                    @unlink($f);
+                    \App\Support\SafePath::delete($f);
                 }
                 @rmdir($d);
             }

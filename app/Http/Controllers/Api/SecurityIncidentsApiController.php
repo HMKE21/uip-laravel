@@ -219,7 +219,7 @@ class SecurityIncidentsApiController extends Controller
             return $this->apiError('Evidence not found.', null, 404);
         }
 
-        $fullPath = public_path(ltrim((string) $row->stored_path, '/'));
+        $fullPath = \App\Support\SafePath::publicPath((string) $row->stored_path);
         if (!is_file($fullPath)) {
             return $this->apiError('File not found on disk.', null, 404);
         }

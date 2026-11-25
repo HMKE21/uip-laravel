@@ -320,7 +320,7 @@ class ProjectPublishingService
      */
     private function probeVideo(string $relativeStoredPath): array
     {
-        $absolutePath = public_path(ltrim($relativeStoredPath, '/'));
+        $absolutePath = \App\Support\SafePath::publicPath($relativeStoredPath);
         $relativeDir = trim(dirname($relativeStoredPath), '/');
 
         return [

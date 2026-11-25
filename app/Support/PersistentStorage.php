@@ -203,7 +203,7 @@ final class PersistentStorage
             if (@rename($src, $dst)) {
                 continue;
             }
-            if (@copy($src, $dst) && @unlink($src)) {
+            if (@copy($src, $dst) && \App\Support\SafePath::delete($src)) {
                 continue;
             }
             $ok = false;

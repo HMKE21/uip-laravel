@@ -143,7 +143,11 @@ class UipJwtService
             return null;
         }
         $jwt = openssl_decrypt(substr($raw, 28), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr($raw, 0, 12), substr($raw, 12, 16), $aad);
-        return $jwt === false ? null : $jwt;
+        if ($jwt === false || !is_string($jwt)) { // tag/AAD غلط أو بيانات متعدّل عليها
+            return null;
+        }
+
+        return $jwt;
     }
 
     /** @return array<string,mixed>|null null لو التوكن باظ أو الصلاحية خلصت أو التوقيع غلط. */

@@ -72,7 +72,7 @@ class MeetingsRecordingsApiController extends Controller
             abort(404);
         }
 
-        $full = public_path(ltrim($recording->stored_path, '/'));
+        $full = \App\Support\SafePath::publicPath($recording->stored_path);
         if (!is_file($full)) {
             abort(404);
         }

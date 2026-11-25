@@ -352,7 +352,7 @@ class PostMediaService
                     $thumb = $rel;
                 }
             }
-            @unlink($prefix . '.jpg');
+            \App\Support\SafePath::delete($prefix . '.jpg');
         }
         return [$pages, $thumb];
     }
@@ -408,7 +408,7 @@ class PostMediaService
                     }
                 }
                 foreach (glob($tmp . '/*') ?: [] as $f) {
-                    @unlink($f);
+                    \App\Support\SafePath::delete($f);
                 }
                 @rmdir($tmp);
             } catch (\Throwable $e) {

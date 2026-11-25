@@ -400,7 +400,7 @@ class AdminAiCodeReviewExportController extends Controller
         );
 
         $content = file_get_contents($path);
-        @unlink($path);
+        \App\Support\SafePath::delete($path);
 
         return response($content, 200, [
             'Content-Type'        => $contentType,

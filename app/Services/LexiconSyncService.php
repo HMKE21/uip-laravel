@@ -329,7 +329,7 @@ class LexiconSyncService
     private function rmdir(string $dir): void
     {
         foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST) as $f) {
-            $f->isDir() ? @rmdir($f->getPathname()) : @unlink($f->getPathname());
+            $f->isDir() ? @rmdir($f->getPathname()) : \App\Support\SafePath::delete($f->getPathname());
         }
         @rmdir($dir);
     }

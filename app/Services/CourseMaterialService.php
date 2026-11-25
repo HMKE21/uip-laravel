@@ -273,7 +273,7 @@ class CourseMaterialService
         $root = realpath(public_path((string) config('upload.paths.course_materials', 'uploads/course-materials')));
         $real = is_file($full) ? realpath($full) : false;
         if ($real && $root && str_starts_with($real, $root . DIRECTORY_SEPARATOR)) {
-            @unlink($real);
+            \App\Support\SafePath::delete($real);
         }
     }
 

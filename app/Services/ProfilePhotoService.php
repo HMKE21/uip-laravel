@@ -38,7 +38,7 @@ class ProfilePhotoService
     /** يحمي صورة قديمة (full-size public): ينقلها خاص ويستبدل العام بمصغّرة. @return ?string المسار الجديد لـ avatar_path */
     public function protectExisting(int $userId, string $publicRel): ?string
     {
-        $src = public_path(ltrim($publicRel, '/'));
+        $src = \App\Support\SafePath::publicPath($publicRel);
         if (!is_file($src)) {
             UploadMirror::restore(ltrim($publicRel, '/'), $src);
         }

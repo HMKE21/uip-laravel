@@ -384,15 +384,18 @@ class GoogleAuthController extends Controller
     {
         $tmp = null;
         try {
-            $parts = $url ? parse_url($url) : null;
-            // لينك صورة جوجل (*.googleusercontent.com) أو GitHub (avatars.githubusercontent.com) بس، https — يمنع SSRF لأي عنوان تاني.
-            if (!$parts || ($parts['scheme'] ?? '') !== 'https' || !preg_match('/^(([a-z0-9-]+\.)*googleusercontent\.com|avatars\.githubusercontent\.com)$/i', $parts['host'] ?? '')) {
+            // لينك صورة جوجل (*.googleusercontent.com) أو GitHub (avatars.githubusercontent.com) بس — SafeUrl بيتحقق من الـ host بالظبط،
+            // وبيحل الـ DNS ويرفض أي IP داخلي/خاص، وبيثبّت الـ IP في cURL، ومفيش redirects. يمنع SSRF لأي عنوان تاني.
+            $url = (string) $url;
+            if (preg_match('#^https://[^/?\#]*googleusercontent\.com(?::443)?/#i', $url) === 1) {
+                $url = (string) preg_replace('/=s\d+(-c)?$/', '=s400-c', $url);
+            }
+            $safe = \App\Support\SafeUrl::check($url, ['.googleusercontent.com', 'avatars.githubusercontent.com']);
+            if ($safe === null) {
                 return;
             }
-            if (str_contains((string) $parts['host'], 'googleusercontent.com') && !str_contains($parts['host'], 'githubusercontent')) {
-                $url = preg_replace('/=s\d+(-c)?$/', '=s400-c', $url);
-            }
-            $res = Http::timeout(8)->withOptions(['allow_redirects' => false])->get($url);
+            // nosemgrep: laravel-http-client-ssrf -- الـ URL اتفحص بـ SafeUrl::check (allowlist + IP عام + pinned IP + من غير redirects)
+            $res = Http::timeout(8)->withOptions($safe['options'])->get($safe['url']);
             $body = $res->successful() ? $res->body() : '';
             if ($body === '' || strlen($body) > 2 * 1024 * 1024) {
                 return;
@@ -411,7 +414,7 @@ class GoogleAuthController extends Controller
             Log::info('Google avatar import skipped', ['user_id' => $user->id, 'error' => $e->getMessage()]);
         } finally {
             if ($tmp && is_file($tmp)) {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
             }
         }
     }

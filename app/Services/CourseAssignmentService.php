@@ -96,7 +96,7 @@ class CourseAssignmentService
         $root = realpath(public_path((string) config("upload.paths.{$category}", 'uploads/' . $category)));
         $real = is_file($full) ? realpath($full) : false;
         if ($real && $root && str_starts_with($real, $root . DIRECTORY_SEPARATOR)) {
-            @unlink($real);
+            \App\Support\SafePath::delete($real);
         }
     }
 

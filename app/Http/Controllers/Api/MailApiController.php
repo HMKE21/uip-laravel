@@ -214,7 +214,7 @@ class MailApiController extends Controller
             $a = $this->accountOf($r);
             $att = $this->mail->attachmentForDownload($a, $id);
             $disk = Storage::disk($att->disk);
-            if (!$disk->exists($att->path)) {
+            if (\App\Support\SafePath::clean((string) $att->path) === null || !$disk->exists($att->path)) {
                 return $this->apiError('File is missing.', null, 404);
             }
             return $disk->download($att->path, $att->name, ['X-Content-Type-Options' => 'nosniff', 'Content-Type' => 'application/octet-stream']);

@@ -249,7 +249,7 @@ class FormFileService
         }
         $zip->close();
         if ($count === 0) {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
             return null;
         }
         return $tmp;

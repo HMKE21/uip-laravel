@@ -124,7 +124,7 @@ class CodeReviewReportApiController extends Controller
                     break;
             }
         } catch (\RuntimeException $e) {
-            @unlink($path);
+            \App\Support\SafePath::delete($path);
             return $this->apiError($e->getMessage(), null, 422);
         }
 
@@ -139,7 +139,7 @@ class CodeReviewReportApiController extends Controller
         );
 
         $content = file_get_contents($path);
-        @unlink($path);
+        \App\Support\SafePath::delete($path);
 
         return response($content, 200, [
             'Content-Type'        => $contentType,

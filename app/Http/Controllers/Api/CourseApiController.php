@@ -278,7 +278,7 @@ class CourseApiController extends Controller
             return $this->denied();
         }
         $a = $this->requests->attachmentFor($scope, $rid);
-        $full = $a ? public_path(ltrim($a['path'], '/')) : null;
+        $full = $a ? \App\Support\SafePath::publicPath($a['path']) : null;
         if (!$a || !is_file($full)) {
             return $this->apiError('File not found.', null, 404);
         }

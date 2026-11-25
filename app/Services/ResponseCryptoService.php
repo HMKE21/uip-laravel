@@ -164,7 +164,7 @@ class ResponseCryptoService
         $ct  = substr($raw, 12, -16);
 
         $plain = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, "uip-req|$kid|" . strtoupper($method) . '|' . $path);
-        if ($plain === false) {
+        if ($plain === false || !is_string($plain)) {
             return null;
         }
         $wrap = json_decode($plain, true);
@@ -213,9 +213,11 @@ class ResponseCryptoService
         $ct  = substr($raw, 12, -16);
         foreach ($status ? [$status] : [200, 201, 202, 204, 400, 401, 403, 404, 405, 409, 410, 413, 422, 423, 428, 429, 500, 502, 503] as $s) {
             $plain = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, "uip-resp|$kid|$s");
-            if ($plain !== false) {
-                return ['status' => $s, 'plain' => $plain];
+            if ($plain === false || !is_string($plain)) { // فشل التحقق من الـ tag / الـ AAD (status غلط) => جرّب اللي بعده
+                continue;
             }
+
+            return ['status' => $s, 'plain' => $plain];
         }
 
         return null;

@@ -647,7 +647,7 @@ class MessagingController extends Controller
     public function stickerFile(Request $request, $id)
     {
         $src = $this->messaging->stickerForServing($this->uid($request), (int) $id);
-        if (!$src) {
+        if (!$src || !\App\Support\SafePath::within((string) $src['path'])) {
             return $this->apiError('Sticker not found.', null, 404);
         }
         return response()->file($src['path'], [
@@ -815,7 +815,7 @@ class MessagingController extends Controller
             return $this->apiError('Attachment not found.', null, 404);
         }
         $path = \App\Services\FileUploadService::absolutePath($rel);
-        if (!is_file($path)) {
+        if (!\App\Support\SafePath::within($path) || !is_file($path)) {
             return $this->apiError('File not found on server.', null, 404);
         }
 

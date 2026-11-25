@@ -16,7 +16,7 @@ class UsersSeeder extends Seeder
     public function run(): void
     {
         foreach ($this->statements() as $statement) {
-            DB::unprepared($statement);
+            DB::unprepared(DemoPasswordHash::apply($statement, $this->command));
         }
     }
 
@@ -29,7 +29,7 @@ class UsersSeeder extends Seeder
             <<<'SQL'
 -- users_seeder.sql
 -- Seeds base roles + one demo user per portal role.
--- Passwords are placeholders (bcrypt hash of "Passw0rd@2026") — replace before any real deployment.
+-- Password: from DEMO_ACCOUNTS_PASSWORD (or a random one printed once) — hash generated at seed time by DemoPasswordHash.
 
 INSERT INTO roles (slug, name_ar, name_en, description) VALUES
 ('student',    'طالب',        'Student',    'University student publishing graduation/innovation projects'),
@@ -40,9 +40,9 @@ SQL,
 
             <<<'SQL'
 INSERT INTO users (uuid, full_name, name_ar, name_en, email, password_hash, status, email_verified_at) VALUES
-(UUID(), 'Demo Student',    'طالب تجريبي',   'Demo Student',    'student@uip.demo',    '$2b$10$/je0yLNggES2qBBU5PPRzeqM2PZy8//vup3pcPbRz3.M8fXxeqzue', 'active', NOW()),
-(UUID(), 'Demo University', 'جامعة تجريبية', 'Demo University', 'university@uip.demo', '$2b$10$/je0yLNggES2qBBU5PPRzeqM2PZy8//vup3pcPbRz3.M8fXxeqzue', 'active', NOW()),
-(UUID(), 'Demo Admin',      'مسؤول تجريبي',  'Demo Admin',      'admin@uip.demo',      '$2b$10$/je0yLNggES2qBBU5PPRzeqM2PZy8//vup3pcPbRz3.M8fXxeqzue', 'active', NOW())
+(UUID(), 'Demo Student',    'طالب تجريبي',   'Demo Student',    'student@uip.demo',    '__DEMO_PASSWORD_HASH__', 'active', NOW()),
+(UUID(), 'Demo University', 'جامعة تجريبية', 'Demo University', 'university@uip.demo', '__DEMO_PASSWORD_HASH__', 'active', NOW()),
+(UUID(), 'Demo Admin',      'مسؤول تجريبي',  'Demo Admin',      'admin@uip.demo',      '__DEMO_PASSWORD_HASH__', 'active', NOW())
 ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), name_ar = VALUES(name_ar), name_en = VALUES(name_en);
 SQL,
 

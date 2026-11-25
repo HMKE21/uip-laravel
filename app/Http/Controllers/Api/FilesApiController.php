@@ -92,7 +92,7 @@ class FilesApiController extends Controller
             return $this->apiError('File not found.', null, 404);
         }
 
-        $path = public_path($file->stored_path);
+        $path = \App\Support\SafePath::publicPath($file->stored_path);
         if (!is_file($path)) {
             return $this->apiError('File no longer exists.', null, 404);
         }

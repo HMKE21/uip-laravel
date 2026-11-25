@@ -239,7 +239,7 @@ class TenantProvisioner
     private function dropDatabase(string $db): void
     {
         if ($this->driver() === 'sqlite') {
-            @unlink($db);
+            \App\Support\SafePath::delete($db);
             return;
         }
         if (preg_match('/^[a-z0-9_]{1,64}$/', $db)) {

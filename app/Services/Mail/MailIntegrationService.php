@@ -213,7 +213,7 @@ class MailIntegrationService
             $file = new UploadedFile($tmp, $name, $mime, null, true);
             return $drive->upload($uid, $parentId, $file);
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
     }
 

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\Cmd;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Log;
 
@@ -78,18 +79,18 @@ class AudioDenoiseService
         if ($out === false) {
             return false;
         }
-        @unlink($out);
+        \App\Support\SafePath::delete($out);
         $out .= '.' . $ext;
 
         $ok = $this->run($in, $out, $ext, true);
         if ($ok && $this->modelPath() !== null && $this->lostTooMuch($in, $out)) {
             // موديل RNNoise متدرّب على الكلام: على موسيقى / أصوات مش كلام بيمسحها. لو الصوت وقع أكتر من 6dB
             // نرجع لفلتر الضوضاء الثابتة (afftdn) اللي بيسيب الموسيقى سليمة.
-            @unlink($out);
+            \App\Support\SafePath::delete($out);
             $ok = $this->run($in, $out, $ext, false);
         } elseif (!$ok && $this->modelPath() !== null) {
             // arnndn ممكن يكون مش متضمّن في build الـ ffmpeg أو الموديل مش شغال → نجرب فلتر afftdn العادي قبل ما نستسلم.
-            @unlink($out);
+            \App\Support\SafePath::delete($out);
             $ok = $this->run($in, $out, $ext, false);
         }
         if (!$ok && $this->lastReason === null) {
@@ -99,7 +100,7 @@ class AudioDenoiseService
             // copy() مش rename(): مسار الـ tmp ممكن يكون على filesystem تاني.
             $ok = @copy($out, $in);
         }
-        @unlink($out);
+        \App\Support\SafePath::delete($out);
         return $ok;
     }
 
@@ -127,45 +128,20 @@ class AudioDenoiseService
         }
         $cmd[] = $out;
 
-        $log = tempnam(sys_get_temp_dir(), 'dnlog_');
-        $proc = @proc_open(
-            $cmd,
-            [0 => ['pipe', 'r'], 1 => ['file', $log, 'w'], 2 => ['file', $log, 'w']],
-            $pipes,
-            $model ? dirname($model) : null // arnndn بياخد اسم الملف نسبي → من غير مشاكل escape لمسارات Windows (C:\…)
-        );
-        if (!is_resource($proc)) {
-            @unlink($log);
-            return false;
-        }
-        fclose($pipes[0]);
-
-        $deadline = microtime(true) + max(5, $this->timeout());
-        do {
-            $status = proc_get_status($proc);
-            if (!$status['running']) {
-                break;
-            }
-            usleep(100_000);
-        } while (microtime(true) < $deadline);
-
-        if ($status['running']) {
-            proc_terminate($proc, 9);
-            proc_close($proc);
+        // من غير shell: Cmd::run بيمرّر الـ argv كمصفوفة، والـ timeout جوه الـ Process.
+        $res = Cmd::run($cmd, max(5, $this->timeout()), true, $model ? dirname($model) : null);
+        $exit = $res['code'];
+        if ($res['timeout']) {
             $this->lastReason = 'timeout';
             Log::warning('Noise reduction timed out', ['file' => basename($in)]);
-            @unlink($log);
             return false;
         }
-        $exit = $status['exitcode'];
-        proc_close($proc);
 
-        $good = ($exit === 0 || $exit === -1) && is_file($out) && filesize($out) > 0;
+        $good = $exit === 0 && is_file($out) && filesize($out) > 0;
         if (!$good) {
-            Log::warning('ffmpeg noise reduction failed', ['file' => basename($in), 'exit' => $exit, 'log' => mb_substr((string) @file_get_contents($log), -600)]);
+            Log::warning('ffmpeg noise reduction failed', ['file' => basename($in), 'exit' => $exit, 'log' => mb_substr($res['out'], -600)]);
         }
-        @unlink($log);
-        return $good && $exit === 0;
+        return $good;
     }
 
     /** هل الصوت بعد المعالجة أقل من الأصلي بأكتر من 6dB؟ (علامة إن الموديل مسح موسيقى / صوت مش كلام). */
@@ -178,10 +154,8 @@ class AudioDenoiseService
 
     private function meanVolume(string $path): ?float
     {
-        $cmd = escapeshellarg($this->ffmpegBinary()) . ' -nostdin -v info -t 90 -i ' . escapeshellarg($path)
-            . ' -vn -map 0:a:0 -af volumedetect -f null - 2>&1';
-        @exec($cmd, $lines, $code);
-        foreach ((array) $lines as $line) {
+        $res = Cmd::run([$this->ffmpegBinary(), '-nostdin', '-v', 'info', '-t', '90', '-i', $path, '-vn', '-map', '0:a:0', '-af', 'volumedetect', '-f', 'null', '-'], 120, true);
+        foreach ($res['lines'] as $line) {
             if (preg_match('/mean_volume:\s*(-?[0-9.]+)\s*dB/', (string) $line, $m)) {
                 return (float) $m[1];
             }
@@ -191,14 +165,7 @@ class AudioDenoiseService
 
     private function commandExists(string $binary): bool
     {
-        if (!function_exists('exec')) {
-            return false;
-        }
-        $check = DIRECTORY_SEPARATOR === '\\'
-            ? 'where ' . escapeshellarg($binary) . ' 2>NUL'
-            : 'command -v ' . escapeshellarg($binary) . ' 2>/dev/null';
-        @exec($check, $output, $code);
-        return $code === 0 && !empty($output);
+        return Cmd::exists($binary);
     }
 
     private function ffmpegBinary(): string

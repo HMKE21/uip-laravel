@@ -487,9 +487,9 @@ class DataAnalysisExportsApiController extends Controller
         if (!$relativePath) {
             return;
         }
-        $fullPath = public_path($relativePath);
+        $fullPath = \App\Support\SafePath::publicPath($relativePath);
         if (is_file($fullPath)) {
-            @unlink($fullPath);
+            \App\Support\SafePath::delete($fullPath);
         }
     }
 

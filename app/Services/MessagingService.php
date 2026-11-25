@@ -1699,7 +1699,7 @@ class MessagingService
         try {
             $saved = $this->createSticker($userId, new UploadedFile($tmp, $name, $ext === 'gif' ? 'image/gif' : 'image/webp', null, true), $title);
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
 
         return $saved + ['already' => false];
@@ -1717,7 +1717,7 @@ class MessagingService
         $this->pruneEmptyStickerPacks($userId, $packIds); // أي باك فضيت بعد حذف الستيكر بتتمسح تلقائي
         $abs = FileUploadService::absolutePath((string) $row->stored_path);
         if (is_file($abs)) {
-            @unlink($abs);
+            \App\Support\SafePath::delete($abs);
         }
     }
 
@@ -1779,7 +1779,7 @@ class MessagingService
             ]);
         } finally {
             if ($tmp && is_file($tmp)) {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
             }
         }
 
@@ -2041,7 +2041,7 @@ class MessagingService
             $created = $this->createSticker($userId, $upload, null);
         } finally {
             if ($tmp && is_file($tmp)) {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
             }
         }
         DB::table('user_stickers')->where('id', (int) $created['id'])->update(['source_attachment_id' => $attachmentId]);
@@ -2223,7 +2223,7 @@ class MessagingService
         } finally {
             foreach ($tmps as $t) {
                 if ($t && is_file($t)) {
-                    @unlink($t);
+                    \App\Support\SafePath::delete($t);
                 }
             }
         }

@@ -75,7 +75,7 @@ class ExamExportsApiController extends ExamResultsHubApiController
         try {
             $this->writeExportFile($format, $path, $title, $meta, $sections);
         } catch (\Throwable $e) {
-            @unlink($path);
+            \App\Support\SafePath::delete($path);
             return $this->apiError($e->getMessage(), null, 422);
         }
 
@@ -145,7 +145,7 @@ class ExamExportsApiController extends ExamResultsHubApiController
         if ($err) {
             return $err;
         }
-        @unlink(storage_path('app/' . $row->file_path));
+        \App\Support\SafePath::delete(\App\Support\SafePath::storageAppPath($row->file_path));
         DB::table('exam_exports')->where('id', $row->id)->delete();
 
         return $this->apiSuccess(null, 'Export deleted.');
@@ -173,7 +173,7 @@ class ExamExportsApiController extends ExamResultsHubApiController
 
         $rows = $query->get(['id', 'file_path']);
         foreach ($rows as $r) {
-            @unlink(storage_path('app/' . $r->file_path));
+            \App\Support\SafePath::delete(\App\Support\SafePath::storageAppPath($r->file_path));
         }
         $deleted = $rows->isEmpty() ? 0 : DB::table('exam_exports')
             ->where('academic_staff_id', $staffId)->whereIn('id', $rows->pluck('id')->all())->delete();
@@ -203,7 +203,7 @@ class ExamExportsApiController extends ExamResultsHubApiController
         $old = DB::table('exam_exports')->where('academic_staff_id', $staffId)
             ->orderByDesc('id')->skip(self::KEEP_LAST)->take(500)->get(['id', 'file_path']);
         foreach ($old as $o) {
-            @unlink(storage_path('app/' . $o->file_path));
+            \App\Support\SafePath::delete(\App\Support\SafePath::storageAppPath($o->file_path));
             DB::table('exam_exports')->where('id', $o->id)->delete();
         }
     }

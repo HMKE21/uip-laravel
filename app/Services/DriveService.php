@@ -354,7 +354,7 @@ class DriveService
             file_put_contents($tmp, $content);
             return $this->putLocalFile($uid, $parent?->id, $name, $tmp);
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
     }
 
@@ -453,7 +453,7 @@ class DriveService
             file_put_contents($tmp, $content);
             return $this->replaceBlob($uid, $n, $tmp, $n->mime_type);
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
     }
 
@@ -1496,7 +1496,7 @@ class DriveService
 
         $tmpBase = tempnam(sys_get_temp_dir(), 'drz');
         $tmpZip = $tmpBase . '.zip';
-        @unlink($tmpBase); // tempnam() بتنشئ ملف فاضي — محتاجين بس الاسم الفريد
+        \App\Support\SafePath::delete($tmpBase); // tempnam() بتنشئ ملف فاضي — محتاجين بس الاسم الفريد
         $temps = [];
         if ($entries === []) {
             // مجلد فاضي (أو اتفتح كـ root): ZipArchive ما بيكتبش ملف لأرشيف من غير عناصر فكان الـ download بيرمي 500.
@@ -1524,12 +1524,12 @@ class DriveService
                 throw new DriveException('Could not create the archive.', 500);
             }
         } catch (\Throwable $e) {
-            @unlink($tmpZip);
+            \App\Support\SafePath::delete($tmpZip);
             throw $e;
         } finally {
             // ZipArchive بيقرا الملفات وقت close() — فمسح الـ temps بعده بس.
             foreach ($temps as $t) {
-                @unlink($t);
+                \App\Support\SafePath::delete($t);
             }
         }
         $label = count($nodes) === 1 ? $nodes[0]->name : 'Archive';
@@ -1549,7 +1549,7 @@ class DriveService
             $final = $this->freeName($uid, $parent?->id, $final);
             return $this->putLocalFile($uid, $parent?->id, $final, $tmp, 'application/zip');
         } finally {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
         }
     }
 
@@ -1568,7 +1568,7 @@ class DriveService
         $zip = new ZipArchive();
         if ($zip->open($local) !== true) {
             foreach ($temps as $t) {
-                @unlink($t);
+                \App\Support\SafePath::delete($t);
             }
             throw new DriveException('The ZIP file is corrupted.', 422);
         }
@@ -1589,7 +1589,7 @@ class DriveService
         } finally {
             $zip->close();
             foreach ($temps as $t) {
-                @unlink($t);
+                \App\Support\SafePath::delete($t);
             }
         }
     }
@@ -1615,7 +1615,7 @@ class DriveService
                 $node = $this->putLocalFile($uid, $dir, $name, $tmp);
                 $written[] = (string) $node->storage_path;
             } finally {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
             }
         }
     }
@@ -1707,7 +1707,7 @@ class DriveService
                             $stats['added']++;
                         }
                     } finally {
-                        @unlink($tmp);
+                        \App\Support\SafePath::delete($tmp);
                     }
                 }
                 // اللي اتشال من الـ zip => السلة (الجذور بس؛ الأحفاد بتتبعها)

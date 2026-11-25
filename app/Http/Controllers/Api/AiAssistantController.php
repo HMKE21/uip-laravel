@@ -181,7 +181,7 @@ class AiAssistantController extends Controller
 
             $stored = $this->uploads->store($request->file('file'), 'ai_assistant', 'conv_' . $conversationId);
             $extension = strtolower($stored['extension']);
-            $absolutePath = public_path($stored['stored_path']);
+            $absolutePath = \App\Support\SafePath::publicPath($stored['stored_path']);
 
             $extractedText = null;
             if (\App\Services\Ai\AttachmentReader::isTextExt($extension) && is_file($absolutePath) && filesize($absolutePath) < 2_000_000) {
@@ -232,7 +232,7 @@ class AiAssistantController extends Controller
             return $this->apiError('Attachment not found.', null, 404);
         }
 
-        $path = public_path($attachment->stored_path);
+        $path = \App\Support\SafePath::publicPath($attachment->stored_path);
         if (!is_file($path)) {
             return $this->apiError('File no longer exists.', null, 404);
         }
@@ -292,7 +292,7 @@ class AiAssistantController extends Controller
             if ($newExt !== $oldExt) {
                 $storedPath = $dirRel . '/' . bin2hex(random_bytes(16)) . '.' . $newExt;
             }
-            $absolute = public_path($storedPath);
+            $absolute = \App\Support\SafePath::publicPath($storedPath);
             $root = realpath(public_path());
             $dirAbs = dirname($absolute);
             if (!is_dir($dirAbs)) {
@@ -312,9 +312,9 @@ class AiAssistantController extends Controller
             }
             \App\Support\UploadMirror::push($storedPath, $absolute);
             if ($storedPath !== $att->stored_path) {
-                $old = public_path((string) $att->stored_path);
+                $old = \App\Support\SafePath::publicPath((string) $att->stored_path);
                 if (is_file($old)) {
-                    @unlink($old);
+                    \App\Support\SafePath::delete($old);
                 }
             }
 

@@ -132,7 +132,7 @@ class UploadMirror
             fclose($in);
             fclose($out);
             if (!@rename($tmp, $localPath)) {
-                @unlink($tmp);
+                \App\Support\SafePath::delete($tmp);
                 return is_file($localPath);
             }
             return true;
@@ -165,7 +165,7 @@ class UploadMirror
                 return $private;
             }
         }
-        $public = public_path($rel);
+        $public = \App\Support\SafePath::publicPath($rel);
         return is_file($public) ? $public : null;
     }
 }

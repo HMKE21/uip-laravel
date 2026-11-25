@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\Cmd;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -27,14 +28,13 @@ class MediaProbeService
             return null;
         }
 
-        $command = sprintf(
-            'timeout %d %s -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 %s 2>&1',
+        $res = Cmd::run(
+            [$this->ffprobeBinary(), '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', $absolutePath],
             max(1, $this->timeout()),
-            escapeshellcmd($this->ffprobeBinary()),
-            escapeshellarg($absolutePath)
+            true
         );
-
-        exec($command, $output, $exitCode);
+        $output = $res['lines'];
+        $exitCode = $res['code'];
         $raw = trim(implode('', $output));
 
         if ($exitCode !== 0 || $raw === '' || !is_numeric($raw)) {
@@ -66,21 +66,19 @@ class MediaProbeService
         }
 
         $tmp = $absolutePath . '.fix.' . $ext;
-        $command = sprintf(
-            'timeout %d %s -v error -y -i %s -vn -c:a copy -f %s %s 2>&1',
+        $res = Cmd::run(
+            [$this->ffmpegBinary(), '-v', 'error', '-y', '-i', $absolutePath, '-vn', '-c:a', 'copy', '-f', $format, $tmp],
             max(1, $this->timeout()),
-            escapeshellcmd($this->ffmpegBinary()),
-            escapeshellarg($absolutePath),
-            $format,
-            escapeshellarg($tmp)
+            true
         );
-        exec($command, $output, $exitCode);
+        $output = $res['lines'];
+        $exitCode = $res['code'];
 
         if ($exitCode === 0 && is_file($tmp) && filesize($tmp) > 0 && $this->duration($tmp) !== null) {
             @rename($tmp, $absolutePath);
             clearstatcache(true, $absolutePath);
         } else {
-            @unlink($tmp);
+            \App\Support\SafePath::delete($tmp);
             Log::warning('ffmpeg audio remux failed for attachment', ['file' => basename($absolutePath), 'output' => implode(' | ', $output)]);
         }
 
@@ -124,23 +122,18 @@ class MediaProbeService
 
     private function extractFrame(string $absoluteVideoPath, string $targetPath, string $seekTo): bool
     {
-        @unlink($targetPath);
+        \App\Support\SafePath::delete($targetPath);
 
         $maxWidth = $this->thumbnailMaxWidth();
-        $command = sprintf(
-            'timeout %d %s -y -ss %s -i %s -frames:v 1 -vf %s -q:v 4 %s 2>&1',
+        $res = Cmd::run(
+            [$this->ffmpegBinary(), '-y', '-ss', $seekTo, '-i', $absoluteVideoPath, '-frames:v', '1', '-vf', "scale='min({$maxWidth},iw)':-2", '-q:v', '4', $targetPath],
             max(1, $this->timeout()),
-            escapeshellcmd($this->ffmpegBinary()),
-            escapeshellarg($seekTo),
-            escapeshellarg($absoluteVideoPath),
-            escapeshellarg("scale='min({$maxWidth},iw)':-2"),
-            escapeshellarg($targetPath)
+            true
         );
-
-        exec($command, $output, $exitCode);
+        $exitCode = $res['code'];
 
         if ($exitCode !== 0 || !is_file($targetPath) || filesize($targetPath) === 0) {
-            @unlink($targetPath);
+            \App\Support\SafePath::delete($targetPath);
             return false;
         }
 
@@ -149,14 +142,7 @@ class MediaProbeService
 
     private function commandExists(string $binary): bool
     {
-        if (!function_exists('exec')) {
-            return false;
-        }
-        $checkCmd = DIRECTORY_SEPARATOR === '\\'
-            ? 'where ' . escapeshellarg($binary) . ' 2>NUL'
-            : 'command -v ' . escapeshellarg($binary) . ' 2>/dev/null';
-        @exec($checkCmd, $output, $exitCode);
-        return $exitCode === 0 && !empty($output);
+        return Cmd::exists($binary);
     }
 
     private function ffmpegBinary(): string

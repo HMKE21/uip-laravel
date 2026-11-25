@@ -362,6 +362,9 @@ class AdminDriveControlApiController extends Controller
             return $this->fail($e);
         }
         $this->log($request, 'archive_downloaded', $id, null, ['ids' => $ids ?: 'all', 'name' => $name]);
+        if (!\App\Support\SafePath::within((string) $tmp) || !is_file($tmp)) {
+            return $this->apiError('Archive not available.', null, 404);
+        }
 
         return response()->download($tmp, $name, [
             'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',

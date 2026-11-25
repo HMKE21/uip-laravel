@@ -662,7 +662,7 @@ class GeneratedFileBuilder
         }
         $zip->close();
         $bytes = (string) file_get_contents($tmp);
-        @unlink($tmp);
+        \App\Support\SafePath::delete($tmp);
         return $bytes;
     }
 }

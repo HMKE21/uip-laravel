@@ -176,7 +176,7 @@ class AIAnalysisReportService
             }
             $content = (string) file_get_contents($path);
         } finally {
-            @unlink($path);
+            \App\Support\SafePath::delete($path);
         }
         return [$content, $mime, $name];
     }

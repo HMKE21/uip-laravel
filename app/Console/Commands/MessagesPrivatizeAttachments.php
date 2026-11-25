@@ -71,11 +71,11 @@ class MessagesPrivatizeAttachments extends Command
                 continue;
             }
             if (@copy($file->getPathname(), $target) && @filesize($target) === $size) {
-                @unlink($file->getPathname());
+                \App\Support\SafePath::delete($file->getPathname());
                 $moved++;
                 $bytes += $size;
             } else {
-                @unlink($target);
+                \App\Support\SafePath::delete($target);
                 $this->warn("Failed to move {$rel}");
                 $failed++;
             }

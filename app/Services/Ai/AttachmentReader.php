@@ -127,7 +127,7 @@ class AttachmentReader
                     if ($tmp !== false) {
                         @file_put_contents($tmp, $raw);
                         $text = self::extractText($tmp, $ext);
-                        @unlink($tmp);
+                        \App\Support\SafePath::delete($tmp);
                     }
                 }
             }
@@ -144,31 +144,17 @@ class AttachmentReader
         return $head . ($bodies ? "\n\nText content of readable files:\n\n" . implode("\n\n", $bodies) : '');
     }
 
-    private static function shellOk(): bool
-    {
-        if (!function_exists('shell_exec')) {
-            return false;
-        }
-        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
-        return !in_array('shell_exec', $disabled, true);
-    }
-
     private static function hasBinary(string $bin): bool
     {
-        if (!self::shellOk()) {
-            return false;
-        }
-        $out = @shell_exec('command -v ' . escapeshellarg($bin) . ' 2>/dev/null');
-        return is_string($out) && trim($out) !== '';
+        return \App\Support\Cmd::exists($bin);
     }
 
     private static function pdfText(string $path): ?string
     {
         if (self::hasBinary('pdftotext')) {
-            $cmd = 'timeout 20 pdftotext -layout -enc UTF-8 -l 60 ' . escapeshellarg($path) . ' - 2>/dev/null';
-            $out = @shell_exec($cmd);
-            if (is_string($out) && trim($out) !== '') {
-                return $out;
+            $r = \App\Support\Cmd::run(['pdftotext', '-layout', '-enc', 'UTF-8', '-l', '60', $path, '-'], 20);
+            if ($r['code'] === 0 && trim($r['out']) !== '') {
+                return $r['out'];
             }
         }
         if (class_exists('\Smalot\PdfParser\Parser')) {
@@ -337,7 +323,7 @@ class AttachmentReader
         }
         $out = [];
         try {
-            @shell_exec('timeout 30 pdftoppm -jpeg -r 90 -f 1 -l ' . max(1, min(4, $pages)) . ' ' . escapeshellarg($path) . ' ' . escapeshellarg($dir . '/p') . ' 2>/dev/null');
+            \App\Support\Cmd::run(['pdftoppm', '-jpeg', '-r', '90', '-f', '1', '-l', (string) max(1, min(4, $pages)), $path, $dir . '/p'], 30);
             $files = glob($dir . '/p*.jpg') ?: [];
             sort($files);
             foreach ($files as $f) {
@@ -348,7 +334,7 @@ class AttachmentReader
             }
         } finally {
             foreach (glob($dir . '/*') ?: [] as $f) {
-                @unlink($f);
+                \App\Support\SafePath::delete($f);
             }
             @rmdir($dir);
         }

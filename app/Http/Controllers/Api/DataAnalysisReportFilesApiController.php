@@ -134,7 +134,7 @@ class DataAnalysisReportFilesApiController extends Controller
             return $this->apiError('File not found.', null, 404);
         }
 
-        $fullPath = public_path(ltrim((string) $row['storage_path'], '/'));
+        $fullPath = \App\Support\SafePath::publicPath((string) $row['storage_path']);
         if (!is_file($fullPath)) {
             return $this->apiError('File not found on disk.', null, 404);
         }
@@ -167,7 +167,7 @@ class DataAnalysisReportFilesApiController extends Controller
             return $this->apiError('Preview not available for this file.', null, 404);
         }
 
-        $fullPath = public_path(ltrim((string) $row['storage_path'], '/'));
+        $fullPath = \App\Support\SafePath::publicPath((string) $row['storage_path']);
         if (!is_file($fullPath)) {
             return $this->apiError('File not found on disk.', null, 404);
         }

@@ -1102,7 +1102,7 @@ SYS;
         foreach ($rows as $row) {
             $path = $this->attachmentPath((array) $row);
             if ($path !== null) {
-                @unlink($path);
+                \App\Support\SafePath::delete($path);
             }
         }
         if ($rows->isNotEmpty()) {
@@ -1170,7 +1170,7 @@ SYS;
     /** مسار الملف على القرص بس لو جوّه public_path (حماية من path traversal). */
     private function attachmentPath(array $att): ?string
     {
-        $path = public_path((string) $att['stored_path']);
+        $path = \App\Support\SafePath::publicPath((string) $att['stored_path']);
         $real = realpath($path);
         $root = realpath(public_path());
         return ($real !== false && $root !== false && str_starts_with($real, $root . DIRECTORY_SEPARATOR) && is_file($real)) ? $real : null;
