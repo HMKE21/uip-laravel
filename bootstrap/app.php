@@ -35,7 +35,7 @@ use Illuminate\Foundation\Configuration\Middleware;
         foreach (['packages', 'services'] as $name) {
             $file = $root . '/bootstrap/cache/' . $name . '.php';
             if (is_file($file) && strpos((string) @file_get_contents($file), $needle) !== false) {
-                @unlink($file);
+                (new \Illuminate\Filesystem\Filesystem())->delete($file);
             }
         }
     }

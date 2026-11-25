@@ -173,7 +173,7 @@ final class SafePath
             return false;
         }
 
-        return @unlink($path);
+        return (new \Illuminate\Filesystem\Filesystem())->delete($path);
     }
 
     private static function reject(string $op, string $path): void

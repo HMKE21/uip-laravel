@@ -122,9 +122,6 @@ class AdminRequestApiController extends Controller
         if (!$res['success']) {
             return $this->respond($res);
         }
-        if (!\App\Support\SafePath::within((string) $res['data']['path']) || !is_file($res['data']['path'])) {
-            return $this->denied();
-        }
-        return response()->download($res['data']['path'], basename((string) $res['data']['filename']), ['Content-Type' => 'application/pdf'])->deleteFileAfterSend(true);
+        return \App\Support\SafeFile::download((string) $res['data']['path'], basename((string) $res['data']['filename']), ['Content-Type' => 'application/pdf'], true);
     }
 }

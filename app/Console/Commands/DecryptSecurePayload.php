@@ -35,7 +35,7 @@ class DecryptSecurePayload extends Command
             $key = $keys['resp'];
         }
         $plain = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, $aad);
-        if ($plain === false || !is_string($plain)) {
+        if ($plain === false) {
             $this->error('Decryption failed (wrong aad/status/method/path or tampered data).');
             return self::FAILURE;
         }

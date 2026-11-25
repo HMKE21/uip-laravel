@@ -278,10 +278,10 @@ class CourseApiController extends Controller
             return $this->denied();
         }
         $a = $this->requests->attachmentFor($scope, $rid);
-        $full = $a ? \App\Support\SafePath::publicPath($a['path']) : null;
-        if (!$a || !is_file($full)) {
+        $full = $a ? \App\Support\SafeFile::resolve(\App\Support\SafePath::publicPath($a['path'])) : null;
+        if (!$a || $full === null) {
             return $this->apiError('File not found.', null, 404);
         }
-        return response()->download($full, basename($a['name']), ['Content-Type' => $a['mime'], 'X-Content-Type-Options' => 'nosniff']);
+        return \App\Support\SafeFile::download($full, basename($a['name']), ['Content-Type' => $a['mime'], 'X-Content-Type-Options' => 'nosniff']);
     }
 }

@@ -647,10 +647,10 @@ class MessagingController extends Controller
     public function stickerFile(Request $request, $id)
     {
         $src = $this->messaging->stickerForServing($this->uid($request), (int) $id);
-        if (!$src || !\App\Support\SafePath::within((string) $src['path'])) {
+        if (!$src) {
             return $this->apiError('Sticker not found.', null, 404);
         }
-        return response()->file($src['path'], [
+        return \App\Support\SafeFile::inline((string) $src['path'], [
             'Content-Type' => $src['mime'], 'Content-Disposition' => 'inline', 'X-Content-Type-Options' => 'nosniff',
             'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'",
             'Cache-Control' => 'private, max-age=86400',
@@ -741,8 +741,8 @@ class MessagingController extends Controller
         if (!$row) {
             return $this->apiError('Attachment not found.', null, 404);
         }
-        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
-        if (!is_file($path)) {
+        $path = \App\Support\SafeFile::resolve(\App\Services\FileUploadService::absolutePath((string) $row['stored_path']));
+        if ($path === null) {
             return $this->apiError('File not found on server.', null, 404);
         }
 
@@ -752,7 +752,7 @@ class MessagingController extends Controller
             return $blocked;
         }
 
-        return response()->download($path, $row['original_name'], ['X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store']);
+        return \App\Support\SafeFile::download($path, (string) $row['original_name'], ['X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store']);
     }
 
     /**
@@ -814,8 +814,8 @@ class MessagingController extends Controller
         if ($rel === '') {
             return $this->apiError('Attachment not found.', null, 404);
         }
-        $path = \App\Services\FileUploadService::absolutePath($rel);
-        if (!\App\Support\SafePath::within($path) || !is_file($path)) {
+        $path = \App\Support\SafeFile::resolve(\App\Services\FileUploadService::absolutePath($rel));
+        if ($path === null) {
             return $this->apiError('File not found on server.', null, 404);
         }
 
@@ -831,7 +831,7 @@ class MessagingController extends Controller
         $inline = $mime !== 'application/octet-stream' && !str_starts_with($mime, 'text/');
         $name = $variant === 'thumbnail' ? 'thumbnail.jpg' : (string) $row['original_name'];
 
-        return response()->file($path, [
+        return \App\Support\SafeFile::inline($path, [
             'Content-Type'            => $mime,
             'Content-Disposition'     => ($inline ? 'inline' : 'attachment') . "; filename*=UTF-8''" . rawurlencode($name),
             'X-Content-Type-Options'  => 'nosniff',
@@ -887,18 +887,18 @@ class MessagingController extends Controller
             return $this->apiError('This media was already opened and is no longer available.', ['consumed' => true], 410);
         }
         $row = $claim['row'];
-        $path = \App\Services\FileUploadService::absolutePath((string) $row['stored_path']);
-        if (!is_file($path)) {
+        $path = \App\Support\SafeFile::resolve(\App\Services\FileUploadService::absolutePath((string) $row['stored_path']));
+        if ($path === null) {
             return $this->apiError('This media is no longer available.', ['consumed' => true], 410);
         }
         $this->messaging->purgeViewOnceFiles(['thumbnail_path' => $row['thumbnail_path'] ?? null]);
-        return response()->download($path, 'view-once.' . ($row['extension'] ?: 'bin'), [
+        return \App\Support\SafeFile::download($path, 'view-once.' . preg_replace('/[^A-Za-z0-9]/', '', (string) ($row['extension'] ?: 'bin')), [
             'X-Content-Type-Options' => 'nosniff',
             'Cache-Control'          => 'no-store, private',
             'X-View-Seconds'         => (string) ((int) ($row['view_seconds'] ?? 0)),
             'X-View-Mode'            => (string) $row['view_mode'],
             'Content-Type'           => (string) ($row['mime_type'] ?: 'application/octet-stream'),
-        ])->deleteFileAfterSend(true);
+        ], true);
     }
 
     /** DELETE /api/v1/messaging/attachments/{id} */

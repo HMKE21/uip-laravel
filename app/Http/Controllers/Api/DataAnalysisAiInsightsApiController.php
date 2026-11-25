@@ -118,10 +118,10 @@ class DataAnalysisAiInsightsApiController extends Controller
         $stamp = date('Ymd-His', strtotime((string) ($report['created_at'] ?? 'now')) ?: time());
         $filename = 'ai-insights-' . (int) $report['id'] . '-' . $stamp . '.' . $format;
 
-        return response()->download($path, $filename, [
+        return \App\Support\SafeFile::download((string) $path, $filename, [
             'Content-Type'                  => AiInsightsReportExporter::FORMATS[$format],
             'Access-Control-Expose-Headers' => 'Content-Disposition',
-        ])->deleteFileAfterSend(true);
+        ], true);
     }
 
     /** DELETE /api/v1/data-analysis/ai-insights/{id} — يمسح تشغيلة واحدة من سجل التوليد. */

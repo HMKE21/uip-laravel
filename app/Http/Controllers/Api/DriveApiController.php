@@ -473,9 +473,9 @@ class DriveApiController extends Controller
         } catch (DriveException $e) {
             return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 422);
         }
-        return response()->download($tmp, $name, [
+        return \App\Support\SafeFile::download((string) $tmp, (string) $name, [
             'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',
-        ])->deleteFileAfterSend(true);
+        ], true);
     }
 
     /** كل ملفات "جهازي" في ZIP واحد (نسخة احتياطية قبل إعادة التهيئة). لو أكبر من الحد بيرجّع 413 برسالة واضحة. */
@@ -494,9 +494,9 @@ class DriveApiController extends Controller
         } catch (DriveException $e) {
             return $this->apiError($e->getMessage(), null, $e->getCode() >= 400 ? $e->getCode() : 422);
         }
-        return response()->download($tmp, 'UIPE-PC-backup.zip', [
+        return \App\Support\SafeFile::download((string) $tmp, 'UIPE-PC-backup.zip', [
             'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',
-        ])->deleteFileAfterSend(true);
+        ], true);
     }
 
     public function sync(Request $request, $id)

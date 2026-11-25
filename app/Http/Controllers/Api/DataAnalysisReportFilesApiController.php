@@ -134,8 +134,8 @@ class DataAnalysisReportFilesApiController extends Controller
             return $this->apiError('File not found.', null, 404);
         }
 
-        $fullPath = \App\Support\SafePath::publicPath((string) $row['storage_path']);
-        if (!is_file($fullPath)) {
+        $fullPath = \App\Support\SafeFile::resolve(\App\Support\SafePath::publicPath((string) $row['storage_path']));
+        if ($fullPath === null) {
             return $this->apiError('File not found on disk.', null, 404);
         }
 
@@ -147,7 +147,7 @@ class DataAnalysisReportFilesApiController extends Controller
             'filename' => $row['original_filename'],
         ], $request->ip());
 
-        return response()->download($fullPath, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $row['original_filename'])), [
+        return \App\Support\SafeFile::download($fullPath, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $row['original_filename'])), [
             'Content-Type'            => $row['mime_type'] ?: 'application/octet-stream',
             'X-Content-Type-Options'  => 'nosniff',
             'Content-Security-Policy' => "default-src 'none'; sandbox",
@@ -167,8 +167,8 @@ class DataAnalysisReportFilesApiController extends Controller
             return $this->apiError('Preview not available for this file.', null, 404);
         }
 
-        $fullPath = \App\Support\SafePath::publicPath((string) $row['storage_path']);
-        if (!is_file($fullPath)) {
+        $fullPath = \App\Support\SafeFile::resolve(\App\Support\SafePath::publicPath((string) $row['storage_path']));
+        if ($fullPath === null) {
             return $this->apiError('File not found on disk.', null, 404);
         }
 

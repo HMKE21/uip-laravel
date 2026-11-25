@@ -92,8 +92,8 @@ class FilesApiController extends Controller
             return $this->apiError('File not found.', null, 404);
         }
 
-        $path = \App\Support\SafePath::publicPath($file->stored_path);
-        if (!is_file($path)) {
+        $path = \App\Support\SafeFile::resolve(\App\Support\SafePath::publicPath($file->stored_path));
+        if ($path === null) {
             return $this->apiError('File no longer exists.', null, 404);
         }
 
@@ -101,7 +101,7 @@ class FilesApiController extends Controller
 
         // response()->download بيبني Content-Disposition بشكل آمن (من غير حقن header عن طريق اسم الملف)
         // ويبث الملف من غير تحميله كله في الذاكرة. nosniff + sandbox CSP: مفيش تنفيذ لو اتفتح inline.
-        return response()->download($path, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $file->original_name)), [
+        return \App\Support\SafeFile::download($path, basename(str_replace(["\r", "\n", '"', '\\'], '_', (string) $file->original_name)), [
             'Content-Type'            => $file->mime_type ?: 'application/octet-stream',
             'X-Content-Type-Options'  => 'nosniff',
             'Content-Security-Policy' => "default-src 'none'; sandbox",

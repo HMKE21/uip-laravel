@@ -175,6 +175,6 @@ class FeeApiController extends Controller
         if (!$res['success']) {
             return $this->respond($res);
         }
-        return response()->download($res['data']['path'], $res['data']['filename'], ['Content-Type' => 'application/pdf'])->deleteFileAfterSend(true);
+        return \App\Support\SafeFile::download((string) $res['data']['path'], basename((string) $res['data']['filename']), ['Content-Type' => 'application/pdf'], true);
     }
 }

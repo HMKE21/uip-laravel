@@ -281,8 +281,8 @@ class DriveShareApiController extends Controller
         } catch (DriveException $e) {
             return $this->publicError($e);
         }
-        return response()->download($tmp, $name, [
+        return \App\Support\SafeFile::download((string) $tmp, (string) $name, [
             'Content-Type' => 'application/zip', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store',
-        ])->deleteFileAfterSend(true);
+        ], true);
     }
 }

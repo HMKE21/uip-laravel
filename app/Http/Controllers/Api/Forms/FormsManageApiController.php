@@ -405,7 +405,7 @@ class FormsManageApiController extends Controller
         if (!$tmp) {
             return $this->apiError('There are no files to download.', null, 404);
         }
-        return response()->download($tmp, 'form-' . $form->id . '-files.zip', ['Content-Type' => 'application/zip'])->deleteFileAfterSend(true);
+        return \App\Support\SafeFile::download((string) $tmp, 'form-' . (int) $form->id . '-files.zip', ['Content-Type' => 'application/zip'], true);
     }
 
     /** GET /forms/{id}/files/{fileId}/preview — text/code content or zip entry listing (auth, owner side). */
