@@ -97,11 +97,19 @@ class MessagingController extends Controller
         return $this->apiSuccess($this->messaging->categoriesForUser($this->uid($request)), 'Categories retrieved successfully.');
     }
 
-    /** POST /api/v1/messaging/conversations/direct — body: recipient_email, body */
+    /** POST /api/v1/messaging/conversations/direct — body: recipient_email | recipient_username | recipient_id, body */
     public function startDirect(Request $request)
     {
         return $this->handle(function () use ($request) {
             $email = (string) $request->input('recipient_email', '');
+            // @username (زي تليجرام) بدل الإيميل. الحظر والخصوصية بيتطبّقوا في startConversation().
+            if ($email === '' && $request->filled('recipient_username')) {
+                $rid = app(\App\Services\UsernameService::class)->idFor((string) $request->input('recipient_username'));
+                if (!$rid) {
+                    throw new \RuntimeException('No user was found with that username.');
+                }
+                $email = (string) \Illuminate\Support\Facades\DB::table('users')->where('id', $rid)->value('email');
+            }
             // recipient_id: used by the Stories "viewed by" list (it only knows ids). Same rules apply: blocks / group-messaging limits are enforced in startConversation().
             if ($email === '' && $request->filled('recipient_id')) {
                 $email = (string) \Illuminate\Support\Facades\DB::table('users')->where('id', (int) $request->input('recipient_id'))->value('email');

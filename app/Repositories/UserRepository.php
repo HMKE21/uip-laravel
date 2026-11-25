@@ -132,27 +132,46 @@ class UserRepository
      * شركة/كلية طالب) في عمود org واحد.
      * @return array<int,array<string,mixed>>
      */
+    /**
+     * بحث المستلمين (الشات): بالاسم أو @username أو الإيميل.
+     * الإيميل: المستخدم العادي بيطابق **الإيميل الكامل** بس ولو صاحبه مفعّل email_searchable؛ الأدمن بيدوّر جزئيًا.
+     */
     public function searchDirectory(string $query, $excludeUserId, int $limit = 10): array
     {
         $limit = max(1, min(50, $limit));
-        $q = '%' . $query . '%';
+        $raw = trim($query);
+        $core = ltrim($raw, '@');
+        $esc = fn (string $v) => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $v);
+        $handleOnly = str_starts_with($raw, '@');
+        $isAdmin = DB::table('user_roles as ur')->join('roles as r', 'r.id', '=', 'ur.role_id')
+            ->where('ur.user_id', $excludeUserId)->where('r.slug', 'admin')->exists();
 
-        return DB::table('users as u')
-            ->leftJoin('user_roles as ur', 'ur.user_id', '=', 'u.id')
-            ->leftJoin('roles as r', 'r.id', '=', 'ur.role_id')
+        $q = DB::table('users as u')
+            ->leftJoin('user_network_settings as ns', 'ns.user_id', '=', 'u.id')
             ->leftJoin('students as s', 's.user_id', '=', 'u.id')
             ->leftJoin('universities as uni', 'uni.user_id', '=', 'u.id')
             ->whereNull('u.deleted_at')
             ->where('u.status', 'active')
             ->where('u.id', '!=', $excludeUserId)
-            ->where(function ($w) use ($q) {
-                $w->where('u.full_name', 'like', $q)->orWhere('u.email', 'like', $q);
-            })
-            ->selectRaw(
-                'u.id, u.uuid, u.full_name, u.email, u.avatar_path, r.slug AS role,
-                 COALESCE(uni.official_name_en, s.faculty) AS org_en,
-                 COALESCE(uni.official_name_ar, s.faculty) AS org_ar'
-            )
+            ->where(function ($w) use ($core, $raw, $esc, $handleOnly, $isAdmin) {
+                $w->where('u.username', 'like', $esc(strtolower($core)) . '%');
+                if (!$handleOnly) {
+                    $w->orWhere('u.full_name', 'like', '%' . $esc($core) . '%');
+                    if ($isAdmin) {
+                        $w->orWhere('u.email', 'like', '%' . $esc($core) . '%');
+                    } elseif (filter_var($raw, FILTER_VALIDATE_EMAIL)) {
+                        $w->orWhere(fn ($x) => $x->where('u.email', $raw)->whereRaw('COALESCE(ns.email_searchable, 1) = 1'));
+                    }
+                }
+            });
+
+        return $q->selectRaw(
+            'u.id, u.uuid, u.full_name, u.username, u.email, u.avatar_path,
+             (SELECT r.slug FROM user_roles ur2 JOIN roles r ON r.id = ur2.role_id WHERE ur2.user_id = u.id ORDER BY ur2.assigned_at ASC LIMIT 1) AS role,
+             COALESCE(uni.official_name_en, s.faculty) AS org_en,
+             COALESCE(uni.official_name_ar, s.faculty) AS org_ar'
+        )
+            ->orderByRaw('(u.username = ?) DESC', [strtolower($core)])
             ->orderBy('u.full_name')
             ->limit($limit)
             ->get()

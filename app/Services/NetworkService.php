@@ -54,6 +54,9 @@ class NetworkService
             'profile_locked'             => $this->privacy->isLocked($uid),
             'lists_visibility'           => $this->privacy->forUser($uid)['lists'],
             'photo_download'             => $this->privacy->forUser($uid)['download'],
+            // البحث: الناس تلاقيني بإيميلي الكامل / تظهرني نتايج البحث عمومًا (أظهر في البحث).
+            'email_searchable'           => $r && isset($r->email_searchable) ? (bool) $r->email_searchable : true,
+            'discoverable'               => $this->chat->discoverable($uid),
         ];
     }
 
@@ -68,6 +71,11 @@ class NetworkService
         if (array_key_exists('profile_locked', $in)) {
             $cur['profile_locked'] = filter_var($in['profile_locked'], FILTER_VALIDATE_BOOLEAN);
         }
+        foreach (['email_searchable', 'discoverable'] as $k) {
+            if (array_key_exists($k, $in)) {
+                $cur[$k] = filter_var($in[$k], FILTER_VALIDATE_BOOLEAN);
+            }
+        }
         if (isset($in['lists_visibility']) && in_array($in['lists_visibility'], ProfilePrivacyService::LISTS, true)) {
             $cur['lists_visibility'] = $in['lists_visibility'];
         }
@@ -80,8 +88,12 @@ class NetworkService
             'profile_locked'             => $cur['profile_locked'] ? 1 : 0,
             'lists_visibility'           => $cur['lists_visibility'],
             'photo_download'             => $cur['photo_download'],
+            'email_searchable'           => $cur['email_searchable'] ? 1 : 0,
             'updated_at'                 => now(),
         ]);
+        if (array_key_exists('discoverable', $in)) {
+            $this->chat->update($uid, ['discoverable' => $cur['discoverable']]);
+        }
         $this->privacy->forget($uid);
         // لو قفل الموافقة اليدوية: كل الطلبات المعلقة تتقبل (مش منطقي تفضل معلقة).
         if (!$cur['follow_approval'] && !$cur['profile_locked']) {
@@ -138,31 +150,90 @@ class NetworkService
     // ---------------------------------------------------------------- search / suggestions / profile
 
     /**
-     * بحث عن ناس بالاسم. filters: role، same_university (bool)، relation: all|connections|following|followers.
-     * اللي قافل "أظهر في البحث" (chat discoverable) مبيظهرش إلا لجهات اتصاله أو اتصالاته.
+     * بحث "شبكتي" عن ناس. filters: role، same_university (bool)، relation: all|connections|following|followers.
+     * بيشتغل بالاسم / @username / ID / الإيميل الكامل (شوف searchPeople).
      */
     public function search(int $uid, string $q, array $filters, int $page, int $per): array
     {
-        $q = trim($q);
+        return $this->searchPeople($uid, false, $q, $filters, $page, $per);
+    }
+
+    /**
+     * البحث الموحّد عن الناس (شريط البحث العلوي + صفحة النتائج + شبكتي).
+     *
+     * بيدوّر بـ: الاسم (كل كلمة بأي ترتيب) | @username | ID رقمي (أو #123) | uuid | الإيميل.
+     * الخصوصية:
+     *  - مستخدم عادي: نشطين بس، مش محظورين، ومن قافل "أظهر في البحث" مايظهرش إلا لجهات اتصاله. الإيميل بيطابق **كامل بس** (مش جزء منه)
+     *    ولو صاحبه مفعّل email_searchable.
+     *  - أدمن: كل الحسابات (حتى المعلّقة/المحظورة) وبحث جزئي في الإيميل، وبيرجع إيميل/حالة/uuid لكل نتيجة.
+     * الترتيب: تطابق تام (username > email > id > الاسم) ثم بداية الاسم/اليوزرنيم، مع أفضلية للأصدقاء والمتابَعين.
+     * كل نتيجة فيها matched_by و profile_locked (حساب خاص) و can_view_profile و can_message.
+     *
+     * @return array{items:array,has_more:bool}
+     */
+    public function searchPeople(int $uid, bool $isAdmin, string $q, array $filters, int $page, int $per): array
+    {
+        $raw = trim($q);
         $role = isset($filters['role']) ? trim((string) $filters['role']) : '';
         $rel = (string) ($filters['relation'] ?? 'all');
         $sameUni = !empty($filters['same_university']);
-        if (mb_strlen($q) < 2 && $role === '' && !$sameUni && $rel === 'all') {
+        $handleOnly = str_starts_with($raw, '@');
+        $core = ltrim($raw, '@#');
+        if (mb_strlen($core) < 2 && !preg_match('/^#\d+$/', $raw) && $role === '' && !$sameUni && $rel === 'all') {
             return ['items' => [], 'has_more' => false];
         }
         $per = max(1, min(30, $per));
+        $esc = fn (string $v) => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $v);
+        $lower = strtolower($core);
+        $isEmail = (bool) filter_var($raw, FILTER_VALIDATE_EMAIL);
+        $isUuid = (bool) preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $raw);
+        $idNum = (!$handleOnly && preg_match('/^#?\d{1,10}$/', $raw)) ? (int) ltrim($raw, '#') : 0;
+
         $query = DB::table('users as u')
-            ->leftJoin('user_roles as ur', 'ur.user_id', '=', 'u.id')
-            ->leftJoin('roles as r', 'r.id', '=', 'ur.role_id')
-            ->leftJoin('students as s', 's.user_id', '=', 'u.id')
-            ->leftJoin('universities as uni', 'uni.user_id', '=', 'u.id')
-            ->whereNull('u.deleted_at')->where('u.status', 'active')->where('u.id', '!=', $uid)
-            ->whereRaw($this->notBlockedSql(), [$uid, $uid]);
-        if ($q !== '') {
-            $query->where('u.full_name', 'like', '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%');
+            ->leftJoin('user_network_settings as ns', 'ns.user_id', '=', 'u.id')
+            ->whereNull('u.deleted_at');
+        if (!$isAdmin) {
+            $query->where('u.status', 'active')->where('u.id', '!=', $uid)->whereRaw($this->notBlockedSql(), [$uid, $uid]);
         }
+
+        // ---- شروط المطابقة (OR)
+        $conds = [];
+        $bind = [];
+        if ($core !== '') {
+            $conds[] = 'u.username LIKE ?';
+            $bind[] = $esc($lower) . '%';
+        }
+        if (!$handleOnly && $core !== '') {
+            $tokens = array_values(array_filter(preg_split('/\s+/u', $core)));
+            if ($tokens) {
+                $conds[] = '(' . implode(' AND ', array_fill(0, count($tokens), 'u.full_name LIKE ?')) . ')';
+                foreach ($tokens as $t) {
+                    $bind[] = '%' . $esc($t) . '%';
+                }
+            }
+        }
+        if ($idNum > 0) {
+            $conds[] = 'u.id = ?';
+            $bind[] = $idNum;
+        }
+        if ($isUuid) {
+            $conds[] = 'u.uuid = ?';
+            $bind[] = strtolower($raw);
+        }
+        if ($isAdmin && !$handleOnly && $core !== '') {
+            $conds[] = 'u.email LIKE ?';
+            $bind[] = '%' . $esc($core) . '%';
+        } elseif ($isEmail) {
+            $conds[] = '(u.email = ? AND COALESCE(ns.email_searchable, 1) = 1)';
+            $bind[] = $raw;
+        }
+        if ($conds) {
+            $query->whereRaw('(' . implode(' OR ', $conds) . ')', $bind);
+        }
+
+        // ---- فلاتر
         if ($role !== '') {
-            $query->where('r.slug', $role);
+            $query->whereRaw('EXISTS (SELECT 1 FROM user_roles fr JOIN roles rr ON rr.id = fr.role_id WHERE fr.user_id = u.id AND rr.slug = ?)', [$role]);
         }
         if ($sameUni) {
             $uniId = $this->safety->affiliationFor($uid)['university_id'];
@@ -170,20 +241,79 @@ class NetworkService
                 $query->whereRaw($this->sameUniversitySql(), [$uniId, $uniId, $uniId, $uniId, $uniId]);
             }
         }
+        $connSql = 'EXISTS (SELECT 1 FROM user_connections k WHERE k.status = \'accepted\' AND ((k.requester_id = ? AND k.addressee_id = u.id) OR (k.addressee_id = ? AND k.requester_id = u.id)))';
+        $followSql = 'EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = u.id)';
         if ($rel === 'connections') {
-            $query->whereRaw('EXISTS (SELECT 1 FROM user_connections k WHERE k.status = \'accepted\' AND ((k.requester_id = ? AND k.addressee_id = u.id) OR (k.addressee_id = ? AND k.requester_id = u.id)))', [$uid, $uid]);
+            $query->whereRaw($connSql, [$uid, $uid]);
         } elseif ($rel === 'following') {
-            $query->whereRaw('EXISTS (SELECT 1 FROM post_follows f WHERE f.follower_id = ? AND f.followee_id = u.id)', [$uid]);
+            $query->whereRaw($followSql, [$uid]);
         } elseif ($rel === 'followers') {
             $query->whereRaw('EXISTS (SELECT 1 FROM post_follows f WHERE f.followee_id = ? AND f.follower_id = u.id)', [$uid]);
         }
-        $rows = $query->selectRaw('u.id, u.full_name, u.avatar_path, MIN(r.slug) AS role_slug, MIN(COALESCE(uni.official_name_en, s.faculty)) AS org_en, MIN(COALESCE(uni.official_name_ar, s.faculty)) AS org_ar')
-            ->groupBy('u.id', 'u.full_name', 'u.avatar_path')
-            ->orderBy('u.full_name')->offset(($page - 1) * $per)->limit($per + 1)->get()->all();
+
+        // ---- الترتيب (score)
+        $score = 'CASE WHEN u.username = ? THEN 100 WHEN u.email = ? THEN 95 WHEN u.id = ? THEN 90 WHEN u.uuid = ? THEN 90'
+            . ' WHEN LOWER(u.full_name) = ? THEN 80 WHEN u.username LIKE ? THEN 70 WHEN u.full_name LIKE ? THEN 60 ELSE 10 END'
+            . ' + (' . $connSql . ') * 8 + (' . $followSql . ') * 4';
+        $scoreBind = [$lower, $raw, $idNum ?: -1, strtolower($raw), mb_strtolower($core), $esc($lower) . '%', $esc($core) . '%', $uid, $uid, $uid];
+
+        $selectSql = 'u.id, u.uuid, u.full_name, u.username, u.email, u.status, u.avatar_path, ns.profile_locked AS profile_locked, '
+            . '(SELECT r2.slug FROM user_roles ur2 JOIN roles r2 ON r2.id = ur2.role_id WHERE ur2.user_id = u.id ORDER BY ur2.assigned_at ASC LIMIT 1) AS role_slug, '
+            . 'COALESCE((SELECT un.official_name_en FROM universities un WHERE un.user_id = u.id LIMIT 1), (SELECT st.faculty FROM students st WHERE st.user_id = u.id LIMIT 1)) AS org_en, '
+            . 'COALESCE((SELECT un2.official_name_ar FROM universities un2 WHERE un2.user_id = u.id LIMIT 1), (SELECT st2.faculty FROM students st2 WHERE st2.user_id = u.id LIMIT 1)) AS org_ar, '
+            . '(' . $score . ') AS rank_score';
+        $rows = $query->selectRaw($selectSql, $scoreBind)
+            ->orderByDesc('rank_score')->orderBy('u.full_name')
+            ->offset(($page - 1) * $per)->limit($per + 1)->get()->all();
         $hasMore = count($rows) > $per;
         $rows = array_slice($rows, 0, $per);
-        $rows = array_values(array_filter($rows, fn ($r) => $this->chat->discoverable((int) $r->id) || $this->chat->isContact((int) $r->id, $uid) || $this->isConnected($uid, (int) $r->id)));
-        return ['items' => $this->shape($uid, $rows), 'has_more' => $hasMore];
+        if (!$isAdmin) { // "أظهر في البحث": اللي قافلها مايظهرش إلا لجهات اتصاله
+            $rows = array_values(array_filter($rows, fn ($r) => $this->chat->discoverable((int) $r->id) || $this->chat->isContact((int) $r->id, $uid) || $this->isConnected($uid, (int) $r->id)));
+        }
+
+        $items = $this->shape($uid, $rows);
+        $byId = [];
+        foreach ($rows as $r) {
+            $byId[(int) $r->id] = $r;
+        }
+        foreach ($items as &$it) {
+            $r = $byId[$it['id']];
+            $locked = !empty($r->profile_locked);
+            $close = $it['connection'] === 'connected' || $it['is_following'] || $it['is_me'];
+            $it['profile_locked'] = $locked;                       // حساب خاص؟
+            $it['can_view_profile'] = $isAdmin || !$locked || $close; // أقدر أشوف بروفايله كامل؟
+            $it['matched_by'] = $this->matchedBy($r, $raw, $lower, $idNum, $handleOnly);
+            if ($isAdmin) {
+                $it['email'] = $r->email;
+                $it['status'] = $r->status;
+                $it['uuid'] = $r->uuid;
+            }
+        }
+        unset($it);
+        return ['items' => $items, 'has_more' => $hasMore];
+    }
+
+    private function matchedBy(object $r, string $raw, string $lower, int $idNum, bool $handleOnly): string
+    {
+        if ($r->username && strtolower($r->username) === $lower) {
+            return 'username';
+        }
+        if ($idNum > 0 && (int) $r->id === $idNum) {
+            return 'id';
+        }
+        if (strcasecmp((string) $r->email, $raw) === 0) {
+            return 'email';
+        }
+        if (strcasecmp((string) $r->uuid, $raw) === 0) {
+            return 'uuid';
+        }
+        if ($handleOnly) {
+            return 'username';
+        }
+        if (stripos((string) $r->full_name, ltrim($raw, '@#')) === false && $r->username && stripos($r->username, $lower) === 0) {
+            return 'username';
+        }
+        return 'name';
     }
 
     /** "أشخاص قد تعرفهم": أصدقاء الأصدقاء (بعدد المشترَكين) ثم نفس الجامعة. */
@@ -225,7 +355,7 @@ class NetworkService
         if (!$ids) {
             return [];
         }
-        $rows = DB::table('users as u')->whereIn('u.id', $ids)->whereNull('u.deleted_at')->get(['u.id', 'u.full_name', 'u.avatar_path'])->keyBy('id');
+        $rows = DB::table('users as u')->whereIn('u.id', $ids)->whereNull('u.deleted_at')->get(['u.id', 'u.full_name', 'u.username', 'u.avatar_path'])->keyBy('id');
         $ordered = [];
         foreach ($ids as $id) {
             if (isset($rows[$id])) {
@@ -239,7 +369,7 @@ class NetworkService
     public function person(int $uid, int $userId): array
     {
         $base = $this->follows->profile($uid, $userId); // بيتأكد إنه موجود وغير محظور
-        $row = DB::table('users')->where('id', $userId)->first(['id', 'full_name', 'avatar_path', 'created_at']);
+        $row = DB::table('users')->where('id', $userId)->first(['id', 'full_name', 'username', 'avatar_path', 'created_at']);
         $shaped = $this->shape($uid, [$row])[0] ?? [];
         $shaped['posts_count'] = $base['posts_count'];
         $shaped['followers_count'] = $base['followers_count'];
@@ -524,7 +654,7 @@ class NetworkService
         if (($q = trim($q)) !== '') {
             $base->where('u.full_name', 'like', '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%');
         }
-        $rows = $base->selectRaw('u.id, u.full_name, u.avatar_path, ' . $atExpr . ' AS rel_at' . ($extra ? ', ' . implode(', ', $extra) : ''))
+        $rows = $base->selectRaw('u.id, u.full_name, u.username, u.avatar_path, ' . $atExpr . ' AS rel_at' . ($extra ? ', ' . implode(', ', $extra) : ''))
             ->orderByRaw($atExpr . ' DESC')->offset(($page - 1) * $per)->limit($per + 1)->get()->all();
         $hasMore = count($rows) > $per;
         $rows = array_slice($rows, 0, $per);
@@ -537,7 +667,7 @@ class NetworkService
      * @param array<int,object> $rows
      * @return array<int,array>
      */
-    private function shape(int $uid, array $rows, bool $relationOnly = false): array
+    public function shape(int $uid, array $rows, bool $relationOnly = false): array
     {
         $ids = array_map(fn ($r) => (int) $r->id, $rows);
         if (!$ids) {
@@ -575,6 +705,7 @@ class NetworkService
             if (!$relationOnly) {
                 $p += [
                     'full_name'   => $r->full_name,
+                    'username'    => ($r->username ?? null) ?: null,
                     'avatar_path' => $this->messaging->isAvatarHidden($id, $uid) ? null : $r->avatar_path,
                     'role'        => $r->role_slug ?? $this->roles->primaryRoleFor($id),
                     'org_en'      => $r->org_en ?? null,

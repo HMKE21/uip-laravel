@@ -59,7 +59,7 @@ class NetworkApiController extends Controller
 
     public function saveSettings(Request $request)
     {
-        return $this->run(fn () => $this->apiSuccess($this->network->saveSettings($this->uid($request), $request->only(['follow_approval', 'accept_connection_requests', 'profile_locked', 'lists_visibility', 'photo_download'])), 'Network settings saved successfully.'));
+        return $this->run(fn () => $this->apiSuccess($this->network->saveSettings($this->uid($request), $request->only(['follow_approval', 'accept_connection_requests', 'profile_locked', 'lists_visibility', 'photo_download', 'email_searchable', 'discoverable'])), 'Network settings saved successfully.'));
     }
 
     /** GET /network/connections?q&page&per_page */

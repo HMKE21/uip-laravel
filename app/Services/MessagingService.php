@@ -397,9 +397,11 @@ class MessagingService
         // before its attachments exist (it would be delivered as an empty bubble
         // and never re-fetched, because the client's since_id moves past it).
         // المنشن (@اسم / @all): بنحسمه قبل الـ transaction عشان نستخدمه في الحفظ وفي الإشعارات.
+        // @username اتكتب في النص بإيدي (من غير ما أختاره من القايمة) بيتحسب منشن برضه (لو الشخص عضو في المحادثة).
+        $typedMentions = app(\App\Services\UsernameService::class)->idsInText((string) $body);
         $mentionedIds = $this->resolveMentions(
             $conversationId,
-            (array) ($options['mentioned_user_ids'] ?? []),
+            array_merge((array) ($options['mentioned_user_ids'] ?? []), $typedMentions),
             !empty($options['mention_all']),
             (int) $userId
         );

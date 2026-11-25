@@ -1863,6 +1863,20 @@ Route::prefix('v1')->group(function () {
         Route::get('/following', [NetworkApiController::class, 'following']);
     });
 
+    // البحث الشامل (شريط البحث العلوي + صفحة النتائج): ناس بالاسم/@username/ID/إيميل، وللأدمن: مشاريع وجامعات.
+    Route::get('/search', [\App\Http\Controllers\Api\GlobalSearchApiController::class, 'index'])->middleware(['uip.auth', 'throttle:120,1']);
+
+    // @username (زي تليجرام) — أي دور مسجّل.
+    Route::prefix('username')->middleware('uip.auth')->group(function () {
+        $c = \App\Http\Controllers\Api\UsernameApiController::class;
+        Route::get('/', [$c, 'show']);
+        Route::get('/check', [$c, 'check'])->middleware('throttle:60,1');
+        Route::get('/suggest', [$c, 'suggest'])->middleware('throttle:30,1');
+        Route::put('/', [$c, 'update'])->middleware('throttle:10,1');
+        Route::delete('/', [$c, 'destroy'])->middleware('throttle:10,1');
+        Route::get('/lookup/{handle}', [$c, 'lookup'])->where('handle', '@?[A-Za-z][A-Za-z0-9_]{2,40}')->middleware('throttle:120,1');
+    });
+
     Route::prefix('posts')->middleware(['uip.auth', 'uip.can:posts.use', 'uip.realtime:posts'])->group(function () {
         Route::get('/config', [PostsApiController::class, 'config']);
         Route::get('/feed', [PostsApiController::class, 'feed']);

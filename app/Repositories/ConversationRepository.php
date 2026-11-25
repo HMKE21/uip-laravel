@@ -71,7 +71,7 @@ class ConversationRepository
             }
             $in = implode(',', array_fill(0, count($chunk), '?'));
             $rows = DB::select(
-                'SELECT cp.conversation_id AS _cid, u.id, u.full_name, u.email, u.avatar_path, u.deleted_at,
+                'SELECT cp.conversation_id AS _cid, u.id, u.full_name, u.username, u.email, u.avatar_path, u.deleted_at,
                         (SELECT r.slug FROM user_roles ur INNER JOIN roles r ON r.id = ur.role_id
                           WHERE ur.user_id = u.id ORDER BY ur.assigned_at ASC LIMIT 1) AS account_role,
                         COALESCE(uni.official_name_en, s.faculty) AS org
@@ -97,7 +97,7 @@ class ConversationRepository
     public function otherParticipants(int $conversationId, $excludingUserId): array
     {
         $rows = DB::select(
-            'SELECT u.id, u.full_name, u.email, u.avatar_path, u.deleted_at,
+            'SELECT u.id, u.full_name, u.username, u.email, u.avatar_path, u.deleted_at,
                     (SELECT r.slug FROM user_roles ur INNER JOIN roles r ON r.id = ur.role_id
                       WHERE ur.user_id = u.id ORDER BY ur.assigned_at ASC LIMIT 1) AS account_role,
                     COALESCE(uni.official_name_en, s.faculty) AS org
