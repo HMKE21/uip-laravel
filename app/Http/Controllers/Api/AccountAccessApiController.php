@@ -182,7 +182,10 @@ class AccountAccessApiController extends Controller
         if (isset($d['features'])) {
             $d['features'] = json_encode($d['features']);
         }
+        // Column names are a fixed allow-list (never request keys); values are bound by the query builder.
+        $d = \Illuminate\Support\Arr::only($d, ['name_en', 'name_ar', 'description', 'price', 'currency', 'duration_days', 'features', 'is_active']);
         if ($d) {
+            // nosemgrep: laravel-raw-sql-injection  (allow-listed columns + bound values; no SQL string is built from input)
             DB::table('access_plans')->where('id', $id)->update($d + ['updated_at' => now()]);
             $this->auditLog->record($this->uid($request), 'access_plan.updated', 'AccessPlan', $id, null, array_keys($d), $request->ip());
         }

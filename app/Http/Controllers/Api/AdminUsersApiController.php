@@ -384,8 +384,10 @@ class AdminUsersApiController extends Controller
         if ($ok && $newRole === 'university') {
             $uni = DB::table('universities')->where('user_id', $target['id'])->first();
             if ($uni) {
+                // nosemgrep: laravel-raw-sql-injection  (literal column names; names come from validated BilingualName, bound as values)
                 DB::table('universities')->where('id', $uni->id)->update(['official_name_ar' => $names['name_ar'], 'official_name_en' => $names['name_en']] + \App\Support\UniversityName::keys($names['name_ar'], $names['name_en']));
             } else {
+                // nosemgrep: laravel-raw-sql-injection  (literal column names; values are bound by the query builder)
                 DB::table('universities')->insert(['user_id' => $target['id'], 'official_name_ar' => $names['name_ar'], 'official_name_en' => $names['name_en'], 'country' => ''] + \App\Support\UniversityName::keys($names['name_ar'], $names['name_en']));
             }
         }

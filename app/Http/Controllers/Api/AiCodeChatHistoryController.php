@@ -74,6 +74,7 @@ class AiCodeChatHistoryController extends Controller
         if ($existing) {
             DB::table('ai_code_chats')->where('id', $existing->id)->update($data);
         } else {
+            // nosemgrep: laravel-raw-sql-injection  (literal column names; every value is sanitised above and bound by the query builder)
             DB::table('ai_code_chats')->insert($data + [
                 'uuid'       => strtolower($uuid),
                 'user_id'    => $uid,

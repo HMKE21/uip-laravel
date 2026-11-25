@@ -56,6 +56,20 @@ class QueryBuilderRepository
         'set ', 'lock ', 'unlock ', 'attach', 'detach', 'pragma',
     ];
 
+    /**
+     * دوال/تراكيب خطرة بتتفحص بحدود كلمة (\b) مش بمسافة، فـ `1+sleep(5)` و`benchmark(` ماتعديش.
+     * (إبطاء السيرفر / حجز أقفال / تصدير لملف أو متغيّر / قراءة جداول النظام / `TABLE x` و`VALUES` اللي بتتخطى الـ allow-list.)
+     */
+    private const FORBIDDEN_PATTERNS = [
+        '/\b(?:sleep|benchmark|get_lock|release_lock|release_all_locks|is_free_lock|is_used_lock|master_pos_wait|load_extension|pg_sleep|dbms_pipe)\s*\(/i',
+        '/\binto\b/i',
+        '/\b(?:information_schema|performance_schema|mysql|sys|sqlite_master|sqlite_schema|pg_catalog)\b\s*\./i',
+        '/\b(?:information_schema|performance_schema|sqlite_master|sqlite_schema)\b/i',
+        '/(?:^|[\s(,])table\s+[`a-z_]/i',
+        '/(?:^|[\s(,])values\s*(?:row\s*)?\(/i',
+        '/@@|\bhandler\b|\bprocedure\s+analyse\b/i',
+    ];
+
     private const JOIN_TYPES = ['INNER', 'LEFT', 'RIGHT'];
 
     private const OPERATORS = [
@@ -377,13 +391,26 @@ class QueryBuilderRepository
                 throw new RuntimeException("Statement contains a disallowed keyword: \"{$kw}\".");
             }
         }
-        if (str_contains($lower, '--') || str_contains($lower, '/*')) {
+        foreach (self::FORBIDDEN_PATTERNS as $re) {
+            if (preg_match($re, $lower)) {
+                throw new RuntimeException('Statement contains a disallowed construct.');
+            }
+        }
+        if (str_contains($lower, '--') || str_contains($lower, '/*') || str_contains($lower, '#')) {
             throw new RuntimeException('Comments are not allowed inside the query.');
         }
+        // مسافات/محارف غريبة (NBSP, null, تحكّم) ممكن تخدع الـ regex تحت لكن MySQL يعتبرها فاصل → ارفضها.
+        if (preg_match('/[^\x20-\x7E\t\r\n\x{0080}-\x{10FFFF}]|[\x{00A0}\x{1680}\x{2000}-\x{200F}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]/u', $trimmed)) {
+            throw new RuntimeException('The query contains characters that are not allowed.');
+        }
+        // `FROM (users)` / `JOIN ((users))`: جدول بين أقواس بيتخطى فحص الأسماء تحت — مسموح بس subquery (SELECT/WITH).
+        if (preg_match('/\b(?:from|straight_join|join)\b\s*\(+\s*(?!select\b|with\b)/i', $trimmed)) {
+            throw new RuntimeException('Parenthesised table references are not allowed; use a plain table name or a (SELECT ...) subquery.');
+        }
 
-        // كل جدول متسمّى بعد FROM/JOIN لازم يكون allow-listed.
+        // كل جدول متسمّى بعد FROM/JOIN لازم يكون allow-listed (`\s*` مش `\s+`: MySQL بيقبل FROM`users` من غير مسافة).
         $allowed = array_map('strtolower', $this->allowedTables());
-        if (preg_match_all('/\b(?:from|join)\s+`?([a-zA-Z_][a-zA-Z0-9_]*)`?/i', $trimmed, $m)) {
+        if (preg_match_all('/\b(?:from|straight_join|join)\b\s*`?([a-zA-Z_][a-zA-Z0-9_]*)`?/i', $trimmed, $m)) {
             foreach (array_unique($m[1]) as $referenced) {
                 if (!in_array(strtolower($referenced), $allowed, true)) {
                     throw new RuntimeException("Table \"{$referenced}\" is not available in the Query Builder's allow-listed datasets.");
@@ -406,7 +433,7 @@ class QueryBuilderRepository
         }
 
         // joins بالفاصلة (FROM a, b) بتتخطى فحص الـ allow-list فوق (اللي بيشوف بس الاسم بعد FROM/JOIN) — مرفوضة.
-        if (preg_match('/\b(?:from|join)\s+`?[a-zA-Z_][a-zA-Z0-9_]*`?(?:\s+(?:as\s+)?`?[a-zA-Z_][a-zA-Z0-9_]*`?)?\s*,/i', $trimmed)) {
+        if (preg_match('/\b(?:from|straight_join|join)\s+`?[a-zA-Z_][a-zA-Z0-9_]*`?(?:\s+(?:as\s+)?`?[a-zA-Z_][a-zA-Z0-9_]*`?)?\s*,/i', $trimmed)) {
             throw new RuntimeException('Comma-separated joins are not allowed; use explicit JOIN ... ON.');
         }
 
