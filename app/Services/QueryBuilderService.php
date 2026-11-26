@@ -45,7 +45,8 @@ class QueryBuilderService
     }
 
     /**
-     * قوالب جاهزة مكتوبة يدويًا لمنصة الامتحانات + الدكاترة + الطلاب. كلها
+     * قوالب جاهزة مكتوبة يدويًا لمنصة الامتحانات + الدكاترة + الطلاب + التسجيل
+     * والرسوم والفصول الصيفية + الهيكل الأكاديمي + التخرج. كلها
      * SELECT واحد، بتستخدم جداول من الـ allow-list بس ومفيهاش أعمدة حساسة،
      * فبتعدي من validateRawSql() زي أي استعلام مكتوب بإيد المحلل.
      * (الجداول soft-delete بتتفلتر تلقائيًا في QueryBuilderRepository.)
@@ -453,6 +454,326 @@ INNER JOIN exams e ON e.id = eq.exam_id
 GROUP BY e.id, e.title
 ORDER BY blank_answers DESC
 LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'registration',
+                'name'           => 'Registration periods by scope and kind',
+                'name_ar'        => 'فترات التسجيل حسب النطاق والنوع',
+                'description'    => 'Number of registration periods per scope (university or faculty) and kind (enroll, drop, both).',
+                'description_ar' => 'عدد فترات التسجيل لكل نطاق (جامعة أو كلية) ونوع (تسجيل أو حذف أو الاثنين).',
+                'sql_text'       => <<<'SQL'
+SELECT scope_type, kind, COUNT(*) AS periods
+FROM registration_periods
+GROUP BY scope_type, kind
+ORDER BY periods DESC
+SQL,
+            ],
+            [
+                'category'       => 'registration',
+                'name'           => 'Open registration windows now',
+                'name_ar'        => 'فترات التسجيل المفتوحة الآن',
+                'description'    => 'Registration periods that are open at this moment, closing soonest first.',
+                'description_ar' => 'فترات التسجيل المفتوحة حاليًا، الأقرب إغلاقًا أولًا.',
+                'sql_text'       => <<<'SQL'
+SELECT id, scope_type, scope_id, name, kind, opens_at, closes_at
+FROM registration_periods
+WHERE opens_at <= CURRENT_TIMESTAMP AND closes_at >= CURRENT_TIMESTAMP
+ORDER BY closes_at ASC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'registration',
+                'name'           => 'Registration policy enforcement',
+                'name_ar'        => 'تطبيق سياسات التسجيل',
+                'description'    => 'How many policies enforce each rule per scope, with the average credit-hour limit (empty = inherited).',
+                'description_ar' => 'عدد السياسات التي تُلزم بكل قاعدة لكل نطاق مع متوسط حد الساعات (الفارغ = موروث).',
+                'sql_text'       => <<<'SQL'
+SELECT scope_type, COUNT(*) AS policies,
+       SUM(CASE WHEN enforce_period = 1 THEN 1 ELSE 0 END) AS period_enforced,
+       SUM(CASE WHEN enforce_prerequisites = 1 THEN 1 ELSE 0 END) AS prerequisites_enforced,
+       SUM(CASE WHEN enforce_hours = 1 THEN 1 ELSE 0 END) AS hours_enforced,
+       SUM(CASE WHEN enforce_conflicts = 1 THEN 1 ELSE 0 END) AS conflicts_enforced,
+       ROUND(AVG(max_hours), 1) AS avg_max_hours
+FROM registration_policies
+GROUP BY scope_type
+ORDER BY policies DESC
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Fee collection by kind and currency',
+                'name_ar'        => 'تحصيل الرسوم حسب النوع والعملة',
+                'description'    => 'Dues issued, amount due, amount paid and collection rate per fee kind (waived dues excluded).',
+                'description_ar' => 'عدد المستحقات والمبلغ المستحق والمدفوع ونسبة التحصيل لكل نوع رسوم (بدون المعفى).',
+                'sql_text'       => <<<'SQL'
+SELECT i.kind, i.currency, COUNT(f.id) AS dues,
+       ROUND(SUM(f.amount), 2) AS total_due, ROUND(SUM(f.paid_amount), 2) AS total_paid,
+       ROUND(100.0 * SUM(f.paid_amount) / NULLIF(SUM(f.amount), 0), 1) AS collection_rate_pct
+FROM fee_items i
+INNER JOIN student_fees f ON f.fee_item_id = i.id
+WHERE f.status != 'waived'
+GROUP BY i.kind, i.currency
+ORDER BY total_due DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Student fees by status',
+                'name_ar'        => 'مستحقات الطلاب حسب الحالة',
+                'description'    => 'Count and amounts of student dues in each status (unpaid, partial, paid, waived).',
+                'description_ar' => 'عدد ومبالغ مستحقات الطلاب في كل حالة (غير مدفوع أو جزئي أو مدفوع أو معفى).',
+                'sql_text'       => <<<'SQL'
+SELECT status, COUNT(*) AS dues, ROUND(SUM(amount), 2) AS total_amount, ROUND(SUM(paid_amount), 2) AS total_paid
+FROM student_fees
+GROUP BY status
+ORDER BY dues DESC
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Overdue unpaid fees',
+                'name_ar'        => 'الرسوم المتأخرة غير المسددة',
+                'description'    => 'Unpaid or partially paid dues whose due date has passed, oldest first.',
+                'description_ar' => 'مستحقات غير مدفوعة أو مدفوعة جزئيًا فات موعدها، الأقدم أولًا.',
+                'sql_text'       => <<<'SQL'
+SELECT f.id, f.student_id, i.name AS fee_item, f.amount, f.paid_amount, f.due_on, f.status
+FROM student_fees f
+INNER JOIN fee_items i ON i.id = f.fee_item_id
+WHERE f.status IN ('unpaid', 'partial') AND f.due_on IS NOT NULL AND f.due_on < CURRENT_DATE
+ORDER BY f.due_on ASC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Highest outstanding balances',
+                'name_ar'        => 'أعلى الأرصدة المستحقة',
+                'description'    => 'Students with the largest remaining balance across their unpaid or partial dues.',
+                'description_ar' => 'الطلاب أصحاب أكبر رصيد متبقٍّ عبر مستحقاتهم غير المدفوعة أو الجزئية.',
+                'sql_text'       => <<<'SQL'
+SELECT student_id, COUNT(*) AS open_dues, ROUND(SUM(amount - paid_amount), 2) AS outstanding
+FROM student_fees
+WHERE status IN ('unpaid', 'partial')
+GROUP BY student_id
+ORDER BY outstanding DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Payments by method and status',
+                'name_ar'        => 'الدفعات حسب الطريقة والحالة',
+                'description'    => 'Payment count and total amount per method (cash, bank transfer, card, other) and status.',
+                'description_ar' => 'عدد الدفعات وإجمالي المبلغ لكل طريقة دفع (نقدي أو تحويل بنكي أو بطاقة أو أخرى) وحالة.',
+                'sql_text'       => <<<'SQL'
+SELECT method, status, COUNT(*) AS payments, ROUND(SUM(amount), 2) AS total_amount
+FROM fee_payments
+GROUP BY method, status
+ORDER BY payments DESC
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Pending payments awaiting review',
+                'name_ar'        => 'دفعات معلّقة بانتظار المراجعة',
+                'description'    => 'Payment notices still pending confirmation, oldest first.',
+                'description_ar' => 'إخطارات الدفع التي لم تُؤكَّد بعد، الأقدم أولًا.',
+                'sql_text'       => <<<'SQL'
+SELECT id, student_fee_id, student_id, amount, method, created_at
+FROM fee_payments
+WHERE status = 'pending'
+ORDER BY created_at ASC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'fees',
+                'name'           => 'Fee items per university',
+                'name_ar'        => 'بنود الرسوم لكل جامعة',
+                'description'    => 'Number of fee items and total amount issued per university.',
+                'description_ar' => 'عدد بنود الرسوم وإجمالي مبالغها لكل جامعة.',
+                'sql_text'       => <<<'SQL'
+SELECT u.official_name_en AS university, COUNT(i.id) AS fee_items, ROUND(SUM(i.amount), 2) AS total_amount
+FROM universities u
+INNER JOIN fee_items i ON i.university_id = u.id
+GROUP BY u.id, u.official_name_en
+ORDER BY fee_items DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'summer',
+                'name'           => 'Summer registrations by status',
+                'name_ar'        => 'التسجيل الصيفي حسب الحالة',
+                'description'    => 'Summer-course requests in each status (pending, approved, rejected, cancelled).',
+                'description_ar' => 'طلبات المواد الصيفية في كل حالة (معلّق أو موافق أو مرفوض أو ملغي).',
+                'sql_text'       => <<<'SQL'
+SELECT status, COUNT(*) AS requests
+FROM summer_registrations
+GROUP BY status
+ORDER BY requests DESC
+SQL,
+            ],
+            [
+                'category'       => 'summer',
+                'name'           => 'Summer demand vs capacity per course',
+                'name_ar'        => 'الطلب مقابل السعة لكل مادة صيفية',
+                'description'    => 'For each offered summer course: seat capacity, requests received and requests approved.',
+                'description_ar' => 'لكل مادة صيفية معروضة: السعة وعدد الطلبات المستلمة والمعتمدة.',
+                'sql_text'       => <<<'SQL'
+SELECT c.code, c.name_en AS course, o.capacity, COUNT(r.id) AS requests,
+       SUM(CASE WHEN r.status = 'approved' THEN 1 ELSE 0 END) AS approved
+FROM summer_offerings o
+INNER JOIN courses c ON c.id = o.course_id
+LEFT JOIN summer_registrations r ON r.term_id = o.term_id AND r.course_id = o.course_id
+GROUP BY o.id, c.code, c.name_en, o.capacity
+ORDER BY requests DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'summer',
+                'name'           => 'Summer terms overview',
+                'name_ar'        => 'نظرة عامة على الفصول الصيفية',
+                'description'    => 'Each summer term with its window, credit-hour limit, offered courses and requests received.',
+                'description_ar' => 'كل فصل صيفي مع فترته وحد الساعات والمواد المعروضة والطلبات المستلمة.',
+                'sql_text'       => <<<'SQL'
+SELECT t.id, t.name, t.opens_at, t.closes_at, t.max_hours, t.only_failed,
+       COUNT(DISTINCT o.id) AS offerings, COUNT(DISTINCT r.id) AS requests
+FROM summer_terms t
+LEFT JOIN summer_offerings o ON o.term_id = t.id
+LEFT JOIN summer_registrations r ON r.term_id = t.id
+GROUP BY t.id, t.name, t.opens_at, t.closes_at, t.max_hours, t.only_failed
+ORDER BY t.opens_at DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'structure',
+                'name'           => 'Universities by verification status and country',
+                'name_ar'        => 'الجامعات حسب حالة التوثيق والدولة',
+                'description'    => 'Count of universities per verification status and country.',
+                'description_ar' => 'عدد الجامعات لكل حالة توثيق ودولة.',
+                'sql_text'       => <<<'SQL'
+SELECT verification_status, country, COUNT(*) AS universities
+FROM universities
+GROUP BY verification_status, country
+ORDER BY universities DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'structure',
+                'name'           => 'Faculties per university',
+                'name_ar'        => 'الكليات لكل جامعة',
+                'description'    => 'Number of faculties in each university.',
+                'description_ar' => 'عدد الكليات في كل جامعة.',
+                'sql_text'       => <<<'SQL'
+SELECT u.id, u.official_name_en AS university, COUNT(f.id) AS faculties
+FROM universities u
+LEFT JOIN faculties f ON f.university_id = u.id
+GROUP BY u.id, u.official_name_en
+ORDER BY faculties DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'structure',
+                'name'           => 'Departments per faculty',
+                'name_ar'        => 'الأقسام لكل كلية',
+                'description'    => 'Number of departments in each faculty.',
+                'description_ar' => 'عدد الأقسام في كل كلية.',
+                'sql_text'       => <<<'SQL'
+SELECT f.id, f.name_en AS faculty, COUNT(d.id) AS departments
+FROM faculties f
+LEFT JOIN departments d ON d.faculty_id = f.id
+GROUP BY f.id, f.name_en
+ORDER BY departments DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'structure',
+                'name'           => 'Students and average GPA per faculty',
+                'name_ar'        => 'الطلاب ومتوسط المعدل لكل كلية',
+                'description'    => 'Student count and average GPA in each faculty.',
+                'description_ar' => 'عدد الطلاب ومتوسط المعدل في كل كلية.',
+                'sql_text'       => <<<'SQL'
+SELECT f.id, f.name_en AS faculty, COUNT(s.id) AS students, ROUND(AVG(s.gpa), 2) AS avg_gpa
+FROM faculties f
+LEFT JOIN students s ON s.faculty_id = f.id
+GROUP BY f.id, f.name_en
+ORDER BY students DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'structure',
+                'name'           => 'Student group sizes',
+                'name_ar'        => 'أحجام المجموعات الطلابية',
+                'description'    => 'Members per student group against the group member limit.',
+                'description_ar' => 'عدد الأعضاء في كل مجموعة طلابية مقارنة بحد الأعضاء.',
+                'sql_text'       => <<<'SQL'
+SELECT g.id, g.name, g.max_members, COUNT(s.id) AS members
+FROM student_groups g
+LEFT JOIN students s ON s.group_id = g.id
+GROUP BY g.id, g.name, g.max_members
+ORDER BY members DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'graduation',
+                'name'           => 'Graduates per university',
+                'name_ar'        => 'الخريجون لكل جامعة',
+                'description'    => 'Graduate count and average final GPA per university (revoked records excluded).',
+                'description_ar' => 'عدد الخريجين ومتوسط المعدل النهائي لكل جامعة (بدون السجلات الملغاة).',
+                'sql_text'       => <<<'SQL'
+SELECT u.official_name_en AS university, COUNT(g.id) AS graduates, ROUND(AVG(g.final_gpa), 2) AS avg_final_gpa
+FROM graduation_records g
+INNER JOIN universities u ON u.id = g.university_id
+WHERE g.status = 'graduated'
+GROUP BY u.id, u.official_name_en
+ORDER BY graduates DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'graduation',
+                'name'           => 'Graduations by month',
+                'name_ar'        => 'التخرج حسب الشهر',
+                'description'    => 'Graduation records per month and status (graduated or revoked).',
+                'description_ar' => 'سجلات التخرج لكل شهر وحالة (متخرج أو ملغى).',
+                'sql_text'       => <<<'SQL'
+SELECT SUBSTR(graduation_date, 1, 7) AS grad_month, status, COUNT(*) AS records
+FROM graduation_records
+GROUP BY SUBSTR(graduation_date, 1, 7), status
+ORDER BY grad_month DESC
+LIMIT 50
+SQL,
+            ],
+            [
+                'category'       => 'graduation',
+                'name'           => 'Final GPA distribution',
+                'name_ar'        => 'توزيع المعدل النهائي',
+                'description'    => 'Graduates bucketed by final GPA on the 4.0 scale.',
+                'description_ar' => 'الخريجون موزعون على شرائح المعدل النهائي (مقياس 4.0).',
+                'sql_text'       => <<<'SQL'
+SELECT CASE WHEN final_gpa >= 3.5 THEN '3.5 and above'
+            WHEN final_gpa >= 3.0 THEN '3.0-3.49'
+            WHEN final_gpa >= 2.0 THEN '2.0-2.99'
+            ELSE 'below 2.0' END AS gpa_band,
+       COUNT(*) AS graduates
+FROM graduation_records
+WHERE status = 'graduated' AND final_gpa IS NOT NULL
+GROUP BY CASE WHEN final_gpa >= 3.5 THEN '3.5 and above'
+              WHEN final_gpa >= 3.0 THEN '3.0-3.49'
+              WHEN final_gpa >= 2.0 THEN '2.0-2.99'
+              ELSE 'below 2.0' END
+ORDER BY graduates DESC
 SQL,
             ],
         ];

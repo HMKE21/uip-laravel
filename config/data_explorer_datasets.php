@@ -13,7 +13,8 @@
  *
  * Every `table` value here MUST be deliberately allow-listed (the original
  * six plus the exam platform, staff, students, courses, attendance,
- * assignments, grading and course-content tables) — this is
+ * assignments, grading, course-content, registration, fees, summer-term,
+ * academic-structure and graduation tables) — this is
  * a read-only exploration surface, not a generic "browse any table"
  * tool, so the allow-list is deliberately closed.
  * @package UIP
@@ -376,6 +377,22 @@ return [
                 'label' => ['en' => 'Course final grades', 'ar' => 'الدرجات النهائية للمقررات']],
             ['column' => 'id', 'references' => 'course_video_views', 'references_column' => 'student_id',
                 'label' => ['en' => 'Video views', 'ar' => 'مشاهدات الفيديو']],
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'faculty_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty', 'ar' => 'الكلية']],
+            ['column' => 'department_id', 'references' => 'departments', 'references_column' => 'id',
+                'label' => ['en' => 'Department', 'ar' => 'القسم']],
+            ['column' => 'group_id', 'references' => 'student_groups', 'references_column' => 'id',
+                'label' => ['en' => 'Student group', 'ar' => 'المجموعة الطلابية']],
+            ['column' => 'id', 'references' => 'student_fees', 'references_column' => 'student_id',
+                'label' => ['en' => 'Fee dues', 'ar' => 'مستحقات الرسوم']],
+            ['column' => 'id', 'references' => 'fee_payments', 'references_column' => 'student_id',
+                'label' => ['en' => 'Fee payments', 'ar' => 'دفعات الرسوم']],
+            ['column' => 'id', 'references' => 'summer_registrations', 'references_column' => 'student_id',
+                'label' => ['en' => 'Summer registrations', 'ar' => 'التسجيل الصيفي']],
+            ['column' => 'id', 'references' => 'graduation_records', 'references_column' => 'student_id',
+                'label' => ['en' => 'Graduation record', 'ar' => 'سجل التخرج']],
         ],
     ],
 
@@ -410,6 +427,14 @@ return [
                 'label' => ['en' => 'Materials', 'ar' => 'المواد']],
             ['column' => 'id', 'references' => 'course_videos', 'references_column' => 'course_id',
                 'label' => ['en' => 'Videos', 'ar' => 'الفيديوهات']],
+            ['column' => 'faculty_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty (empty = whole university)', 'ar' => 'الكلية (الفارغ = الجامعة كلها)']],
+            ['column' => 'department_id', 'references' => 'departments', 'references_column' => 'id',
+                'label' => ['en' => 'Department', 'ar' => 'القسم']],
+            ['column' => 'id', 'references' => 'summer_offerings', 'references_column' => 'course_id',
+                'label' => ['en' => 'Summer offerings', 'ar' => 'العروض الصيفية']],
+            ['column' => 'id', 'references' => 'summer_registrations', 'references_column' => 'course_id',
+                'label' => ['en' => 'Summer registrations', 'ar' => 'التسجيل الصيفي']],
         ],
     ],
 
@@ -810,6 +835,334 @@ return [
                 'label' => ['en' => 'Course', 'ar' => 'المقرر']],
             ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
                 'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    // ------------------------------------------------------------------
+    // Registration, fees and summer terms (read-only analytics).
+    // Bank-transfer references and fee-waiver notes are listed in
+    // sensitive_columns and are blocked everywhere (Explorer, Query Builder,
+    // Advanced Analytics, Data Quality). NOTE: the Query Builder rejects raw
+    // SQL that mentions ANY sensitive column name from ANY dataset.
+    // scope_type/scope_id on registration_periods/policies is polymorphic
+    // (university | faculty), so both relationships are declared with a label
+    // that says which scope_type applies.
+    // ------------------------------------------------------------------
+
+    'registration_periods' => [
+        'table' => 'registration_periods',
+        'label' => ['en' => 'Registration Periods', 'ar' => 'فترات التسجيل'],
+        'description' => [
+            'en' => 'Course enrollment/drop windows per university or faculty: kind (enroll, drop, both), opening and closing time.',
+            'ar' => 'فترات تسجيل وحذف المقررات لكل جامعة أو كلية: النوع (تسجيل أو حذف أو الاثنين) ووقت الفتح والإغلاق.',
+        ],
+        'icon' => 'calendar',
+        'primary_key' => 'id',
+        'default_sort' => 'opens_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'scope_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University (when scope_type = university)', 'ar' => 'الجامعة (لو النطاق جامعة)']],
+            ['column' => 'scope_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty (when scope_type = faculty)', 'ar' => 'الكلية (لو النطاق كلية)']],
+            ['column' => 'created_by_user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Created by', 'ar' => 'أنشأها']],
+        ],
+    ],
+
+    'registration_policies' => [
+        'table' => 'registration_policies',
+        'label' => ['en' => 'Registration Policies', 'ar' => 'سياسات التسجيل'],
+        'description' => [
+            'en' => 'Registration rules per university or faculty: period/prerequisite/hours/conflict enforcement and GPA-based credit-hour limits (empty = inherited).',
+            'ar' => 'قواعد التسجيل لكل جامعة أو كلية: إلزام الفترات والمتطلبات السابقة والساعات والتعارض وحدود الساعات حسب المعدل (الفارغ = موروث).',
+        ],
+        'icon' => 'settings',
+        'primary_key' => 'id',
+        'default_sort' => 'updated_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'scope_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University (when scope_type = university)', 'ar' => 'الجامعة (لو النطاق جامعة)']],
+            ['column' => 'scope_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty (when scope_type = faculty)', 'ar' => 'الكلية (لو النطاق كلية)']],
+            ['column' => 'updated_by_user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Last updated by', 'ar' => 'آخر تعديل بواسطة']],
+        ],
+    ],
+
+    'fee_items' => [
+        'table' => 'fee_items',
+        'label' => ['en' => 'Fee Items', 'ar' => 'بنود الرسوم'],
+        'description' => [
+            'en' => 'Fee items issued by a university or faculty: kind (tuition, registration, service, other), amount, currency and due date.',
+            'ar' => 'بنود الرسوم التي تصدرها الجامعة أو الكلية: النوع (مصاريف دراسية أو تسجيل أو خدمة أو أخرى) والمبلغ والعملة وتاريخ الاستحقاق.',
+        ],
+        'icon' => 'tag',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'faculty_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty (empty = whole university)', 'ar' => 'الكلية (الفارغ = الجامعة كلها)']],
+            ['column' => 'id', 'references' => 'student_fees', 'references_column' => 'fee_item_id',
+                'label' => ['en' => 'Student dues of this item', 'ar' => 'مستحقات الطلاب لهذا البند']],
+            ['column' => 'created_by_user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Created by', 'ar' => 'أنشأه']],
+        ],
+    ],
+
+    'student_fees' => [
+        'table' => 'student_fees',
+        'label' => ['en' => 'Student Fees', 'ar' => 'مستحقات الطلاب'],
+        'description' => [
+            'en' => 'What each student owes per fee item: amount, paid amount, due date and status (unpaid, partial, paid, waived). Waiver notes are hidden.',
+            'ar' => 'المستحق على كل طالب لكل بند رسوم: المبلغ والمدفوع وتاريخ الاستحقاق والحالة (غير مدفوع أو جزئي أو مدفوع أو معفى). ملاحظات الإعفاء مخفية.',
+        ],
+        'icon' => 'dollar',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['waive_note'],
+        'relationships' => [
+            ['column' => 'fee_item_id', 'references' => 'fee_items', 'references_column' => 'id',
+                'label' => ['en' => 'Fee item', 'ar' => 'بند الرسوم']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+            ['column' => 'id', 'references' => 'fee_payments', 'references_column' => 'student_fee_id',
+                'label' => ['en' => 'Payments against this due', 'ar' => 'الدفعات على هذا المستحق']],
+        ],
+    ],
+
+    'fee_payments' => [
+        'table' => 'fee_payments',
+        'label' => ['en' => 'Fee Payments', 'ar' => 'دفعات الرسوم'],
+        'description' => [
+            'en' => 'Payments against student fees: amount, method (cash, bank transfer, card, other), status (pending, confirmed, rejected) and decision time. Transfer references are hidden.',
+            'ar' => 'الدفعات على مستحقات الطلاب: المبلغ وطريقة الدفع (نقدي أو تحويل بنكي أو بطاقة أو أخرى) والحالة (معلّقة أو مؤكَّدة أو مرفوضة) ووقت القرار. مراجع التحويل مخفية.',
+        ],
+        'icon' => 'dollar',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['reference'],
+        'relationships' => [
+            ['column' => 'student_fee_id', 'references' => 'student_fees', 'references_column' => 'id',
+                'label' => ['en' => 'Student fee (due)', 'ar' => 'المستحق']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+            ['column' => 'recorded_by_user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Recorded by', 'ar' => 'سجّلها']],
+        ],
+    ],
+
+    'summer_terms' => [
+        'table' => 'summer_terms',
+        'label' => ['en' => 'Summer Terms', 'ar' => 'الفصول الصيفية'],
+        'description' => [
+            'en' => 'Summer terms per university or faculty: registration window, term dates, maximum credit hours and failed-courses-only flag.',
+            'ar' => 'الفصول الصيفية لكل جامعة أو كلية: فترة التسجيل وتواريخ الفصل والحد الأقصى للساعات وعلامة "المواد الراسب فيها فقط".',
+        ],
+        'icon' => 'sun',
+        'primary_key' => 'id',
+        'default_sort' => 'opens_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'faculty_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty (empty = whole university)', 'ar' => 'الكلية (الفارغ = الجامعة كلها)']],
+            ['column' => 'id', 'references' => 'summer_offerings', 'references_column' => 'term_id',
+                'label' => ['en' => 'Offered courses', 'ar' => 'المواد المعروضة']],
+            ['column' => 'id', 'references' => 'summer_registrations', 'references_column' => 'term_id',
+                'label' => ['en' => 'Registration requests', 'ar' => 'طلبات التسجيل']],
+        ],
+    ],
+
+    'summer_offerings' => [
+        'table' => 'summer_offerings',
+        'label' => ['en' => 'Summer Offerings', 'ar' => 'المواد المعروضة صيفيًا'],
+        'description' => [
+            'en' => 'Courses offered in each summer term with their seat capacity (empty = unlimited).',
+            'ar' => 'المواد المعروضة في كل فصل صيفي مع السعة (الفارغ = بدون حد).',
+        ],
+        'icon' => 'layers',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'term_id', 'references' => 'summer_terms', 'references_column' => 'id',
+                'label' => ['en' => 'Summer term', 'ar' => 'الفصل الصيفي']],
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+        ],
+    ],
+
+    'summer_registrations' => [
+        'table' => 'summer_registrations',
+        'label' => ['en' => 'Summer Registrations', 'ar' => 'التسجيل الصيفي'],
+        'description' => [
+            'en' => 'Student summer-course requests: status (pending, approved, rejected, cancelled), who decided, in which role, and when.',
+            'ar' => 'طلبات الطلاب لمواد الصيفي: الحالة (معلّق أو موافق أو مرفوض أو ملغي) ومن قرّر وبأي دور ومتى.',
+        ],
+        'icon' => 'sun',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'term_id', 'references' => 'summer_terms', 'references_column' => 'id',
+                'label' => ['en' => 'Summer term', 'ar' => 'الفصل الصيفي']],
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+            ['column' => 'decided_by_user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Decided by', 'ar' => 'قرّر']],
+        ],
+    ],
+
+    // ------------------------------------------------------------------
+    // Academic structure and graduation (read-only analytics).
+    // Stored image paths (logos, signatures, stamps), exact campus GPS,
+    // faculty contact details and graduation certificate numbers are listed in
+    // sensitive_columns and are blocked everywhere. universities and
+    // departments use soft-delete (deleted_at), so removed rows are excluded
+    // automatically from the Explorer and the Query Builder.
+    // ------------------------------------------------------------------
+
+    'universities' => [
+        'table' => 'universities',
+        'label' => ['en' => 'Universities', 'ar' => 'الجامعات'],
+        'description' => [
+            'en' => 'Universities on the platform: names, country, city, verification status and expiry, visibility and email domain. Logos, signatures and stamps are hidden.',
+            'ar' => 'الجامعات على المنصة: الأسماء والدولة والمدينة وحالة التوثيق وانتهائه والظهور ودومين الإيميل. الشعارات والتوقيعات والأختام مخفية.',
+        ],
+        'icon' => 'building',
+        'primary_key' => 'id',
+        'soft_deletes' => true,
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['logo_path', 'signature_path', 'stamp_path', 'dean_signature_path'],
+        'relationships' => [
+            ['column' => 'user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'University account', 'ar' => 'حساب الجامعة']],
+            ['column' => 'id', 'references' => 'faculties', 'references_column' => 'university_id',
+                'label' => ['en' => 'Faculties', 'ar' => 'الكليات']],
+            ['column' => 'id', 'references' => 'student_groups', 'references_column' => 'university_id',
+                'label' => ['en' => 'Student groups', 'ar' => 'المجموعات الطلابية']],
+            ['column' => 'id', 'references' => 'students', 'references_column' => 'university_id',
+                'label' => ['en' => 'Students', 'ar' => 'الطلاب']],
+            ['column' => 'id', 'references' => 'graduation_records', 'references_column' => 'university_id',
+                'label' => ['en' => 'Graduation records', 'ar' => 'سجلات التخرج']],
+            ['column' => 'id', 'references' => 'fee_items', 'references_column' => 'university_id',
+                'label' => ['en' => 'Fee items', 'ar' => 'بنود الرسوم']],
+            ['column' => 'id', 'references' => 'summer_terms', 'references_column' => 'university_id',
+                'label' => ['en' => 'Summer terms', 'ar' => 'الفصول الصيفية']],
+        ],
+    ],
+
+    'faculties' => [
+        'table' => 'faculties',
+        'label' => ['en' => 'Faculties', 'ar' => 'الكليات'],
+        'description' => [
+            'en' => 'Faculties per university: names, status, visibility and campus geofence radius. Images, contact details and exact campus coordinates are hidden.',
+            'ar' => 'الكليات لكل جامعة: الأسماء والحالة والظهور ونصف قطر نطاق الحرم. الصور وبيانات التواصل وإحداثيات الحرم الدقيقة مخفية.',
+        ],
+        'icon' => 'building',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['logo_path', 'cover_path', 'contact_email', 'contact_phone', 'campus_lat', 'campus_lng'],
+        'relationships' => [
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'user_id', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty account', 'ar' => 'حساب الكلية']],
+            ['column' => 'id', 'references' => 'departments', 'references_column' => 'faculty_id',
+                'label' => ['en' => 'Departments', 'ar' => 'الأقسام']],
+            ['column' => 'id', 'references' => 'students', 'references_column' => 'faculty_id',
+                'label' => ['en' => 'Students', 'ar' => 'الطلاب']],
+            ['column' => 'id', 'references' => 'courses', 'references_column' => 'faculty_id',
+                'label' => ['en' => 'Courses', 'ar' => 'المقررات']],
+            ['column' => 'id', 'references' => 'fee_items', 'references_column' => 'faculty_id',
+                'label' => ['en' => 'Fee items', 'ar' => 'بنود الرسوم']],
+            ['column' => 'id', 'references' => 'summer_terms', 'references_column' => 'faculty_id',
+                'label' => ['en' => 'Summer terms', 'ar' => 'الفصول الصيفية']],
+        ],
+    ],
+
+    'departments' => [
+        'table' => 'departments',
+        'label' => ['en' => 'Departments', 'ar' => 'الأقسام'],
+        'description' => [
+            'en' => 'Academic departments per faculty: names, status and visibility.',
+            'ar' => 'الأقسام الأكاديمية لكل كلية: الأسماء والحالة والظهور.',
+        ],
+        'icon' => 'layers',
+        'primary_key' => 'id',
+        'soft_deletes' => true,
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'faculty_id', 'references' => 'faculties', 'references_column' => 'id',
+                'label' => ['en' => 'Faculty', 'ar' => 'الكلية']],
+            ['column' => 'id', 'references' => 'students', 'references_column' => 'department_id',
+                'label' => ['en' => 'Students', 'ar' => 'الطلاب']],
+            ['column' => 'id', 'references' => 'courses', 'references_column' => 'department_id',
+                'label' => ['en' => 'Courses', 'ar' => 'المقررات']],
+        ],
+    ],
+
+    'student_groups' => [
+        'table' => 'student_groups',
+        'label' => ['en' => 'Student Groups', 'ar' => 'المجموعات الطلابية'],
+        'description' => [
+            'en' => 'Student groups (sections/batches) per university with their member limit. Membership is the group_id column on students.',
+            'ar' => 'المجموعات الطلابية (الشُّعَب/الدفعات) لكل جامعة مع حد الأعضاء. العضوية في عمود group_id بجدول الطلاب.',
+        ],
+        'icon' => 'users',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'id', 'references' => 'students', 'references_column' => 'group_id',
+                'label' => ['en' => 'Member students', 'ar' => 'الطلاب الأعضاء']],
+        ],
+    ],
+
+    'graduation_records' => [
+        'table' => 'graduation_records',
+        'label' => ['en' => 'Graduation Records', 'ar' => 'سجلات التخرج'],
+        'description' => [
+            'en' => 'One record per graduate: graduation date, final GPA, degree/faculty/department names and status (graduated or revoked). Certificate numbers are hidden.',
+            'ar' => 'سجل لكل خريج: تاريخ التخرج والمعدل النهائي وأسماء الدرجة والكلية والقسم والحالة (متخرج أو ملغى). أرقام الشهادات مخفية.',
+        ],
+        'icon' => 'graduation-cap',
+        'primary_key' => 'id',
+        'default_sort' => 'graduation_date',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['certificate_number'],
+        'relationships' => [
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Graduate (student)', 'ar' => 'الخريج (الطالب)']],
+            ['column' => 'university_id', 'references' => 'universities', 'references_column' => 'id',
+                'label' => ['en' => 'University', 'ar' => 'الجامعة']],
+            ['column' => 'approved_by', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Approved by', 'ar' => 'اعتمده']],
+            ['column' => 'revoked_by', 'references' => 'users', 'references_column' => 'id',
+                'label' => ['en' => 'Revoked by', 'ar' => 'ألغاه']],
         ],
     ],
 
