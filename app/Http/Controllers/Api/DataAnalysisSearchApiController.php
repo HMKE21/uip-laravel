@@ -11,10 +11,10 @@ use Illuminate\Http\Request;
 /**
  * منقولة من app/Controllers/Api/DataAnalysisSearchApiController.php
  * القديمة — بند 24 batch 7 (Search). سطح /api/v1/data-analysis/search
- * واحد، بإعادة استخدام نفس استعلامات ProjectRepository::searchAll() اللي
- * الصفحة server-rendered القديمة (app/Views/data-analysis/search-results.php)
- * كانت بتستخدمها — بحث platform-wide، من غير أي فلتر status/verification
- * عمدًا، نفس القديمة بالظبط (شوف docblock الميثودز نفسها في كل ريبو).
+ * واحد: المشاريع عبر ProjectRepository::searchAll() (نفس استعلام الصفحة
+ * القديمة app/Views/data-analysis/search-results.php، من غير فلتر
+ * status/verification عمدًا) + الامتحانات والطلاب والدكاترة والمواد عبر
+ * DataAnalysisAcademicService::search() — بحث platform-wide كله.
  * quick() منقولة كمان (كانت للـ topbar palette القديمة) — الفرونت
  * الحالي (DataAnalysisSearchResults.jsx) بيستخدم index() بس، لكن quick()
  * اتنقلت زيها زي القديمة بالظبط لو فيه استهلاك تاني ليها لاحقًا.

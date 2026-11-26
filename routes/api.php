@@ -2174,8 +2174,8 @@ Route::prefix('v1')->group(function () {
         // منقولين بالفعل فوق).
         Route::get('/workspace', [DataAnalysisWorkspaceApiController::class, 'index']);
 
-        // بند 24 batch 7 — Search. بحث platform-wide واحد (projects)،
-        // بيغطي صفحة النتائج الكاملة وquick()
+        // بند 24 batch 7 — Search. بحث platform-wide واحد (المشاريع +
+        // الامتحانات + الطلاب + الدكاترة + المواد)، بيغطي صفحة النتائج الكاملة وquick()
         // بتاعة الـ topbar palette القديمة، نفس DataAnalysisSearchApiController
         // القديمة بالظبط.
         Route::prefix('search')->group(function () {
@@ -2789,12 +2789,11 @@ Route::prefix('v1')->group(function () {
         Route::post('/{id}/active', [FaqIntentController::class, 'setActive']);
     });
 
-    // بند 25 batch 1 — Security Portal: Dashboard + Sessions. RBAC
-    // بيتأكد منه جوّه كل كنترولر نفسه (security_admin/security_officer/
+    // بند 25 — Security Portal: Dashboard + Sessions + alerts, incidents,
+    // vulnerabilities, policies, logs, reports, report-files, settings.
+    // RBAC بيتأكد منه جوّه كل كنترولر نفسه (security_admin/security_officer/
     // admin) مش عبر middleware منفصل — نفس منطق analytics/data-analysis
-    // فوق، لأن admin عنده وصول كامل لكل بورتال. باقي البورتال (alerts,
-    // incidents, vulnerabilities, policies, logs, reports, report-files,
-    // settings) جاي مع batches 2-6.
+    // فوق، لأن admin عنده وصول كامل لكل بورتال.
     Route::prefix('security')->middleware('uip.auth')->group(function () {
         Route::get('/dashboard', [SecurityDashboardApiController::class, 'index'])->middleware('uip.can:security.dashboard.view');
 
