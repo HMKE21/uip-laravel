@@ -1990,6 +1990,9 @@ Route::prefix('v1')->group(function () {
             Route::get('/overview', [DataAnalysisExamsApiController::class, 'overview']);
             Route::get('/students', [DataAnalysisExamsApiController::class, 'students']);
             Route::get('/exam/{id}', [DataAnalysisExamsApiController::class, 'showExam'])->where('id', '[0-9]+');
+            // بند 5 — الامتحانات بعمق (تجميعي بس). overview قبل {key}.
+            Route::get('/deep/overview', [DataAnalysisExamsApiController::class, 'deepOverview']);
+            Route::get('/deep/{key}', [DataAnalysisExamsApiController::class, 'deep'])->where('key', '[a-z_]+');
         });
 
         // بند 4 (الناقص للمحلل) — المشاريع بعمق: approvals، grading، team،

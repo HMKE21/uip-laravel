@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\AuditLogService;
+use App\Services\DataAnalysisExamsDeepService;
 use App\Services\DataAnalysisExamsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,6 +18,7 @@ class DataAnalysisExamsApiController extends Controller
 {
     public function __construct(
         private DataAnalysisExamsService $exams,
+        private DataAnalysisExamsDeepService $deep,
         private AuditLogService $auditLog
     ) {
     }
@@ -76,6 +78,30 @@ class DataAnalysisExamsApiController extends Controller
         // بيانات طلاب (أسماء/درجات) — بنسجّل الاطلاع على امتحان بعينه.
         $this->auditLog->record($request->attributes->get('uip_user_id'), 'data_analysis.exam_viewed', 'exam', (int) $id);
         return $this->apiSuccess($data, 'Exam analytics retrieved successfully.');
+    }
+
+    /** GET /api/v1/data-analysis/exams/deep/overview — كروت كل أقسام الامتحانات بعمق + ترند يومي. */
+    public function deepOverview(Request $request): JsonResponse
+    {
+        if ($deny = $this->deny($request)) {
+            return $deny;
+        }
+        return $this->apiSuccess($this->deep->overview($this->filtersFrom($request)), 'Exam analytics overview retrieved successfully.');
+    }
+
+    /**
+     * GET /api/v1/data-analysis/exams/deep/{key} — الامتحانات بعمق (بند 5):
+     * targeting | grading | ai | proctoring | pools | overrides. تجميعي بس.
+     */
+    public function deep(Request $request, string $key): JsonResponse
+    {
+        if ($deny = $this->deny($request)) {
+            return $deny;
+        }
+        if (!in_array($key, DataAnalysisExamsDeepService::SECTIONS, true)) {
+            return $this->apiError('Unknown exam analytics section.', null, 404);
+        }
+        return $this->apiSuccess($this->deep->section($key, $this->filtersFrom($request)), 'Exam analytics section retrieved successfully.');
     }
 
     private function filtersFrom(Request $request): array
