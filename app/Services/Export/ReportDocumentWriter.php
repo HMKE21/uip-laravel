@@ -71,38 +71,156 @@ final class ReportDocumentWriter
     {
         $dir = $rtl ? 'rtl' : 'ltr';
         $lang = $rtl ? 'ar' : 'en';
+        $L = $rtl
+            ? ['search' => 'ابحث داخل التقرير…', 'print' => 'طباعة', 'theme' => 'الوضع', 'sections' => 'الأقسام', 'rows' => 'صف', 'none' => 'لا توجد نتائج مطابقة.', 'empty' => 'لا توجد بيانات.', 'top' => 'للأعلى', 'info' => 'معلومات التقرير']
+            : ['search' => 'Search in report…', 'print' => 'Print', 'theme' => 'Theme', 'sections' => 'Sections', 'rows' => 'rows', 'none' => 'No matching results.', 'empty' => 'No data.', 'top' => 'Top', 'info' => 'Report details'];
+
+        $css = <<<'CSS'
+:root{--bg:#f4f6fb;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e2e8f0;--th:#eef2ff;--zebra:#f8fafc;--pri:#4f46e5;--pri2:#7c5cff;--ring:rgba(79,70,229,.18);--shadow:0 1px 2px rgba(15,23,42,.05),0 10px 30px -14px rgba(15,23,42,.18)}
+:root[data-theme=dark]{--bg:#0b1020;--card:#131a33;--ink:#e8ecff;--mut:#9aa6d1;--line:#222c52;--th:#1a2347;--zebra:#10173a;--pri:#8b93ff;--pri2:#b48bff;--ring:rgba(139,147,255,.25);--shadow:0 10px 30px -14px rgba(0,0,0,.6)}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,-apple-system,Tahoma,Arial,sans-serif;line-height:1.65;-webkit-font-smoothing:antialiased}
+.hero{background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;padding:34px 20px 74px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 18px}
+.hero .wrap{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.hero h1{margin:0;font-size:clamp(22px,4vw,32px);line-height:1.25;font-weight:800;letter-spacing:-.01em}
+.hero small{display:block;opacity:.85;margin-top:6px;font-size:13px}
+.tools{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:0;cursor:pointer;font:600 13px/1 inherit;color:#fff;background:rgba(255,255,255,.18);padding:10px 14px;border-radius:999px;display:inline-flex;align-items:center;gap:6px;transition:background .15s,transform .15s}
+.btn:hover{background:rgba(255,255,255,.3)}.btn:active{transform:scale(.97)}
+main.wrap{margin-top:-48px;padding-bottom:48px}
+.bar{position:sticky;top:0;z-index:20;margin:0 -18px 18px;padding:10px 18px;background:color-mix(in srgb,var(--bg) 86%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.bar .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.search{flex:1 1 220px;min-width:0;padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:14px;outline:0}
+.search:focus{border-color:var(--pri);box-shadow:0 0 0 3px var(--ring)}
+.toc{display:flex;gap:6px;overflow-x:auto;padding:2px 0;scrollbar-width:none}.toc::-webkit-scrollbar{display:none}
+.toc a{white-space:nowrap;font-size:12.5px;font-weight:600;color:var(--mut);text-decoration:none;padding:6px 11px;border-radius:999px;background:var(--card);border:1px solid var(--line)}
+.toc a:hover,.toc a.on{color:var(--pri);border-color:var(--pri)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden}
+.card>header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.card h2{margin:0;font-size:17px;font-weight:700}
+.badge{font-size:12px;font-weight:700;color:var(--pri);background:var(--th);padding:3px 10px;border-radius:999px;white-space:nowrap}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1px;background:var(--line)}
+.meta div{background:var(--card);padding:12px 18px}.meta span{display:block;font-size:12px;color:var(--mut);font-weight:600}.meta b{display:block;font-size:15px;font-weight:700;word-break:break-word}
+.tw{overflow:auto;max-height:70vh}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:14px}
+th,td{padding:10px 16px;text-align:start;vertical-align:top;border-bottom:1px solid var(--line)}
+th{position:sticky;top:0;background:var(--th);font-size:12.5px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.03em;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--pri)}th.asc::after{content:" ▲";font-size:9px}th.desc::after{content:" ▼";font-size:9px}
+tbody tr:nth-child(even) td{background:var(--zebra)}tbody tr:hover td{background:var(--th)}
+td.n{text-align:end;font-variant-numeric:tabular-nums;font-weight:600}
+tr:last-child td{border-bottom:0}
+td.k{font-weight:600;color:var(--mut);width:34%}
+.empty,.noresult{padding:22px;text-align:center;color:var(--mut);font-size:14px}.noresult{display:none}
+mark{background:#fde68a;color:#111;border-radius:3px;padding:0 2px}
+.top{position:fixed;inset-block-end:18px;inset-inline-end:18px;width:42px;height:42px;border-radius:50%;border:0;background:var(--pri);color:#fff;font-size:18px;cursor:pointer;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:opacity .2s}.top.show{opacity:1;pointer-events:auto}
+footer{text-align:center;color:var(--mut);font-size:12px;padding:6px 0 28px}
+pre,code{white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:left}
+@media(max-width:640px){th,td{padding:9px 11px;font-size:13px}.hero{padding-bottom:64px}}
+@media print{.hero{background:none!important;color:#000;padding:0 0 12px}.tools,.bar,.top{display:none!important}main.wrap{margin:0}.card{box-shadow:none;break-inside:avoid-page}.tw{max-height:none;overflow:visible}body{background:#fff}th{position:static}}
+CSS;
+
+        $js = <<<'JS'
+(function(){
+var d=document,r=d.documentElement,$=function(s,c){return(c||d).querySelector(s)},$$=function(s,c){return[].slice.call((c||d).querySelectorAll(s))};
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+var t=store('rpt-theme')||(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+r.setAttribute('data-theme',t);
+$('#th').onclick=function(){t=t==='dark'?'light':'dark';r.setAttribute('data-theme',t);store('rpt-theme',t)};
+$('#pr').onclick=function(){window.print()};
+/* sortable tables */
+$$('table.s').forEach(function(tb){var ths=$$('th',tb);ths.forEach(function(th,i){th.onclick=function(){
+var asc=!th.classList.contains('asc');ths.forEach(function(x){x.classList.remove('asc','desc')});th.classList.add(asc?'asc':'desc');
+var body=$('tbody',tb),rows=$$('tr',body);
+rows.sort(function(a,b){var x=a.cells[i].textContent.trim(),y=b.cells[i].textContent.trim(),nx=parseFloat(x.replace(/[,\s%]/g,'')),ny=parseFloat(y.replace(/[,\s%]/g,''));
+var c=(!isNaN(nx)&&!isNaN(ny)&&/^[-+\d.,\s%]+$/.test(x)&&/^[-+\d.,\s%]+$/.test(y))?nx-ny:x.localeCompare(y,undefined,{numeric:true});return asc?c:-c});
+rows.forEach(function(x){body.appendChild(x)})}})});
+/* numeric column alignment */
+$$('table').forEach(function(tb){var rows=$$('tbody tr',tb);if(!rows.length)return;var cols=rows[0].cells.length;
+for(var c=0;c<cols;c++){var ok=rows.every(function(x){var v=(x.cells[c]||{}).textContent;return v&&/^[-+\d.,\s%]+$/.test(v.trim())&&v.trim()!==''});
+if(ok&&!(tb.classList.contains('kv')&&c===0))rows.forEach(function(x){x.cells[c].classList.add('n')})}});
+/* search */
+var q=$('#q'),secs=$$('section.card[data-s]');
+function esc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+function clear(){$$('mark').forEach(function(m){m.replaceWith(d.createTextNode(m.textContent))});}
+q.oninput=function(){var v=q.value.trim().toLowerCase();clear();
+secs.forEach(function(s){var rows=$$('tbody tr',s),hit=0;rows.forEach(function(x){var m=!v||x.textContent.toLowerCase().indexOf(v)>-1;x.style.display=m?'':'none';if(m)hit++;
+if(m&&v){$$('td',x).forEach(function(td){if(td.children.length)return;var tx=td.textContent,i=tx.toLowerCase().indexOf(v);if(i>-1){td.innerHTML='';td.append(tx.slice(0,i));var mk=d.createElement('mark');mk.textContent=tx.slice(i,i+v.length);td.append(mk,tx.slice(i+v.length))}})}});
+var nr=$('.noresult',s);if(nr)nr.style.display=(rows.length&&!hit)?'block':'none';s.style.display=(!v||hit||!rows.length)?'':'none'})};
+/* toc highlight + back to top */
+var links=$$('.toc a'),tp=$('#tp');
+function spy(){tp.classList.toggle('show',scrollY>500);var cur=null;secs.forEach(function(s){if(s.getBoundingClientRect().top<140)cur=s.id});links.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+cur)})}
+addEventListener('scroll',spy,{passive:true});spy();tp.onclick=function(){scrollTo({top:0})};
+})();
+JS;
+
         $h = '<!DOCTYPE html><html lang="' . $lang . '" dir="' . $dir . '"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1"><title>' . self::esc($title) . '</title>'
-            . '<style>body{font-family:Segoe UI,Tahoma,Arial,sans-serif;margin:32px auto;max-width:1000px;padding:0 16px;color:#0f172a;line-height:1.6}'
-            . 'h1{font-size:24px;margin:0 0 16px}h2{font-size:18px;margin:28px 0 8px;border-bottom:2px solid #e2e8f0;padding-bottom:4px}'
-            . 'table{border-collapse:collapse;width:100%;margin:8px 0;font-size:14px}th,td{border:1px solid #cbd5e1;padding:6px 10px;vertical-align:top;text-align:start}'
-            . 'th{background:#f1f5f9}td.k{width:30%;font-weight:600;background:#f8fafc}pre,code{white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:left}'
-            . '@media print{body{margin:0}}</style></head><body>';
-        $h .= '<h1>' . self::esc($title) . '</h1>';
-        if ($meta) {
-            $h .= '<table>';
-            foreach ($meta as $k => $v) {
-                $h .= '<tr><td class="k">' . self::esc($k) . '</td><td>' . nl2br(self::esc($v)) . '</td></tr>';
+            . '<style>' . $css . '</style></head><body>';
+
+        $h .= '<div class="hero"><div class="wrap"><div><h1>' . self::esc($title) . '</h1>';
+        $gen = '';
+        foreach ($meta as $k => $v) {
+            if (preg_match('/generated|created|أنشئ|تاريخ|date/iu', (string) $k)) {
+                $gen = (string) $v;
+                break;
             }
-            $h .= '</table>';
         }
-        foreach ($sections as $sec) {
-            $h .= '<h2>' . self::esc($sec['title'] ?? '') . '</h2>';
+        if ($gen !== '') {
+            $h .= '<small>' . self::esc($gen) . '</small>';
+        }
+        $h .= '</div><div class="tools"><button class="btn" id="th" type="button">◐ ' . $L['theme'] . '</button>'
+            . '<button class="btn" id="pr" type="button">⎙ ' . $L['print'] . '</button></div></div></div>';
+
+        $h .= '<main class="wrap"><div class="bar"><div class="row"><input id="q" class="search" type="search" placeholder="' . $L['search'] . '" autocomplete="off"></div>';
+        if (count($sections) > 1) {
+            $h .= '<div class="toc" style="margin-top:8px">';
+            foreach ($sections as $i => $sec) {
+                $h .= '<a href="#s' . $i . '">' . self::esc($sec['title'] ?? '') . '</a>';
+            }
+            $h .= '</div>';
+        }
+        $h .= '</div>';
+
+        if ($meta) {
+            $h .= '<section class="card"><header><h2>' . $L['info'] . '</h2></header><div class="meta">';
+            foreach ($meta as $k => $v) {
+                $h .= '<div><span>' . self::esc($k) . '</span><b>' . nl2br(self::esc($v)) . '</b></div>';
+            }
+            $h .= '</div></section>';
+        }
+
+        foreach ($sections as $i => $sec) {
             $rows = $sec['rows'] ?? [];
+            $h .= '<section class="card" id="s' . $i . '" data-s="1"><header><h2>' . self::esc($sec['title'] ?? '') . '</h2>';
+            if ($rows) {
+                $h .= '<span class="badge">' . count($rows) . ' ' . $L['rows'] . '</span>';
+            }
+            $h .= '</header>';
             if (!$rows) {
-                $h .= '<p>—</p>';
+                $h .= '<div class="empty">' . $L['empty'] . '</div></section>';
                 continue;
             }
-            $h .= '<table>';
-            if (!empty($sec['header'])) {
-                $h .= '<tr>' . implode('', array_map(fn ($c) => '<th>' . self::esc($c) . '</th>', $sec['header'])) . '</tr>';
+            $hasHead = !empty($sec['header']);
+            $h .= '<div class="tw"><table class="' . ($hasHead ? 's' : 'kv') . '">';
+            if ($hasHead) {
+                $h .= '<thead><tr>' . implode('', array_map(fn ($c) => '<th>' . self::esc($c) . '</th>', $sec['header'])) . '</tr></thead>';
             }
+            $h .= '<tbody>';
             foreach ($rows as $r) {
-                $h .= '<tr>' . implode('', array_map(fn ($c) => '<td>' . nl2br(self::esc($c)) . '</td>', array_values($r))) . '</tr>';
+                $cells = array_values($r);
+                $h .= '<tr>';
+                foreach ($cells as $ci => $c) {
+                    $h .= '<td' . (!$hasHead && $ci === 0 ? ' class="k"' : '') . '>' . nl2br(self::esc($c)) . '</td>';
+                }
+                $h .= '</tr>';
             }
-            $h .= '</table>';
+            $h .= '</tbody></table></div><div class="noresult">' . $L['none'] . '</div></section>';
         }
-        return $h . '</body></html>';
+
+        $h .= '<footer>' . self::esc($title) . '</footer></main><button class="top" id="tp" type="button" aria-label="' . $L['top'] . '">↑</button>'
+            . '<script>' . $js . '</script></body></html>';
+        return $h;
     }
 
     // -- Markdown --------------------------------------------------------
