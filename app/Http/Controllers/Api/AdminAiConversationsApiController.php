@@ -133,7 +133,7 @@ class AdminAiConversationsApiController extends Controller
         $ids = array_column($messages, 'id');
         $attachments = $ids
             ? DB::table('ai_message_attachments')->whereIn('message_id', $ids)
-                ->get(['id', 'message_id', 'kind', 'original_name', 'size_bytes'])->groupBy('message_id')
+                ->get(['id', 'message_id', 'kind', 'original_name', 'mime_type', 'extension', 'size_bytes'])->groupBy('message_id')
             : collect();
 
         $adminId = (int) $request->attributes->get('uip_user_id');
@@ -142,8 +142,18 @@ class AdminAiConversationsApiController extends Controller
         $locked = 0;
 
         foreach ($messages as &$m) {
-            $m['attachments'] = ($attachments[$m['id']] ?? collect())->map(fn ($a) => (array) $a)->values()->all();
+            $m['attachments'] = ($attachments[$m['id']] ?? collect())->map(function ($a) {
+                $a = (array) $a;
+                // endpoint الأدمن المحمي بالتصريح — الملفات بتتحمّل بطلب موثّق (Bearer)
+                $a['url'] = '/api/v1/admin/messaging/ai-conversations/attachments/' . (int) $a['id'] . '/file';
+
+                return $a;
+            })->values()->all();
             $m['is_deleted']  = (bool) $m['is_deleted'];
+            // بعض الموديلات بتكتب <tool_call> كنص: مش بيتعرض (ولا للمحادثات القديمة المخزّنة).
+            if (is_string($m['content'] ?? null)) {
+                $m['content'] = self::stripToolCalls($m['content']);
+            }
             // الإخفاء على السيرفر: برا الفترة المصرّح بيها بترجع مشفّرة وبدون نص/أسماء ملفات/أخطاء.
             if ($this->access->covers($grants, $m['created_at'] ?? null)) {
                 $m['locked'] = false;
@@ -177,5 +187,65 @@ class AdminAiConversationsApiController extends Controller
                 'configured' => $this->access->keyConfigured('ai'),
             ],
         ], 'AI conversation retrieved successfully.');
+    }
+
+    /** يشيل بلوكات <tool_call> / <function_call> (مقفولة وغير مقفولة) من نص رد الموديل. */
+    private static function stripToolCalls(string $text): string
+    {
+        if (stripos($text, '<tool_call') === false && stripos($text, '</tool_call') === false && stripos($text, '<function_call') === false) {
+            return $text;
+        }
+        $text = preg_replace('#<(tool_calls?|function_call)\b[^>]*>.*?</\1\s*>#is', '', $text) ?? $text;
+        $text = preg_replace('#<(tool_calls?|function_call)\b.*$#is', '', $text) ?? $text;
+        $text = preg_replace('#</(tool_calls?|function_call)\s*>#i', '', $text) ?? $text;
+
+        return trim($text);
+    }
+
+    /** GET /api/v1/admin/messaging/ai-conversations/attachments/{id}/file — ملف مرفق محادثة AI (محمي بالتصريح، بيتسجّل). */
+    public function attachmentFile(Request $request, string $id)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+        $adminId = (int) $request->attributes->get('uip_user_id');
+
+        $row = DB::table('ai_message_attachments as a')
+            ->join('ai_conversations as c', 'c.id', '=', 'a.conversation_id')
+            ->leftJoin('ai_messages as m', 'm.id', '=', 'a.message_id')
+            ->where('a.id', (int) $id)
+            ->select('a.*', DB::raw('COALESCE(m.created_at, a.created_at) as message_created_at'))
+            ->first();
+        if (!$row) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        if (!$this->access->canRead($adminId, 'ai', $row->message_created_at ?? null, (int) $row->conversation_id)) {
+            return $this->apiError('This content is locked. Open it with the secret key first.', null, 403);
+        }
+
+        $path = \App\Support\SafePath::publicPath($row->stored_path);
+        if (!is_file($path)) {
+            return $this->apiError('File no longer exists.', null, 404);
+        }
+
+        $this->auditLog->record($adminId, 'admin.ai_attachment_viewed', 'AiMessageAttachment', (int) $id, null, ['conversation_id' => (int) $row->conversation_id]);
+
+        $mime = strtolower((string) ($row->mime_type ?: 'application/octet-stream'));
+        // أي نوع ممكن يشغّل سكريبت (html / svg / xml) بيتنزّل بس ومبيتعرضش inline.
+        $unsafe = preg_match('#^(text/html|application/xhtml|image/svg|text/xml|application/xml)#', $mime) === 1;
+        if ($unsafe) {
+            $mime = 'application/octet-stream';
+        }
+        $name = (string) $row->original_name;
+
+        // response()->file = streaming + HTTP Range (الفيديو / الصوت بيتقدّم ويتأخّر).
+        return response()->file($path, [
+            'Content-Type'                 => $mime,
+            'Content-Disposition'          => ($unsafe ? 'attachment' : 'inline') . '; filename="' . addcslashes(preg_replace('/[^\x20-\x7E]/', '_', $name), '"\\') . '"; filename*=UTF-8\'\'' . rawurlencode($name),
+            'X-Content-Type-Options'       => 'nosniff',
+            'Content-Security-Policy'      => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
+            'Cross-Origin-Resource-Policy' => 'cross-origin',
+            'Cache-Control'                => 'private, no-store',
+        ]);
     }
 }

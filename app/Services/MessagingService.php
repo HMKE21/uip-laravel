@@ -2848,6 +2848,8 @@ class MessagingService
             $atts[] = [
                 'id'               => (int) $a['id'],
                 'kind'             => $a['kind'] ?? 'file',
+                // endpoint الأدمن المحمي بالتصريح (Bearer) — بيشتغل حتى لو اليوزر حذف المرفق. ?variant=thumbnail للمصغّرة.
+                'url'              => '/api/v1/admin/messaging/oversight/attachments/' . (int) $a['id'] . '/file',
                 'original_name'    => $a['original_name'] ?? null,
                 'mime_type'        => $a['mime_type'] ?? null,
                 'extension'        => $a['extension'] ?? null,

@@ -428,7 +428,7 @@ class ConversationRepository
         }
 
         $participants = DB::select(
-            'SELECT u.id, u.full_name, u.email FROM conversation_participants cp INNER JOIN users u ON u.id = cp.user_id WHERE cp.conversation_id = ?',
+            'SELECT u.id, u.full_name, u.email, u.avatar_path FROM conversation_participants cp INNER JOIN users u ON u.id = cp.user_id WHERE cp.conversation_id = ?',
             [$id]
         );
 

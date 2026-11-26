@@ -1300,6 +1300,7 @@ Route::prefix('v1')->group(function () {
         // محادثات المستخدمين مع المساعد الذكي (قراءة-فقط، كل فتح بيتسجل).
         Route::get('/ai-conversations', [AdminAiConversationsApiController::class, 'index']);
         Route::get('/ai-conversations/{id}', [AdminAiConversationsApiController::class, 'thread'])->where('id', '[0-9]+');
+        Route::get('/ai-conversations/attachments/{id}/file', [AdminAiConversationsApiController::class, 'attachmentFile'])->where('id', '[0-9]+');
         Route::post('/oversight/messages/{id}/delete', [AdminMessagingOversightApiController::class, 'deleteMessage']);
         Route::get('/oversight/attachments/{id}/file', [AdminMessagingOversightApiController::class, 'attachmentFile'])->where('id', '[0-9]+');
         Route::delete('/oversight/attachments/{id}', [AdminMessagingOversightApiController::class, 'deleteAttachment']);
