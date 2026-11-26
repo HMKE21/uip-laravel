@@ -143,7 +143,7 @@ class AdminMessagingOversightApiController extends Controller
             $grant = $this->access->grant(
                 (int) $request->attributes->get('uip_user_id'),
                 (string) $request->input('scope', 'people'),
-                $request->only(['key', 'reason', 'date_from', 'date_to', 'conversation_id', 'minutes']),
+                $request->only(['key', 'reason', 'from_at', 'to_at', 'date_from', 'date_to', 'conversation_id', 'minutes']),
                 $request->ip()
             );
 

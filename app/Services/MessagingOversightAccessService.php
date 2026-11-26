@@ -92,16 +92,27 @@ class MessagingOversightAccessService
         if (mb_strlen($reason) < 5) {
             throw new \InvalidArgumentException('Write the reason for opening these messages (at least 5 characters).');
         }
-        $from = $this->parseDate($in['date_from'] ?? null);
-        $to = $this->parseDate($in['date_to'] ?? null);
-        if (!$from || !$to) {
-            throw new \InvalidArgumentException('Choose the start and end date of the messages you want to open.');
+        // الفترة بالتاريخ + الساعة والدقيقة (from_at / to_at بصيغة ISO). لو مش مبعوتة: أيام كاملة (date_from / date_to).
+        $fromAt = $this->parseMoment($in['from_at'] ?? null);
+        $toAt = $this->parseMoment($in['to_at'] ?? null);
+        if (!$fromAt || !$toAt) {
+            $d1 = $this->parseDate($in['date_from'] ?? null);
+            $d2 = $this->parseDate($in['date_to'] ?? null);
+            if (!$d1 || !$d2) {
+                throw new \InvalidArgumentException('Choose the start and end time of the messages you want to open.');
+            }
+            if ($d1->gt($d2)) {
+                [$d1, $d2] = [$d2, $d1];
+            }
+            $fromAt = $d1->copy()->startOfDay();
+            $toAt = $d2->copy()->endOfDay();
         }
-        if ($from->gt($to)) {
-            [$from, $to] = [$to, $from];
+        $toAt = $toAt->copy()->second(59); // آخر الدقيقة المختارة داخلة
+        if ($fromAt->gt($toAt)) {
+            throw new \InvalidArgumentException('The end time must be after the start time.');
         }
-        if ((int) $from->diffInDays($to) + 1 > $this->maxRangeDays()) {
-            throw new \InvalidArgumentException('The date range is too long (max ' . $this->maxRangeDays() . ' days).');
+        if ($toAt->timestamp - $fromAt->timestamp > $this->maxRangeDays() * 86400) {
+            throw new \InvalidArgumentException('The period is too long (max ' . $this->maxRangeDays() . ' days).');
         }
 
         $conversationId = isset($in['conversation_id']) && $in['conversation_id'] !== '' && $in['conversation_id'] !== null
@@ -134,8 +145,10 @@ class MessagingOversightAccessService
             'admin_id'        => $adminId,
             'scope'           => $scope,
             'conversation_id' => $conversationId,
-            'date_from'       => $from->toDateString(),
-            'date_to'         => $to->toDateString(),
+            'date_from'       => $fromAt->toDateString(),
+            'date_to'         => $toAt->toDateString(),
+            'from_at'         => $fromAt->format('Y-m-d H:i:s'),
+            'to_at'           => $toAt->format('Y-m-d H:i:s'),
             'reason'          => mb_substr($reason, 0, 255),
             'ip'              => $ip ? mb_substr($ip, 0, 64) : null,
             'expires_at'      => now()->addMinutes($minutes),
@@ -143,7 +156,7 @@ class MessagingOversightAccessService
         ]);
 
         $this->audit->record($adminId, 'admin.messaging_access_granted', 'MessagingOversight', $conversationId, null, [
-            'grant_id' => $id, 'scope' => $scope, 'date_from' => $from->toDateString(), 'date_to' => $to->toDateString(),
+            'grant_id' => $id, 'scope' => $scope, 'from_at' => $fromAt->format('Y-m-d H:i:s'), 'to_at' => $toAt->format('Y-m-d H:i:s'),
             'minutes' => $minutes, 'reason' => mb_substr($reason, 0, 255),
         ], $ip);
 
@@ -180,11 +193,26 @@ class MessagingOversightAccessService
     /** هل رسالة بتاريخ ده مفتوحة بأي تصريح من دول؟ */
     public function covers(array $grants, ?string $createdAt): bool
     {
-        $day = substr((string) $createdAt, 0, 10);
+        $stamp = trim((string) $createdAt);
+        $day = substr($stamp, 0, 10);
         if ($day === '') {
             return false;
         }
+        $ts = null;
         foreach ($grants as $g) {
+            // تصريح بالساعة والدقيقة
+            if (!empty($g['from_at']) && !empty($g['to_at'])) {
+                try {
+                    $ts ??= Carbon::parse($stamp)->timestamp;
+                    if ($ts >= Carbon::parse($g['from_at'])->timestamp && $ts <= Carbon::parse($g['to_at'])->timestamp) {
+                        return true;
+                    }
+                } catch (\Throwable $e) {
+                    // تاريخ مش مفهوم: يفضل مقفول
+                }
+                continue;
+            }
+            // تصريح قديم بالأيام الكاملة
             if ($day >= substr((string) $g['date_from'], 0, 10) && $day <= substr((string) $g['date_to'], 0, 10)) {
                 return true;
             }
@@ -305,10 +333,26 @@ class MessagingOversightAccessService
             'conversation_id' => $g['conversation_id'] !== null ? (int) $g['conversation_id'] : null,
             'date_from'       => substr((string) $g['date_from'], 0, 10),
             'date_to'         => substr((string) $g['date_to'], 0, 10),
+            'from_at'         => !empty($g['from_at']) ? Carbon::parse($g['from_at'])->toIso8601String() : null,
+            'to_at'           => !empty($g['to_at']) ? Carbon::parse($g['to_at'])->toIso8601String() : null,
             'reason'          => $g['reason'],
             'expires_at'      => (string) $g['expires_at'],
             'seconds_left'    => max(0, Carbon::parse($g['expires_at'])->timestamp - now()->timestamp),
         ];
+    }
+
+    /** ISO / تاريخ+وقت من المتصفح -> Carbon بتوقيت التطبيق (null لو مش صالح). */
+    private function parseMoment($v): ?Carbon
+    {
+        $v = trim((string) $v);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $v)) {
+            return null;
+        }
+        try {
+            return Carbon::parse($v)->setTimezone((string) config('app.timezone', 'UTC'));
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function parseDate($v): ?Carbon
