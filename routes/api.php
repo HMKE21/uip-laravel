@@ -1301,6 +1301,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/ai-conversations', [AdminAiConversationsApiController::class, 'index']);
         Route::get('/ai-conversations/{id}', [AdminAiConversationsApiController::class, 'thread'])->where('id', '[0-9]+');
         Route::post('/oversight/messages/{id}/delete', [AdminMessagingOversightApiController::class, 'deleteMessage']);
+        Route::get('/oversight/attachments/{id}/file', [AdminMessagingOversightApiController::class, 'attachmentFile'])->where('id', '[0-9]+');
         Route::delete('/oversight/attachments/{id}', [AdminMessagingOversightApiController::class, 'deleteAttachment']);
         Route::get('/analytics', [AdminMessagingOversightApiController::class, 'analytics']);
         Route::get('/settings', [AdminMessagingOversightApiController::class, 'settings']);

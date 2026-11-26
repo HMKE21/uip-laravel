@@ -997,15 +997,7 @@ class MessagingService
             throw new \RuntimeException('This message can no longer be undone.');
         }
 
-        foreach ($message['attachments'] ?? [] as $attachment) {
-            if (!empty($attachment['stored_path'])) {
-                $this->uploads->delete($attachment['stored_path']);
-            }
-            if (!empty($attachment['thumbnail_path'])) {
-                $this->uploads->delete($attachment['thumbnail_path']);
-            }
-        }
-
+        // الملفات بتفضل على السيرفر (حذف ناعم) لشاشة الإشراف.
         $this->messages->unsend($messageId, $userId);
     }
 
@@ -1825,7 +1817,7 @@ class MessagingService
         }
 
         // metadata.url = رابط المرفق المحمي (الـ bubble بيعرضه بنفس نظام الوسائط المحمية)
-        $att = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->orderBy('id')->first(['id']);
+        $att = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->whereNull('deleted_at')->orderBy('id')->first(['id']);
         if ($att) {
             $meta = ['url' => '/api/v1/messaging/attachments/' . (int) $att->id . '/file', 'kind' => $kind, 'label' => $label !== null && trim($label) !== '' ? mb_substr(trim($label), 0, 120) : null];
             DB::table('messages')->where('id', (int) $shaped['id'])->update(['metadata' => json_encode($meta)]);
@@ -2270,7 +2262,7 @@ class MessagingService
         }
 
         $items = [];
-        $atts = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->orderBy('id')->get(['id']);
+        $atts = DB::table('message_attachments')->where('message_id', (int) $shaped['id'])->whereNull('deleted_at')->orderBy('id')->get(['id']);
         foreach ($atts as $i => $a) {
             $items[] = ['id' => (int) $a->id, 'kind' => $kinds[$i] ?? 'image', 'url' => '/api/v1/messaging/attachments/' . (int) $a->id . '/file'];
         }
@@ -2290,7 +2282,7 @@ class MessagingService
         if (!$msg || !$this->conversations->isParticipant((int) $msg->conversation_id, $userId) || !empty($msg->is_deleted) || ($msg->message_type ?? '') !== 'sticker_pack') {
             throw new \RuntimeException('Sticker pack not found.');
         }
-        $all = DB::table('message_attachments')->where('message_id', $messageId)->orderBy('id')->pluck('id')->map(fn ($v) => (int) $v)->all();
+        $all = DB::table('message_attachments')->where('message_id', $messageId)->whereNull('deleted_at')->orderBy('id')->pluck('id')->map(fn ($v) => (int) $v)->all();
         $want = array_values(array_unique(array_filter(array_map('intval', $attachmentIds))));
         $ids = $want ? array_values(array_intersect($all, $want)) : $all;
         if (!$ids) {
@@ -2746,6 +2738,7 @@ class MessagingService
         $row = DB::table('message_attachments as a')
             ->join('messages as m', 'm.id', '=', 'a.message_id')
             ->where('a.id', $attachmentId)
+            ->whereNull('a.deleted_at')
             ->select('a.*', 'm.conversation_id')
             ->first();
 
@@ -2819,13 +2812,7 @@ class MessagingService
             throw new \RuntimeException('You cannot delete this attachment.');
         }
 
-        if (!empty($row['stored_path'])) {
-            $this->uploads->delete($row['stored_path']);
-        }
-        if (!empty($row['thumbnail_path'])) {
-            $this->uploads->delete($row['thumbnail_path']);
-        }
-        DB::table('message_attachments')->where('id', $attachmentId)->delete();
+        DB::table('message_attachments')->where('id', $attachmentId)->update(['deleted_at' => now(), 'deleted_by' => $userId]);
     }
 
     // =====================================================================
@@ -2843,6 +2830,57 @@ class MessagingService
         return $this->conversations->adminSearch($filters);
     }
 
+    /** رسالة لشاشة الإشراف: المحتوى الأصلي حتى لو اتحذف (للجميع/تراجع) + كل المرفقات (المحذوفة وview-once). */
+    private function shapeAdminMessage(array $m): array
+    {
+        $deleted = !empty($m['is_deleted']);
+        $view = $m;
+        if ($deleted) {
+            $view['is_deleted'] = 0;
+            $view['body'] = (string) ($m['original_body'] ?? '');
+            $view['metadata'] = $m['original_metadata'] ?? null;
+        }
+        $view['attachments'] = [];
+        $shaped = $this->shapeMessage($view, null);
+
+        $atts = [];
+        foreach ((array) ($m['attachments'] ?? []) as $a) {
+            $atts[] = [
+                'id'               => (int) $a['id'],
+                'kind'             => $a['kind'] ?? 'file',
+                'original_name'    => $a['original_name'] ?? null,
+                'mime_type'        => $a['mime_type'] ?? null,
+                'extension'        => $a['extension'] ?? null,
+                'size_bytes'       => (int) ($a['size_bytes'] ?? 0),
+                'width'            => isset($a['width']) ? (int) $a['width'] : null,
+                'height'           => isset($a['height']) ? (int) $a['height'] : null,
+                'duration_seconds' => isset($a['duration_seconds']) ? (int) $a['duration_seconds'] : null,
+                'has_thumbnail'    => !empty($a['thumbnail_path']),
+                'view_mode'        => $a['view_mode'] ?? null,
+                'consumed'         => !empty($a['viewed_at']),
+                'removed'          => !empty($a['deleted_at']),
+            ];
+        }
+        $shaped['attachments'] = $atts;
+        $shaped['is_deleted'] = $deleted;
+        $shaped['deleted_reason'] = $deleted ? ($m['deleted_reason'] ?? null) : null;
+        $shaped['content_lost'] = $deleted && ($m['original_body'] ?? null) === null && !$atts;
+
+        return $shaped;
+    }
+
+    /** مرفق لشاشة الإشراف (حتى المحذوف / view-once) + تاريخ الرسالة لفحص التصريح. */
+    public function adminAttachment(int $attachmentId): ?array
+    {
+        $row = DB::table('message_attachments as a')
+            ->join('messages as m', 'm.id', '=', 'a.message_id')
+            ->where('a.id', $attachmentId)
+            ->select('a.*', 'm.conversation_id', 'm.created_at as message_created_at')
+            ->first();
+
+        return $row ? (array) $row : null;
+    }
+
     /** عرض ثريد قراءة-فقط لشاشة الإشراف — مفيش فحص عضوية، ومفيش تأثير markRead. */
     public function adminThread(int $conversationId): ?array
     {
@@ -2852,7 +2890,7 @@ class MessagingService
         }
 
         $messages = array_map(
-            fn ($m) => $this->shapeMessage($m, null),
+            fn ($m) => $this->shapeAdminMessage($m),
             $this->messages->forConversationAdmin($conversationId)
         );
 

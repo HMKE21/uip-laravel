@@ -65,14 +65,18 @@ class MessageRepository
     }
 
     /** بتحمّل attachments/reactions/mentions دفعة واحدة لمجموعة صفوف رسايل جاهزة (مفيش N+1). */
-    public function attachRelations(array $rows): array
+    public function attachRelations(array $rows, bool $withRemoved = false): array
     {
         if (!$rows) {
             return [];
         }
         $ids = array_column($rows, 'id');
 
-        $attachments = DB::table('message_attachments')->whereIn('message_id', $ids)->orderBy('id')->get();
+        $attachQuery = DB::table('message_attachments')->whereIn('message_id', $ids);
+        if (!$withRemoved) {
+            $attachQuery->whereNull('deleted_at'); // المحذوفة بتظهر للأدمن بس
+        }
+        $attachments = $attachQuery->orderBy('id')->get();
         $reactions = DB::table('message_reactions as r')
             ->join('users as u', 'u.id', '=', 'r.user_id')
             ->whereIn('r.message_id', $ids)
@@ -155,12 +159,17 @@ class MessageRepository
         return MessageVersion::where('message_id', $messageId)->orderByDesc('edited_at')->get()->all();
     }
 
-    /** "Delete For Everyone" — soft delete، الجسم بيتمسح من السيرفر (مش مجرد إخفاء على العميل). */
+    /** "Delete For Everyone" — اليوزرز بيشوفوا tombstone، ونسخة النص بتتحفظ في original_* لشاشة الإشراف. */
     public function deleteForEveryone(int $messageId, $deletedBy): void
     {
-        Message::where('id', $messageId)->update([
-            'is_deleted' => 1, 'deleted_at' => now(), 'deleted_by' => $deletedBy, 'body' => '',
-        ]);
+        DB::update(
+            "UPDATE messages SET
+                original_body = CASE WHEN original_body IS NULL AND is_deleted = 0 THEN body ELSE original_body END,
+                original_metadata = CASE WHEN original_metadata IS NULL AND is_deleted = 0 THEN metadata ELSE original_metadata END,
+                is_deleted = 1, deleted_at = ?, deleted_by = ?, body = ''
+             WHERE id = ?",
+            [now(), $deletedBy, $messageId]
+        );
     }
 
     /** "Restore Deleted Message" — بيرجع is_deleted لصفر (الجسم اتمسح فعليًا وقت الحذف فمش بيرجع). */
@@ -175,18 +184,20 @@ class MessageRepository
         Message::where('id', $messageId)->delete();
     }
 
-    /**
-     * "Cancel" (Undo Send) — بنمسح المحتوى والمرفقات فعليًا، بس بنسيب الصف بعلامة deleted_reason='unsent'
-     * عشان الـ poll يقدر يبلّغ الطرف التاني إن الرسالة اتلغت (الصف المحذوف نهائيًا مفيش طريقة نوصّل بيها الخبر).
-     * الواجهة بتخفي الرسائل اللي deleted_reason='unsent' بالكامل (من غير tombstone).
-     */
+    /** "Cancel" (Undo Send) — اليوزرز مبيشوفوش الرسالة، والنص والمرفقات بتتحفظ للأدمن (حذف ناعم). */
     public function unsend(int $messageId, $by): void
     {
-        DB::table('message_attachments')->where('message_id', $messageId)->delete();
-        Message::where('id', $messageId)->update([
-            'is_deleted' => 1, 'deleted_at' => now(), 'deleted_by' => $by, 'deleted_reason' => 'unsent',
-            'body' => '', 'metadata' => null, 'is_pinned' => 0,
-        ]);
+        DB::table('message_attachments')->where('message_id', $messageId)->whereNull('deleted_at')
+            ->update(['deleted_at' => now(), 'deleted_by' => $by]);
+        DB::update(
+            "UPDATE messages SET
+                original_body = CASE WHEN original_body IS NULL AND is_deleted = 0 THEN body ELSE original_body END,
+                original_metadata = CASE WHEN original_metadata IS NULL AND is_deleted = 0 THEN metadata ELSE original_metadata END,
+                is_deleted = 1, deleted_at = ?, deleted_by = ?, deleted_reason = 'unsent',
+                body = '', metadata = NULL, is_pinned = 0
+             WHERE id = ?",
+            [now(), $by, $messageId]
+        );
     }
 
     /** الرسايل اللي فيها mention لليوزر ده — فلتر "mentions of me". */
@@ -320,7 +331,7 @@ class MessageRepository
              LIMIT ?',
             [$conversationId, $limit]
         );
-        return $this->attachRelations(array_map(fn ($r) => (array) $r, $rows));
+        return $this->attachRelations(array_map(fn ($r) => (array) $r, $rows), true);
     }
 
     /**

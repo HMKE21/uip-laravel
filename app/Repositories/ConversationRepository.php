@@ -25,8 +25,8 @@ class ConversationRepository
                     m.body AS last_message_body, m.created_at AS last_message_at, m.sender_id AS last_message_sender_id,
                     m.is_deleted AS last_message_deleted,
                     m.message_type AS last_message_type, m.metadata AS last_message_meta,
-                    (SELECT ma.kind FROM message_attachments ma WHERE ma.message_id = m.id ORDER BY ma.id ASC LIMIT 1) AS last_message_attach_kind,
-                    (SELECT COUNT(*) FROM message_attachments ma2 WHERE ma2.message_id = m.id) AS last_message_attach_count
+                    (SELECT ma.kind FROM message_attachments ma WHERE ma.message_id = m.id AND ma.deleted_at IS NULL ORDER BY ma.id ASC LIMIT 1) AS last_message_attach_kind,
+                    (SELECT COUNT(*) FROM message_attachments ma2 WHERE ma2.message_id = m.id AND ma2.deleted_at IS NULL) AS last_message_attach_count
              FROM conversations c
              INNER JOIN conversation_participants cp ON cp.conversation_id = c.id AND cp.user_id = ?
              LEFT JOIN messages m ON m.id = (

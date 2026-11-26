@@ -187,6 +187,54 @@ class AdminMessagingOversightApiController extends Controller
         }
     }
 
+    /**
+     * GET /api/v1/admin/messaging/oversight/attachments/{id}/file?variant=file|thumbnail
+     * ملف مرفق لشاشة الإشراف — حتى لو اليوزر حذفه. بيتسلّم بس لو فيه تصريح ساري (المفتاح السري) بيغطي المحادثة وتاريخ الرسالة.
+     */
+    public function attachmentFile(Request $request, string $id)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+        $adminId = (int) $request->attributes->get('uip_user_id');
+        $row = $this->messaging->adminAttachment((int) $id);
+        if (!$row) {
+            return $this->apiError('Attachment not found.', null, 404);
+        }
+        if (!$this->access->canRead($adminId, 'people', $row['message_created_at'] ?? null, (int) $row['conversation_id'])) {
+            return $this->apiError('This content is locked. Open it with the secret key first.', null, 403);
+        }
+        $thumb = $request->query('variant') === 'thumbnail';
+        $rel = $thumb ? (string) ($row['thumbnail_path'] ?? '') : (string) ($row['stored_path'] ?? '');
+        $path = $rel === '' ? null : \App\Support\SafeFile::resolve(\App\Services\FileUploadService::absolutePath($rel));
+        if ($path === null) {
+            return $this->apiError('File is no longer on the server (view-once / expired).', null, 404);
+        }
+
+        $this->auditLog->record($adminId, 'admin.messaging_attachment_viewed', 'MessageAttachment', (int) $id, null, ['conversation_id' => (int) $row['conversation_id']]);
+
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $kind = (string) ($row['kind'] ?? 'file');
+        $map = [
+            'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp', 'bmp' => 'image/bmp',
+            'mp4' => 'video/mp4', 'mov' => 'video/quicktime', 'mkv' => 'video/x-matroska', 'avi' => 'video/x-msvideo',
+            'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg', 'm4a' => 'audio/mp4', 'aac' => 'audio/aac', 'opus' => 'audio/ogg', 'weba' => 'audio/webm',
+            'pdf' => 'application/pdf',
+        ];
+        $mime = $thumb ? 'image/jpeg' : ($ext === 'webm' ? ($kind === 'audio' ? 'audio/webm' : 'video/webm') : ($map[$ext] ?? 'application/octet-stream'));
+        $inline = $mime !== 'application/octet-stream';
+        $name = $thumb ? 'thumbnail.jpg' : (string) ($row['original_name'] ?? 'file');
+
+        return \App\Support\SafeFile::inline($path, [
+            'Content-Type'            => $mime,
+            'Content-Disposition'     => ($inline ? 'inline' : 'attachment') . "; filename*=UTF-8''" . rawurlencode($name),
+            'X-Content-Type-Options'  => 'nosniff',
+            'Content-Security-Policy' => "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'",
+            'Cross-Origin-Resource-Policy' => 'cross-origin',
+            'Cache-Control'           => 'private, no-store',
+        ]);
+    }
+
     /** DELETE /api/v1/admin/messaging/oversight/attachments/{id} — حذف إجباري، أي محادثة. */
     public function deleteAttachment(Request $request, string $id)
     {
