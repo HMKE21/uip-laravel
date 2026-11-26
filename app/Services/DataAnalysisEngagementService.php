@@ -28,7 +28,7 @@ class DataAnalysisEngagementService
 {
     public const SECTIONS = [
         'feed', 'announcements', 'notifications', 'activity',
-        'logins', 'visits', 'meetings', 'calls', 'forms',
+        'logins', 'visits', 'meetings', 'calls', 'forms', 'ai',
     ];
 
     private const MAX_DAYS = 366;
@@ -107,6 +107,7 @@ class DataAnalysisEngagementService
             'meetings'      => $this->meetings($f),
             'calls'         => $this->calls($f),
             'forms'         => $this->forms($f),
+            'ai'            => $this->ai($f),
             default         => null,
         };
     }
@@ -693,6 +694,123 @@ class DataAnalysisEngagementService
             'response_status' => $hasResponses ? $this->groupCount($resp(), 'r.status', 'key') : [],
             'top_forms'     => $topForms,
             'events'        => $events,
+        ];
+    }
+
+    // -----------------------------------------------------------------
+    // AI usage (ai_usage_logs + conversation/message COUNTS only)
+    //
+    // خصوصية: مفيش محتوى رسائل، مفيش عناوين محادثات، مفيش error_message
+    // (ممكن يحتوي أجزاء من الـ prompt)، ومفيش قائمة مستخدمين ولا IDs —
+    // التركّز على المستخدمين بيتعرض كشرائح (عدد مستخدمين في كل شريحة).
+    // -----------------------------------------------------------------
+
+    private function ai(array $f): array
+    {
+        if (!Schema::hasTable('ai_usage_logs')) {
+            return ['available' => false];
+        }
+        $r = $this->range($f);
+        $base = fn () => DB::table('ai_usage_logs')->whereBetween('created_at', [$r['start'], $r['end']]);
+
+        $totals = $base()->selectRaw(
+            'COUNT(*) AS calls, COALESCE(SUM(prompt_tokens),0) AS pt, COALESCE(SUM(completion_tokens),0) AS ct,
+             COALESCE(SUM(was_error),0) AS errs, COUNT(DISTINCT user_id) AS users, AVG(latency_ms) AS lat'
+        )->first();
+        $calls = (int) ($totals->calls ?? 0);
+        $pt = (int) ($totals->pt ?? 0);
+        $ct = (int) ($totals->ct ?? 0);
+        $errs = (int) ($totals->errs ?? 0);
+        $users = (int) ($totals->users ?? 0);
+
+        // Percentiles على آخر MAX_ROWS استدعاء (portable — بدون PERCENTILE_CONT).
+        $lat = $base()->whereNotNull('latency_ms')->orderByDesc('id')->limit(self::MAX_ROWS)->pluck('latency_ms')
+            ->map(fn ($v) => (int) $v)->sort()->values()->all();
+        $pctl = function (float $p) use ($lat) {
+            $n = count($lat);
+            return $n ? $lat[(int) min($n - 1, max(0, ceil($p * $n) - 1))] : null;
+        };
+
+        // شرائح تركّز الاستخدام: كام مستخدم عمل 1 / 2-5 / 6-20 / 21-100 / 100+ استدعاء.
+        $buckets = ['1' => 0, '2-5' => 0, '6-20' => 0, '21-100' => 0, '100+' => 0];
+        $perUser = $base()->select('user_id', DB::raw('COUNT(*) as c'))->groupBy('user_id')->limit(self::MAX_ROWS)->pluck('c');
+        foreach ($perUser as $c) {
+            $c = (int) $c;
+            $k = $c <= 1 ? '1' : ($c <= 5 ? '2-5' : ($c <= 20 ? '6-20' : ($c <= 100 ? '21-100' : '100+')));
+            $buckets[$k]++;
+        }
+
+        $mapAgg = fn ($rows) => $rows->map(fn ($x) => [
+            'key'        => $x->k === null ? '' : (string) $x->k,
+            'calls'      => (int) $x->calls,
+            'tokens'     => (int) $x->tokens,
+            'errors'     => (int) $x->errs,
+            'avg_latency_ms' => $x->lat !== null ? (int) round((float) $x->lat) : null,
+        ])->all();
+        $agg = fn ($col) => $base()->select(
+            DB::raw("$col as k"), DB::raw('COUNT(*) as calls'),
+            DB::raw('COALESCE(SUM(prompt_tokens + completion_tokens),0) as tokens'),
+            DB::raw('COALESCE(SUM(was_error),0) as errs'), DB::raw('AVG(latency_ms) as lat')
+        )->groupBy(DB::raw($col))->orderByDesc('calls')->limit(10)->get();
+
+        // تجميعات المحادثات/الرسائل (أعداد بس).
+        $conv = null;
+        if (Schema::hasTable('ai_conversations')) {
+            $cq = fn () => DB::table('ai_conversations')->whereBetween('created_at', [$r['start'], $r['end']]);
+            $avgMsgs = $cq()->avg('message_count');
+            $conv = [
+                'created'      => (int) $cq()->count(),
+                'users'        => (int) $cq()->distinct()->count('user_id'),
+                'avg_messages' => $avgMsgs !== null ? round((float) $avgMsgs, 2) : null,
+                'pinned'       => (int) $cq()->where('is_pinned', 1)->count(),
+                'archived'     => (int) $cq()->where('is_archived', 1)->count(),
+                'shared'       => (int) $cq()->whereNotNull('share_token')->count(),
+                'by_portal'    => $this->groupCount($cq(), 'portal', 'key', 10),
+            ];
+        }
+
+        $msgs = null;
+        if (Schema::hasTable('ai_messages')) {
+            $mq = fn () => DB::table('ai_messages')->where('is_deleted', 0)->whereBetween('created_at', [$r['start'], $r['end']]);
+            $assistant = (int) $mq()->where('role', 'assistant')->count();
+            $predefined = (int) $mq()->where('role', 'assistant')->where('answer_source', 'predefined')->count();
+            $msgs = [
+                'total'          => (int) $mq()->count(),
+                'by_role'        => $this->groupCount($mq(), 'role'),
+                'by_status'      => $this->groupCount($mq()->where('role', 'assistant'), 'status'),
+                'by_source'      => $this->groupCount($mq()->where('role', 'assistant')->whereNotNull('answer_source'), 'answer_source'),
+                'bookmarked'     => (int) $mq()->where('is_bookmarked', 1)->count(),
+                'predefined_rate' => $assistant ? round($predefined / $assistant * 100, 2) : null,
+            ];
+        }
+
+        $tokensDaily = $base()->select(DB::raw('DATE(created_at) as d'), DB::raw('COALESCE(SUM(prompt_tokens + completion_tokens),0) as s'))
+            ->groupBy(DB::raw('DATE(created_at)'))->pluck('s', 'd')->map(fn ($v) => (int) $v)->all();
+
+        return [
+            'available' => true,
+            'kpis' => [
+                'calls'             => $calls,
+                'active_users'      => $users,
+                'calls_per_user'    => $users ? round($calls / $users, 2) : null,
+                'prompt_tokens'     => $pt,
+                'completion_tokens' => $ct,
+                'total_tokens'      => $pt + $ct,
+                'avg_tokens_call'   => $calls ? (int) round(($pt + $ct) / $calls) : null,
+                'errors'            => $errs,
+                'error_rate'        => $calls ? round($errs / $calls * 100, 2) : null,
+                'avg_latency_ms'    => $totals->lat !== null ? (int) round((float) $totals->lat) : null,
+                'p50_latency_ms'    => $pctl(0.50),
+                'p95_latency_ms'    => $pctl(0.95),
+            ],
+            'daily'         => $this->fill($this->daily($base(), 'created_at'), $r),
+            'tokens_daily'  => $this->fill($tokensDaily, $r),
+            'errors_daily'  => $this->fill($this->daily($base()->where('was_error', 1), 'created_at'), $r),
+            'by_portal'     => $mapAgg($agg('portal')),
+            'by_model'      => $mapAgg($agg('model')),
+            'user_buckets'  => array_map(fn ($k, $v) => ['key' => (string) $k, 'count' => $v], array_keys($buckets), array_values($buckets)),
+            'conversations' => $conv,
+            'messages'      => $msgs,
         ];
     }
 
