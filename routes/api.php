@@ -1895,6 +1895,7 @@ Route::prefix('v1')->group(function () {
         // مرفقات (لازم قبل /{id})
         Route::post('/media', [PostMediaApiController::class, 'upload'])->middleware('throttle:120,1');
         Route::delete('/media/{id}', [PostMediaApiController::class, 'destroy'])->where('id', '[0-9]+');
+        Route::post('/media/{id}/cover', [PostMediaApiController::class, 'cover'])->where('id', '[0-9]+')->middleware('throttle:60,1');
         Route::get('/media/{id}/file', [PostMediaApiController::class, 'file'])->where('id', '[0-9]+');
         Route::get('/media/{id}/thumbnail', [PostMediaApiController::class, 'thumbnail'])->where('id', '[0-9]+');
         Route::get('/media/{id}/preview', [PostMediaApiController::class, 'preview'])->where('id', '[0-9]+');

@@ -62,6 +62,24 @@ class PostMediaApiController extends Controller
         }
     }
 
+    /** POST /posts/media/{id}/cover — multipart: image (JPG/PNG/WebP). غلاف الفيديو: لقطة أو صورة يختارها صاحب الفيديو. */
+    public function cover(Request $request, $id)
+    {
+        $uid = $this->uid($request);
+        $file = $request->file('image');
+        if (!$file || !$file->isValid()) {
+            return $this->apiError('No image was uploaded.', null, 422);
+        }
+        try {
+            return $this->apiSuccess($this->media->setCover($uid, (int) $id, $file), 'Cover updated.');
+        } catch (\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, 400);
+        } catch (\Illuminate\Database\QueryException $e) {
+            Log::error('Post media cover DB error: ' . $e->getMessage());
+            return $this->apiError('Server Error', null, 500);
+        }
+    }
+
     /** DELETE /posts/media/{id} — مرفق لسه مش مربوط بمنشور (لو مربوط: شيله بتعديل المنشور media_ids). */
     public function destroy(Request $request, $id)
     {

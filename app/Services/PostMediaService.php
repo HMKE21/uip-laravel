@@ -210,6 +210,71 @@ class PostMediaService
         return true;
     }
 
+    /**
+     * غلاف (poster) الفيديو: صورة يختارها صاحب الفيديو (لقطة من الفيديو أو صورة مرفوعة). بتتحقق، وبتتعاد ترميزها JPEG
+     * (بتشيل أي حمولة مخفية)، وبتحل محل thumbnail_path. شغالة حتى لو ffmpeg مش موجود على السيرفر.
+     * @throws \RuntimeException رسالتها آمنة للعرض للمستخدم
+     */
+    public function setCover(int $uid, int $mediaId, UploadedFile $image): array
+    {
+        $row = DB::table('post_media')->where('id', $mediaId)->where('user_id', $uid)->first();
+        if (!$row || ($row->kind ?? '') !== 'video') {
+            throw new \RuntimeException('Video not found.');
+        }
+        if (!function_exists('imagecreatefromstring')) {
+            throw new \RuntimeException('Image processing is not available on the server.');
+        }
+        $path = (string) $image->getRealPath();
+        if ($path === '' || !is_file($path) || (int) $image->getSize() > 6 * 1024 * 1024) {
+            throw new \RuntimeException('The cover image must be 6 MB or smaller.');
+        }
+        $info = @getimagesize($path);
+        if (!$info || !in_array((int) $info[2], [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP], true)) {
+            throw new \RuntimeException('The cover must be a JPG, PNG or WebP image.');
+        }
+        [$w, $h] = [(int) $info[0], (int) $info[1]];
+        if ($w < 16 || $h < 16 || $w * $h > 40_000_000) {
+            throw new \RuntimeException('The cover image size is not supported.');
+        }
+        $src = @imagecreatefromstring((string) @file_get_contents($path));
+        if (!$src) {
+            throw new \RuntimeException('The cover image could not be read.');
+        }
+        $tw = min(1280, $w);
+        $th = max(1, (int) round($h * ($tw / $w)));
+        $dst = imagecreatetruecolor($tw, $th);
+        imagefill($dst, 0, 0, imagecolorallocate($dst, 0, 0, 0));
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $tw, $th, $w, $h);
+
+        $relDir = trim(dirname((string) $row->stored_path), '/') . '/thumbnails';
+        $targetDir = FileUploadService::diskDir($relDir);
+        if (!is_dir($targetDir) && !@mkdir($targetDir, 0775, true) && !is_dir($targetDir)) {
+            imagedestroy($src);
+            imagedestroy($dst);
+            throw new \RuntimeException('Could not save the cover.');
+        }
+        $rel = $relDir . '/' . bin2hex(random_bytes(16)) . '.jpg';
+        $target = $targetDir . '/' . basename($rel);
+        $ok = @imagejpeg($dst, $target, 84);
+        imagedestroy($src);
+        imagedestroy($dst);
+        if (!$ok) {
+            throw new \RuntimeException('Could not save the cover.');
+        }
+        \App\Support\UploadMirror::push($rel, $target);
+
+        $old = (string) ($row->thumbnail_path ?? '');
+        DB::table('post_media')->where('id', $mediaId)->update(['thumbnail_path' => $rel]);
+        if ($old !== '') {
+            try {
+                $this->uploads->delete($old);
+            } catch (\Throwable $e) {
+                Log::warning('Old video cover delete failed', ['path' => $old, 'error' => $e->getMessage()]);
+            }
+        }
+        return $this->shape((array) DB::table('post_media')->where('id', $mediaId)->first());
+    }
+
     public function destroyRow(object $row): void
     {
         foreach ([$row->stored_path ?? null, $row->thumbnail_path ?? null, $row->preview_path ?? null] as $rel) {
