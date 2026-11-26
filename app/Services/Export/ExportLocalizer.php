@@ -69,6 +69,23 @@ final class ExportLocalizer
         'Analysis Method' => 'طريقة التحليل', 'Review Version' => 'نسخة المراجعة', 'Review Date' => 'تاريخ المراجعة',
         'Suggested Fix' => 'الحل المقترح', 'Language Mix' => 'توزيع اللغات', 'Language' => 'اللغة', 'Share %' => 'النسبة %',
         'Files Analyzed' => 'الملفات التي تم تحليلها',
+        // تقارير المحلل (Reports) — العناوين والأعمدة والصفوف الثابتة
+        'Platform Analytics Export' => 'تصدير تحليلات المنصة', 'Platform Usage Summary' => 'ملخص استخدام المنصة',
+        'Platform Growth Report' => 'تقرير نمو المنصة', 'University Onboarding Digest' => 'ملخص انضمام الجامعات',
+        'Audit Log Export' => 'تصدير سجل التدقيق', 'Security Incident Summary' => 'ملخص الحوادث الأمنية',
+        'Vulnerability Summary' => 'ملخص الثغرات', 'University Student Roster' => 'قائمة طلاب الجامعة',
+        'University Project Log' => 'سجل مشاريع الجامعة',
+        'Value' => 'القيمة', 'Month' => 'الشهر', 'New Users' => 'مستخدمون جدد', 'Time' => 'الوقت', 'Actor' => 'المنفّذ',
+        'Action' => 'الإجراء', 'Target' => 'الهدف', 'Title' => 'العنوان', 'Reference' => 'المرجع', 'Component' => 'المكوّن',
+        'Joined' => 'تاريخ الانضمام', 'City' => 'المدينة', 'Country' => 'الدولة', 'Projects' => 'المشاريع',
+        'Published' => 'المنشورة', 'Year' => 'السنة', 'Account Status' => 'حالة الحساب', 'Category' => 'الفئة',
+        'Submitted' => 'تاريخ التقديم', 'Assigned To' => 'المسؤول', 'Detected' => 'تاريخ الاكتشاف',
+        'Resolved' => 'تاريخ الحل', 'CVSS' => 'CVSS', 'Discovered' => 'تاريخ الرصد', 'Student No.' => 'الرقم الجامعي',
+        'Total Users' => 'إجمالي المستخدمين', 'Suspended Users' => 'المستخدمون الموقوفون',
+        'Total Universities' => 'إجمالي الجامعات', 'Verified Universities' => 'الجامعات الموثّقة',
+        'Pending Universities' => 'الجامعات قيد المراجعة', 'Published Projects' => 'المشاريع المنشورة',
+        'Pending Approvals' => 'طلبات قيد الموافقة', 'Rejected Projects' => 'المشاريع المرفوضة',
+        'Users - ' => 'المستخدمون - ', 'Projects - ' => 'المشاريع - ', 'Overview - ' => 'نظرة عامة - ',
     ];
 
     public static function isArabic(): bool

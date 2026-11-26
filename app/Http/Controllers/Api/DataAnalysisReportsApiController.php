@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Repositories\ReportRepository;
 use App\Services\ReportSchedulerService;
+use App\Services\Export\ExportFileBuilder;
 use App\Services\ReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -50,7 +51,7 @@ class DataAnalysisReportsApiController extends Controller
         return $this->apiSuccess([
             'reports'   => $this->reports->forUser($userId),
             'schedules' => $schedules,
-        ], 'Reports retrieved successfully.', 200, ['allowed_types' => self::ALLOWED_TYPES]);
+        ], 'Reports retrieved successfully.', 200, ['allowed_types' => self::ALLOWED_TYPES, 'allowed_formats' => ExportFileBuilder::FORMATS]);
     }
 
     /** POST /api/v1/data-analysis/reports/generate */
@@ -65,12 +66,48 @@ class DataAnalysisReportsApiController extends Controller
             return $this->apiError('Unknown report type.', ['report_type' => 'Must be one of ' . implode(', ', self::ALLOWED_TYPES) . '.'], 422);
         }
 
+        $format = (string) $request->input('format', 'csv');
+        if (!ExportFileBuilder::supports($format)) {
+            return $this->apiError('Unknown export format.', ['format' => 'Must be one of ' . implode(', ', ExportFileBuilder::FORMATS) . '.'], 422);
+        }
+        $lang = $this->fileLang($request);
+
         try {
-            $this->reportService->generate($type, $request->attributes->get('uip_user_id'));
+            $this->reportService->generate($type, $request->attributes->get('uip_user_id'), null, $format, null, $lang);
             return $this->apiSuccess(null, 'Report generated.', 201);
         } catch (\InvalidArgumentException|\RuntimeException $e) {
             return $this->apiError($e->getMessage(), null, 422);
         }
+    }
+
+    /**
+     * GET /api/v1/data-analysis/reports/preview — معاينة *قبل* الإنشاء: نفس الملف
+     * (نفس النوع/الصيغة/اللغة) بيتكتب في مسار مؤقت ويتبعت من غير ما يتسجّل في reports.
+     */
+    public function preview(Request $request): \Symfony\Component\HttpFoundation\Response
+    {
+        if (!$this->isDataAnalyst($request)) {
+            return $this->apiError('Only Data Analysis Portal staff can preview a report.', null, 403);
+        }
+
+        $type = (string) $request->input('report_type', '');
+        $format = (string) $request->input('format', 'csv');
+        if (!in_array($type, self::ALLOWED_TYPES, true)) {
+            return $this->apiError('Unknown report type.', null, 422);
+        }
+        if (!ExportFileBuilder::supports($format)) {
+            return $this->apiError('Unknown export format.', null, 422);
+        }
+
+        try {
+            $path = $this->reportService->previewFile($type, $format, $this->fileLang($request));
+        } catch (\InvalidArgumentException|\RuntimeException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        } catch (\Throwable $e) {
+            return $this->apiError('Could not build the preview.', null, 422);
+        }
+
+        return response()->file($path, ['Content-Type' => ExportFileBuilder::mime($format)])->deleteFileAfterSend(true);
     }
 
     /** DELETE /api/v1/data-analysis/reports/{id} */
@@ -220,6 +257,13 @@ class DataAnalysisReportsApiController extends Controller
     }
 
     // -- helpers --------------------------------------------------------------
+
+    /** لغة الملف من اختيار المستخدم (lang) — ar أو en؛ أي قيمة تانية = لغة الريكوست. */
+    private function fileLang(Request $request): string
+    {
+        $lang = (string) ($request->input('lang') ?: $request->header('X-Locale', 'en'));
+        return $lang === 'ar' ? 'ar' : 'en';
+    }
 
     private function isDataAnalyst(Request $request): bool
     {

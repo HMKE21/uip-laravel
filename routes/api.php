@@ -2013,6 +2013,7 @@ Route::prefix('v1')->group(function () {
             Route::post('/schedules/{id}/run-now', [DataAnalysisExportsApiController::class, 'scheduleRunNow']);
             Route::delete('/schedules/{id}', [DataAnalysisExportsApiController::class, 'scheduleDelete']);
 
+            Route::get('/preview-file', [DataAnalysisExportsApiController::class, 'previewFile']);
             Route::get('/{id}/preview', [DataAnalysisExportsApiController::class, 'preview']);
             Route::delete('/{id}', [DataAnalysisExportsApiController::class, 'destroy']);
         });
@@ -2087,6 +2088,7 @@ Route::prefix('v1')->group(function () {
         Route::prefix('reports')->middleware('uip.can:data_analysis.reports.manage')->group(function () {
             Route::get('/', [DataAnalysisReportsApiController::class, 'index']);
             Route::post('/generate', [DataAnalysisReportsApiController::class, 'generate']);
+            Route::get('/preview', [DataAnalysisReportsApiController::class, 'preview']);
             Route::post('/delete-selected', [DataAnalysisReportsApiController::class, 'destroySelected']);
             Route::post('/delete-all', [DataAnalysisReportsApiController::class, 'destroyAll']);
 

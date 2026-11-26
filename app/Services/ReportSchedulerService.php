@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\ReportSchedule;
 use App\Repositories\ReportScheduleRepository;
+use App\Services\Export\ExportFileBuilder;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -48,7 +49,7 @@ class ReportSchedulerService
     /**
      * @param array|null $allowedTypes بتحدد الأنواع المسموحة لهذا الكولر؛
      *        افتراضيًا ReportService::TYPES (سلوك الأدمن الأصلي).
-     * @param string $format 'csv'|'pdf'|'xlsx' — الصيغة اللي كل تنفيذ مجدول هيطلعها.
+     * @param string $format أي صيغة في ExportFileBuilder::FORMATS — الصيغة اللي كل تنفيذ مجدول هيطلعها.
      * @param int|null $customIntervalDays مطلوب (وليها معنى) بس لو $frequency === 'custom'.
      * @throws \InvalidArgumentException
      */
@@ -69,7 +70,7 @@ class ReportSchedulerService
         if (!in_array($frequency, ['daily', 'weekly', 'monthly', 'custom'], true)) {
             throw new \InvalidArgumentException('Unknown frequency.');
         }
-        if (!in_array($format, ['csv', 'pdf', 'xlsx'], true)) {
+        if (!ExportFileBuilder::supports($format)) {
             throw new \InvalidArgumentException('Unknown attachment format.');
         }
         if ($frequency === 'custom' && (!$customIntervalDays || $customIntervalDays < 1 || $customIntervalDays > 365)) {
@@ -133,7 +134,7 @@ class ReportSchedulerService
         if (!in_array($frequency, ['daily', 'weekly', 'monthly', 'custom'], true)) {
             return false;
         }
-        if (!in_array($format, ['csv', 'pdf', 'xlsx'], true)) {
+        if (!ExportFileBuilder::supports($format)) {
             return false;
         }
         if ($frequency === 'custom' && (!$customIntervalDays || $customIntervalDays < 1 || $customIntervalDays > 365)) {

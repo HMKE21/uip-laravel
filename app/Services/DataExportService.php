@@ -6,8 +6,8 @@ use App\Models\DataExport;
 use App\Repositories\DataExportRepository;
 use App\Repositories\ProjectRepository;
 use App\Repositories\UniversityRepository;
-use App\Services\Export\PdfWriter;
-use App\Services\Export\SpreadsheetWriter;
+use App\Services\Export\ExportFileBuilder;
+use App\Services\Export\ExportLocalizer;
 
 /**
  * منقولة من app/Services/DataExportService.php القديمة — بند 24 batch 2
@@ -27,7 +27,7 @@ class DataExportService
         'exam_overview', 'exam_scores_detail', 'student_exam_performance', 'exam_summary', 'doctor_exam_performance',
     ];
 
-    public const ALLOWED_FORMATS = ['csv', 'xlsx', 'pdf'];
+    public const ALLOWED_FORMATS = ExportFileBuilder::FORMATS;
 
     public const TYPE_LABELS = [
         'platform_kpis'           => 'Platform KPIs',
@@ -87,6 +87,10 @@ class DataExportService
         ]);
 
         [$header, $rows] = $this->buildRows($type, $filters);
+        // لغة الملف: lang في الريكوست (أو لغة الجدولة) — بتترجم العنوان وأسماء الأعمدة فقط.
+        $ar = ExportLocalizer::isArabic();
+        $header = ExportLocalizer::headers($header);
+        $title = ExportLocalizer::text(self::TYPE_LABELS[$type] ?? $type);
 
         $dir = public_path(config('upload.paths.reports', 'uploads/reports'));
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
@@ -96,26 +100,7 @@ class DataExportService
         $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes($isExam ? 16 : 4)) . '.' . $format;
         $fullPath = $dir . '/' . $filename;
 
-        switch ($format) {
-            case 'xlsx':
-                SpreadsheetWriter::write($fullPath, $header, $rows);
-                break;
-
-            case 'pdf':
-                PdfWriter::writeTable($fullPath, self::TYPE_LABELS[$type] ?? $type, $header, $rows);
-                break;
-
-            default: // csv
-                $handle = fopen($fullPath, 'w');
-                if (!$handle) {
-                    throw new \RuntimeException('Could not write the export file.');
-                }
-                fputcsv($handle, $header);
-                foreach ($rows as $row) {
-                    fputcsv($handle, $row);
-                }
-                fclose($handle);
-        }
+        ExportFileBuilder::write($format, $fullPath, $title, $header, $rows, $ar);
 
         $relativePath = rtrim(config('upload.paths.reports', 'uploads/reports'), '/') . '/' . $filename;
         $this->exports->markCompleted($export->id, $relativePath);

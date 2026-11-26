@@ -10,8 +10,7 @@ use App\Services\AnalyticsService;
 use App\Services\AuditLogService;
 use App\Services\DataAnalysisExamsService;
 use App\Services\Export\ExportLocalizer;
-use App\Services\Export\PdfWriter;
-use App\Services\Export\SpreadsheetWriter;
+use App\Services\Export\ExportFileBuilder;
 use App\Services\ExportSchedulerService;
 use App\Services\MailService;
 use Illuminate\Http\JsonResponse;
@@ -45,7 +44,7 @@ class DataAnalysisExportsApiController extends Controller
         'exam_overview', 'exam_scores_detail', 'student_exam_performance', 'exam_summary', 'doctor_exam_performance',
     ];
 
-    private const ALLOWED_FORMATS = ['csv', 'xlsx', 'pdf'];
+    private const ALLOWED_FORMATS = ExportFileBuilder::FORMATS;
 
     private const TYPE_LABELS = [
         'platform_kpis'           => 'Platform KPIs',
@@ -191,29 +190,7 @@ class DataAnalysisExportsApiController extends Controller
         $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes($isExam ? 16 : 4)) . '.' . $format;
         $fullPath = $dir . '/' . $filename;
 
-        switch ($format) {
-            case 'xlsx':
-                SpreadsheetWriter::write($fullPath, $header, $rows, $ar);
-                break;
-
-            case 'pdf':
-                PdfWriter::writeTable($fullPath, $title, $header, $rows, $ar);
-                break;
-
-            default: // csv
-                $handle = fopen($fullPath, 'w');
-                if (!$handle) {
-                    throw new \RuntimeException('Could not write the export file.');
-                }
-                if ($ar) {
-                    fwrite($handle, "\xEF\xBB\xBF"); // BOM: Excel يفتح الحروف العربية صح
-                }
-                fputcsv($handle, $header);
-                foreach ($rows as $row) {
-                    fputcsv($handle, $row);
-                }
-                fclose($handle);
-        }
+        ExportFileBuilder::write($format, $fullPath, $title, $header, $rows, $ar);
 
         $relativePath = rtrim(config('upload.paths.reports', 'uploads/reports'), '/') . '/' . $filename;
         $this->exports->markCompleted($export->id, $relativePath);
@@ -302,6 +279,50 @@ class DataAnalysisExportsApiController extends Controller
             'total'     => $total,
             'truncated' => $total > self::PREVIEW_ROWS,
         ], 'Preview retrieved successfully.');
+    }
+
+    /**
+     * GET /api/v1/data-analysis/exports/preview-file — معاينة *قبل* الإنشاء: بتكتب
+     * نفس الملف (نفس النوع/الصيغة/اللغة/الفلاتر) في مسار مؤقت وتبعته،
+     * من غير ما تسجّل صف في data_exports ولا تبعت إيميل. الفرونت بيعرضه
+     * في نفس نافذة المعاينة المستخدمة في باقي المنصة.
+     */
+    public function previewFile(Request $request): \Symfony\Component\HttpFoundation\Response
+    {
+        if (!$this->isDataAnalyst($request)) {
+            return $this->apiError('Only Data Analysis Portal staff can preview an export.', null, 403);
+        }
+
+        $type = (string) $request->input('export_type', '');
+        $format = (string) $request->input('format', 'csv');
+        if (!in_array($type, self::ALLOWED_TYPES, true) || !in_array($format, self::ALLOWED_FORMATS, true)) {
+            return $this->apiError('Unknown export type or format.', null, 422);
+        }
+
+        $rawFilters = $request->input('filters', []);
+        if (is_string($rawFilters)) {
+            $rawFilters = json_decode($rawFilters, true) ?: [];
+        }
+        $isExam = in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true);
+        $filters = $isExam ? $this->sanitizeExamFilters(is_array($rawFilters) ? $rawFilters : []) : [];
+
+        try {
+            [$header, $rows] = $this->buildRows($type, $filters);
+            $ar = ExportLocalizer::isArabic();
+            $header = ExportLocalizer::headers($header);
+            $title = ExportLocalizer::text(self::TYPE_LABELS[$type] ?? $type);
+
+            $dir = storage_path('app/tmp-reports');
+            if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+                throw new \RuntimeException('Could not prepare the preview folder.');
+            }
+            $path = $dir . '/preview_' . $type . '_' . bin2hex(random_bytes(6)) . '.' . $format;
+            ExportFileBuilder::write($format, $path, $title, $header, $rows, $ar);
+        } catch (\Throwable $e) {
+            return $this->apiError('Could not build the preview.', null, 422);
+        }
+
+        return response()->file($path, ['Content-Type' => ExportFileBuilder::mime($format)])->deleteFileAfterSend(true);
     }
 
     /** DELETE /api/v1/data-analysis/exports/{id} */

@@ -2,7 +2,8 @@
 
 namespace App\Services;
 
-use App\Helpers\ReportExportWriter;
+use App\Services\Export\ExportFileBuilder;
+use App\Services\Export\ExportLocalizer;
 use App\Models\Report;
 use App\Models\University;
 use App\Models\User;
@@ -58,26 +59,15 @@ class ReportService
 
     /**
      * @param int|null $scopeId مطلوب (وليه معنى) بس لـ self::UNIVERSITY_TYPES
-     * @param string $format 'csv'|'pdf'|'xlsx'|'json'|'docx' — شوف ReportExportWriter
+     * @param string $format أي صيغة في ExportFileBuilder::FORMATS (pdf/docx/xlsx/csv/json/html/md/txt/xml)
      * @param int|null $scheduleId لو الجري ده جه من صف report_schedules، بيربط reports.schedule_id بيه
      *        عشان ReportRepository::forSchedule() تعرض تاريخ تنفيذ حقيقي لكل جدولة.
+     * @param string|null $lang 'ar'|'en' لغة عناوين/أعمدة الملف. null = زي الأول (إنجليزي، من غير تعريب).
      * @throws \InvalidArgumentException|\RuntimeException
      */
-    public function generate(string $type, $userId, ?int $scopeId = null, string $format = 'csv', ?int $scheduleId = null): Report
+    public function generate(string $type, $userId, ?int $scopeId = null, string $format = 'csv', ?int $scheduleId = null, ?string $lang = null): Report
     {
-        $isScoped = in_array($type, self::UNIVERSITY_TYPES, true);
-        $isUnscopedExtra = in_array($type, self::SECURITY_TYPES, true);
-        if (!in_array($type, self::TYPES, true) && !$isUnscopedExtra && !$isScoped) {
-            throw new \InvalidArgumentException('Unknown report type.');
-        }
-        if ($isScoped && !$scopeId) {
-            throw new \InvalidArgumentException('Missing scope for this report.');
-        }
-        if (!in_array($format, ['csv', 'pdf', 'xlsx', 'json', 'docx'], true)) {
-            throw new \InvalidArgumentException('Unknown export format.');
-        }
-
-        [$header, $rows] = $this->buildRows($type, $scopeId);
+        $this->assertValid($type, $scopeId, $format);
 
         $relativeDir = rtrim((string) config('upload.paths.reports', 'uploads/reports'), '/'); // معزول لكل عميل (TenantStorage)
         $dir = public_path($relativeDir);
@@ -88,7 +78,7 @@ class ReportService
         $filename = $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $format;
         $fullPath = $dir . '/' . $filename;
 
-        ReportExportWriter::write($format, $header, $rows, $fullPath, ucwords(str_replace(['_', '-'], ' ', $type)));
+        $this->writeFile($type, $format, $fullPath, $scopeId, $lang);
 
         return $this->reports->create([
             'generated_by' => $userId,
@@ -98,6 +88,68 @@ class ReportService
             'file_path'    => $relativeDir . '/' . $filename,
             'status'       => 'ready',
         ]);
+    }
+
+    /**
+     * معاينة قبل الإنشاء: بتكتب *نفس الملف* (نفس الكاتب ونفس اللغة) في
+     * مسار مؤقت من غير ما تسجّل أي صف في reports. الكنترولر بيبعته للمستخدم
+     * ويمسحه بعد الإرسال.
+     * @throws \InvalidArgumentException|\RuntimeException
+     */
+    public function previewFile(string $type, string $format, ?string $lang = null, ?int $scopeId = null): string
+    {
+        $this->assertValid($type, $scopeId, $format);
+
+        $dir = storage_path('app/tmp-reports');
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new \RuntimeException('Could not prepare the preview folder.');
+        }
+        $fullPath = $dir . '/preview_' . $type . '_' . bin2hex(random_bytes(6)) . '.' . $format;
+        $this->writeFile($type, $format, $fullPath, $scopeId, $lang);
+
+        return $fullPath;
+    }
+
+    /** اسم التقرير بالإنجليزي (بيتترجم عبر ExportLocalizer لو اللغة عربي). */
+    public static function typeLabel(string $type): string
+    {
+        return ucwords(str_replace(['_', '-'], ' ', $type));
+    }
+
+    private function assertValid(string $type, ?int $scopeId, string $format): void
+    {
+        $isScoped = in_array($type, self::UNIVERSITY_TYPES, true);
+        $isUnscopedExtra = in_array($type, self::SECURITY_TYPES, true);
+        if (!in_array($type, self::TYPES, true) && !$isUnscopedExtra && !$isScoped) {
+            throw new \InvalidArgumentException('Unknown report type.');
+        }
+        if ($isScoped && !$scopeId) {
+            throw new \InvalidArgumentException('Missing scope for this report.');
+        }
+        if (!ExportFileBuilder::supports($format)) {
+            throw new \InvalidArgumentException('Unknown export format.');
+        }
+    }
+
+    /** بيبني الصفوف ويكتب الملف بالصيغة واللغة المطلوبة (بيرجّع لغة التطبيق زي ما كانت بعدها). */
+    private function writeFile(string $type, string $format, string $fullPath, ?int $scopeId, ?string $lang): void
+    {
+        $previous = app()->getLocale();
+        $ar = $lang === 'ar';
+        // بدون lang نرجع للسلوك القديم (إنجليزي) بغض النظر عن لغة الواجهة، عشان باقي البورتالات ماتتغيرش.
+        app()->setLocale($ar ? 'ar' : 'en');
+
+        try {
+            [$header, $rows] = $this->buildRows($type, $scopeId);
+            $title = self::typeLabel($type);
+            if ($ar) {
+                $header = ExportLocalizer::headers($header);
+                $title = ExportLocalizer::text($title);
+            }
+            ExportFileBuilder::write($format, $fullPath, $title, $header, $rows, $ar);
+        } finally {
+            app()->setLocale($previous);
+        }
     }
 
     /**
@@ -168,15 +220,16 @@ class ReportService
     private function analyticsPlatformExport(): array
     {
         $rows = [];
+        $loc = app()->getLocale() === 'ar' ? 'ar' : 'en';
         foreach ($this->analytics->usersByRoleSeries() as $r) {
-            $rows[] = ['Users - ' . ($r['label']['en'] ?? ''), $r['value']];
+            $rows[] = [ExportLocalizer::text('Users - ') . ($r['label'][$loc] ?? $r['label']['en'] ?? ''), $r['value']];
         }
         foreach ($this->analytics->categoryDistribution(10) as $c) {
-            $rows[] = ['Projects - ' . ($c['label']['en'] ?? ''), $c['value']];
+            $rows[] = [ExportLocalizer::text('Projects - ') . ($c['label'][$loc] ?? $c['label']['en'] ?? ''), $c['value']];
         }
         foreach ($this->analytics->platformOverview() as $key => $value) {
             if (!is_array($value)) {
-                $rows[] = ['Overview - ' . $key, $value];
+                $rows[] = [ExportLocalizer::text('Overview - ') . $key, $value];
             }
         }
         return [['Metric', 'Value'], $rows];
@@ -220,14 +273,14 @@ class ReportService
     private function platformUsageSummary(): array
     {
         $rows = [
-            ['Total Users', User::count()],
-            ['Suspended Users', User::where('status', 'suspended')->count()],
-            ['Total Universities', University::count()],
-            ['Verified Universities', University::where('verification_status', 'verified')->count()],
-            ['Pending Universities', University::where('verification_status', 'pending')->count()],
-            ['Published Projects', $this->projects->countByStatus('published')],
-            ['Pending Approvals', $this->projects->countByStatus('submitted')],
-            ['Rejected Projects', $this->projects->countByStatus('rejected')],
+            [ExportLocalizer::text('Total Users'), User::count()],
+            [ExportLocalizer::text('Suspended Users'), User::where('status', 'suspended')->count()],
+            [ExportLocalizer::text('Total Universities'), University::count()],
+            [ExportLocalizer::text('Verified Universities'), University::where('verification_status', 'verified')->count()],
+            [ExportLocalizer::text('Pending Universities'), University::where('verification_status', 'pending')->count()],
+            [ExportLocalizer::text('Published Projects'), $this->projects->countByStatus('published')],
+            [ExportLocalizer::text('Pending Approvals'), $this->projects->countByStatus('submitted')],
+            [ExportLocalizer::text('Rejected Projects'), $this->projects->countByStatus('rejected')],
         ];
         return [['Metric', 'Value'], $rows];
     }
