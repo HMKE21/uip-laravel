@@ -1347,6 +1347,7 @@ Route::prefix('v1')->group(function () {
     Route::prefix('admin/security-logs')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [AdminSecurityLogsApiController::class, 'index']);
         Route::get('/export', [AdminSecurityLogsApiController::class, 'export']);
+        Route::post('/block-ip', [AdminSecurityLogsApiController::class, 'blockIp'])->middleware('throttle:30,1');
     });
 
     // بند 25 batch 9 — Users: سطح /api/v1/admin/users/* لدليل المستخدمين

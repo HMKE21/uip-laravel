@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Helpers\UserAgentParser;
 use App\Repositories\SecurityLogRepository;
+use App\Support\LogDetailSupport;
 
 /**
  * منقولة من app/Services/SecurityLogService.php القديمة حرفيًا — بند 25
@@ -164,7 +165,13 @@ class SecurityLogService
         $user = $context['email'] ?? ($context['user_id'] ?? null);
         $ua = UserAgentParser::parse($context['user_agent'] ?? null);
 
+        $extra = $context;
+        foreach (['email', 'user_id', 'ip', 'user_agent'] as $k) {
+            unset($extra[$k]);
+        }
+
         return [
+            'id'         => substr(sha1($event['time'] . '|' . $event['message'] . '|' . ($context['ip'] ?? '') . '|' . ($user ?? '')), 0, 16),
             'severity'   => $severity,
             'event'      => $event['message'],
             'event_type' => $eventType,
@@ -175,6 +182,8 @@ class SecurityLogService
             'device'     => $ua['device'],
             'browser'    => $ua['browser'],
             'os'         => $ua['os'],
+            'user_agent' => isset($context['user_agent']) ? mb_substr((string) $context['user_agent'], 0, 400) : null,
+            'context'    => $extra ? LogDetailSupport::redact($extra) : (object) [],
             'time'       => $event['time'],
         ];
     }

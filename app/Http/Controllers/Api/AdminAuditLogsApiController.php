@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\AuditLogService;
+use App\Support\LogDetailSupport;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -48,15 +49,16 @@ class AdminAuditLogsApiController extends Controller
         $page = max(1, (int) $request->input('page', 1));
         $perPage = max(1, min(self::PER_PAGE_MAX, (int) $request->input('per_page', self::PER_PAGE_DEFAULT)));
 
-        if ($filters) {
-            $result = $this->auditLog->searchPaginated($filters, $page, $perPage);
-            $rows = $result['rows'];
-            $total = $result['total'];
-        } else {
-            $rows = $this->auditLog->recent(100);
-            $total = count($rows);
-            $rows = array_slice($rows, ($page - 1) * $perPage, $perPage);
-        }
+        // دايمًا searchPaginated (حتى من غير فلاتر): بيرجّع الصف كامل (الإيميل، الـ IP، القيم قبل/بعد، uuid الفاعل)
+        // وعدّاد إجمالي حقيقي — الفرع القديم recent(100) كان بيقصّ على 100 صف وبيشيل التفاصيل.
+        $result = $this->auditLog->searchPaginated($filters, $page, $perPage);
+        $rows = $result['rows'];
+        $total = $result['total'];
+        $blocked = LogDetailSupport::blockedSet(array_column($rows, 'ip'));
+        $rows = array_map(function (array $r) use ($blocked) {
+            $r['ip_blocked'] = isset($blocked[$r['ip'] ?? '']);
+            return $r;
+        }, $rows);
 
         return $this->apiSuccess($rows, 'Audit logs retrieved successfully.', 200, [
             'page' => $page, 'perPage' => $perPage, 'total' => $total, 'filters' => $filters,
@@ -71,7 +73,7 @@ class AdminAuditLogsApiController extends Controller
         }
 
         $filters = $this->filtersFromRequest($request);
-        $rows = $filters ? $this->auditLog->searchAll($filters, 5000) : $this->auditLog->recent(1000);
+        $rows = $this->auditLog->searchAll($filters, 5000);
 
         $stream = fopen('php://temp', 'w+');
         // UTF-8 BOM عشان Excel يفتح النص العربي صح.

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AuditLog;
 use App\Repositories\AuditLogRepository;
+use App\Support\LogDetailSupport;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -166,8 +167,16 @@ class AuditLogService
         $eventType = $this->classify($row['action']);
 
         return [
+            'id'          => (int) ($row['id'] ?? 0),
             'source'      => 'audit',
             'actor'       => $actorLabel,
+            'actor_id'    => ($row['user_id'] ?? null) ? (int) $row['user_id'] : null,
+            'actor_uuid'  => $row['actor_uuid'] ?? null,
+            'actor_status' => $row['actor_status'] ?? null,
+            'subject_type' => $row['subject_type'] ?? null,
+            'subject_id'  => $row['subject_id'] ?? null,
+            'old_values'  => LogDetailSupport::decode($row['old_values'] ?? null),
+            'new_values'  => LogDetailSupport::decode($row['new_values'] ?? null),
             'email'       => $row['actor_email'] ?? '—',
             'role'        => $row['actor_role'] ?? null,
             'role_label'  => $row['actor_role_en'] ?? $row['actor_role'] ?? '—',

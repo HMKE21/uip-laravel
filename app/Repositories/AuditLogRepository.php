@@ -119,7 +119,7 @@ class AuditLogRepository
 
         $rows = $base()
             ->select(
-                'a.*', 'u.full_name as actor_name', 'u.email as actor_email',
+                'a.*', 'u.full_name as actor_name', 'u.email as actor_email', 'u.uuid as actor_uuid', 'u.status as actor_status',
                 'r.slug as actor_role', 'r.name_ar as actor_role_ar', 'r.name_en as actor_role_en',
                 'uni.official_name_en as university_en', 'uni.official_name_ar as university_ar'
             )
