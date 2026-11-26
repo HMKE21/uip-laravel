@@ -12,7 +12,8 @@
  * datasets in the catalog (for the "Data Relationships" tab).
  *
  * Every `table` value here MUST be deliberately allow-listed (the original
- * six plus the exam platform, staff, students and courses tables) — this is
+ * six plus the exam platform, staff, students, courses, attendance,
+ * assignments, grading and course-content tables) — this is
  * a read-only exploration surface, not a generic "browse any table"
  * tool, so the allow-list is deliberately closed.
  * @package UIP
@@ -365,6 +366,16 @@ return [
                 'label' => ['en' => 'User account', 'ar' => 'حساب المستخدم']],
             ['column' => 'id', 'references' => 'exam_attempts', 'references_column' => 'student_id',
                 'label' => ['en' => 'Exam attempts', 'ar' => 'محاولات الامتحانات']],
+            ['column' => 'id', 'references' => 'course_enrollments', 'references_column' => 'student_id',
+                'label' => ['en' => 'Course enrollments', 'ar' => 'تسجيلات المقررات']],
+            ['column' => 'id', 'references' => 'attendance_records', 'references_column' => 'student_id',
+                'label' => ['en' => 'Attendance records', 'ar' => 'سجلات الحضور']],
+            ['column' => 'id', 'references' => 'assignment_submissions', 'references_column' => 'student_id',
+                'label' => ['en' => 'Assignment submissions', 'ar' => 'تسليمات التكليفات']],
+            ['column' => 'id', 'references' => 'course_final_grades', 'references_column' => 'student_id',
+                'label' => ['en' => 'Course final grades', 'ar' => 'الدرجات النهائية للمقررات']],
+            ['column' => 'id', 'references' => 'course_video_views', 'references_column' => 'student_id',
+                'label' => ['en' => 'Video views', 'ar' => 'مشاهدات الفيديو']],
         ],
     ],
 
@@ -383,6 +394,22 @@ return [
         'relationships' => [
             ['column' => 'id', 'references' => 'exams', 'references_column' => 'course_id',
                 'label' => ['en' => 'Exams of this course', 'ar' => 'امتحانات هذا المقرر']],
+            ['column' => 'id', 'references' => 'course_enrollments', 'references_column' => 'course_id',
+                'label' => ['en' => 'Enrollments', 'ar' => 'التسجيلات']],
+            ['column' => 'id', 'references' => 'course_staff', 'references_column' => 'course_id',
+                'label' => ['en' => 'Teaching staff', 'ar' => 'المدرّسون']],
+            ['column' => 'id', 'references' => 'course_sessions', 'references_column' => 'course_id',
+                'label' => ['en' => 'Timetable sessions', 'ar' => 'محاضرات الجدول']],
+            ['column' => 'id', 'references' => 'attendance_records', 'references_column' => 'course_id',
+                'label' => ['en' => 'Attendance records', 'ar' => 'سجلات الحضور']],
+            ['column' => 'id', 'references' => 'course_assignments', 'references_column' => 'course_id',
+                'label' => ['en' => 'Assignments', 'ar' => 'التكليفات']],
+            ['column' => 'id', 'references' => 'course_final_grades', 'references_column' => 'course_id',
+                'label' => ['en' => 'Final grades', 'ar' => 'الدرجات النهائية']],
+            ['column' => 'id', 'references' => 'course_materials', 'references_column' => 'course_id',
+                'label' => ['en' => 'Materials', 'ar' => 'المواد']],
+            ['column' => 'id', 'references' => 'course_videos', 'references_column' => 'course_id',
+                'label' => ['en' => 'Videos', 'ar' => 'الفيديوهات']],
         ],
     ],
 
@@ -427,6 +454,362 @@ return [
                 'label' => ['en' => 'Attempt', 'ar' => 'المحاولة']],
             ['column' => 'exam_question_id', 'references' => 'exam_questions', 'references_column' => 'id',
                 'label' => ['en' => 'Exam question', 'ar' => 'سؤال الامتحان']],
+        ],
+    ],
+
+    // ------------------------------------------------------------------
+    // Courses, attendance, assignments, grading and course content
+    // (read-only analytics). Storage paths, video passwords, HMAC attendance
+    // secrets, exact GPS coordinates and device fingerprints are listed in
+    // sensitive_columns and are blocked everywhere (Explorer, Query Builder,
+    // Advanced Analytics, Data Quality).
+    // NOTE: the Query Builder rejects raw SQL that mentions ANY sensitive
+    // column name from ANY dataset, so keep these names specific.
+    // ------------------------------------------------------------------
+
+    'course_enrollments' => [
+        'table' => 'course_enrollments',
+        'label' => ['en' => 'Course Enrollments', 'ar' => 'تسجيلات المقررات'],
+        'description' => [
+            'en' => 'Which student is enrolled in which course, how (self-enrolled or added by staff) and when.',
+            'ar' => 'أي طالب مسجَّل في أي مقرر، وبأي طريقة (تسجيل ذاتي أو من الدكتور) ومتى.',
+        ],
+        'icon' => 'users',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_staff' => [
+        'table' => 'course_staff',
+        'label' => ['en' => 'Course Staff', 'ar' => 'مدرّسو المقررات'],
+        'description' => [
+            'en' => 'Which academic staff members teach which course.',
+            'ar' => 'أعضاء هيئة التدريس المسؤولون عن كل مقرر.',
+        ],
+        'icon' => 'briefcase',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'academic_staff_id', 'references' => 'academic_staff', 'references_column' => 'id',
+                'label' => ['en' => 'Doctor / staff member', 'ar' => 'الدكتور / عضو هيئة التدريس']],
+        ],
+    ],
+
+    'course_sessions' => [
+        'table' => 'course_sessions',
+        'label' => ['en' => 'Course Sessions (Timetable)', 'ar' => 'محاضرات المقررات (الجدول)'],
+        'description' => [
+            'en' => 'Weekly timetable slots per course: kind, day, time, room, group and instructor.',
+            'ar' => 'مواعيد المحاضرات الأسبوعية لكل مقرر: النوع واليوم والوقت والقاعة والمجموعة والمحاضر.',
+        ],
+        'icon' => 'layers',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'academic_staff_id', 'references' => 'academic_staff', 'references_column' => 'id',
+                'label' => ['en' => 'Instructor', 'ar' => 'المحاضر']],
+            ['column' => 'id', 'references' => 'attendance_windows', 'references_column' => 'course_session_id',
+                'label' => ['en' => 'Attendance windows of this session', 'ar' => 'فترات الحضور لهذه المحاضرة']],
+        ],
+    ],
+
+    'attendance_windows' => [
+        'table' => 'attendance_windows',
+        'label' => ['en' => 'Attendance Windows', 'ar' => 'فترات تسجيل الحضور'],
+        'description' => [
+            'en' => 'Each time an instructor opens attendance for a course: opening/closing time, status and radius. The signing secret and exact location are hidden.',
+            'ar' => 'كل مرة يفتح فيها الدكتور تسجيل الحضور لمقرر: وقت الفتح والإغلاق والحالة ونصف القطر. السر المستخدم في التوقيع والموقع الدقيق مخفيان.',
+        ],
+        'icon' => 'check-circle',
+        'primary_key' => 'id',
+        'default_sort' => 'opens_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['secret', 'lat', 'lng'],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'course_session_id', 'references' => 'course_sessions', 'references_column' => 'id',
+                'label' => ['en' => 'Timetable session', 'ar' => 'المحاضرة في الجدول']],
+            ['column' => 'id', 'references' => 'attendance_records', 'references_column' => 'window_id',
+                'label' => ['en' => 'Attendance records', 'ar' => 'سجلات الحضور']],
+        ],
+    ],
+
+    'attendance_records' => [
+        'table' => 'attendance_records',
+        'label' => ['en' => 'Attendance Records', 'ar' => 'سجلات الحضور'],
+        'description' => [
+            'en' => 'One row per student per attendance window: present, late, absent or excused, the method used and distance from campus/instructor. Exact coordinates and device fingerprints are hidden.',
+            'ar' => 'صف لكل طالب في كل فترة حضور: حاضر أو متأخر أو غائب أو بعذر، والطريقة المستخدمة والمسافة من الحرم/الدكتور. الإحداثيات الدقيقة وبصمات الأجهزة مخفية.',
+        ],
+        'icon' => 'check-circle',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['lat', 'lng', 'device_hash'],
+        'relationships' => [
+            ['column' => 'window_id', 'references' => 'attendance_windows', 'references_column' => 'id',
+                'label' => ['en' => 'Attendance window', 'ar' => 'فترة الحضور']],
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_assignments' => [
+        'table' => 'course_assignments',
+        'label' => ['en' => 'Course Assignments', 'ar' => 'تكليفات المقررات'],
+        'description' => [
+            'en' => 'Assignments per course: title, due date, max score, weight, late policy and status.',
+            'ar' => 'التكليفات لكل مقرر: العنوان وموعد التسليم والدرجة العظمى والوزن وسياسة التأخير والحالة.',
+        ],
+        'icon' => 'note',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['file_path'],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'id', 'references' => 'assignment_submissions', 'references_column' => 'assignment_id',
+                'label' => ['en' => 'Submissions', 'ar' => 'التسليمات']],
+        ],
+    ],
+
+    'assignment_submissions' => [
+        'table' => 'assignment_submissions',
+        'label' => ['en' => 'Assignment Submissions', 'ar' => 'تسليمات التكليفات'],
+        'description' => [
+            'en' => 'Student submissions: submitted time, lateness, attempts, status, score and who graded. Stored file paths are hidden.',
+            'ar' => 'تسليمات الطلاب: وقت التسليم والتأخير وعدد المحاولات والحالة والدرجة ومن صحّح. مسارات الملفات المخزّنة مخفية.',
+        ],
+        'icon' => 'note',
+        'primary_key' => 'id',
+        'default_sort' => 'submitted_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['file_path'],
+        'relationships' => [
+            ['column' => 'assignment_id', 'references' => 'course_assignments', 'references_column' => 'id',
+                'label' => ['en' => 'Assignment', 'ar' => 'التكليف']],
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_final_grades' => [
+        'table' => 'course_final_grades',
+        'label' => ['en' => 'Course Final Grades', 'ar' => 'الدرجات النهائية للمقررات'],
+        'description' => [
+            'en' => 'Final result per student per course: points, percentage, letter, grade points, fail/deprived flags, overrides and publish status.',
+            'ar' => 'النتيجة النهائية لكل طالب في كل مقرر: النقاط والنسبة والتقدير وعدد النقاط وحالات الرسوب/الحرمان والتعديل اليدوي وحالة النشر.',
+        ],
+        'icon' => 'award',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_grade_components' => [
+        'table' => 'course_grade_components',
+        'label' => ['en' => 'Course Grade Components', 'ar' => 'مكوّنات درجة المقرر'],
+        'description' => [
+            'en' => 'How each course grade is built: assignment, attendance or manual components with their weights.',
+            'ar' => 'طريقة تكوين درجة كل مقرر: مكوّنات (تكليف أو حضور أو يدوي) وأوزانها.',
+        ],
+        'icon' => 'bar-chart',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'id', 'references' => 'course_grade_component_scores', 'references_column' => 'component_id',
+                'label' => ['en' => 'Scores of this component', 'ar' => 'درجات هذا المكوّن']],
+        ],
+    ],
+
+    'course_grade_component_scores' => [
+        'table' => 'course_grade_component_scores',
+        'label' => ['en' => 'Grade Component Scores', 'ar' => 'درجات مكوّنات المقرر'],
+        'description' => [
+            'en' => 'Each student score on each grade component of a course.',
+            'ar' => 'درجة كل طالب في كل مكوّن من مكوّنات درجة المقرر.',
+        ],
+        'icon' => 'bar-chart',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'component_id', 'references' => 'course_grade_components', 'references_column' => 'id',
+                'label' => ['en' => 'Grade component', 'ar' => 'مكوّن الدرجة']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_grade_items' => [
+        'table' => 'course_grade_items',
+        'label' => ['en' => 'Course Grade Exam Items', 'ar' => 'امتحانات داخل درجة المقرر'],
+        'description' => [
+            'en' => 'Which exams count toward a course grade, their weight and the attempt policy (highest, latest or first).',
+            'ar' => 'الامتحانات المحتسبة في درجة المقرر ووزن كل منها وسياسة المحاولات (الأعلى أو الأحدث أو الأولى).',
+        ],
+        'icon' => 'award',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'exam_id', 'references' => 'exams', 'references_column' => 'id',
+                'label' => ['en' => 'Exam', 'ar' => 'الامتحان']],
+        ],
+    ],
+
+    'grade_scales' => [
+        'table' => 'grade_scales',
+        'label' => ['en' => 'Grade Scales', 'ar' => 'سلالم التقدير'],
+        'description' => [
+            'en' => 'Grading scales per scope (global, university or faculty): deprivation policy, approval requirement and GPA precision.',
+            'ar' => 'سلالم التقدير حسب النطاق (عام أو جامعة أو كلية): سياسة الحرمان ومتطلب الاعتماد ودقة المعدل.',
+        ],
+        'icon' => 'award',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'id', 'references' => 'grade_scale_bands', 'references_column' => 'scale_id',
+                'label' => ['en' => 'Letter bands of this scale', 'ar' => 'شرائح التقدير لهذا السلّم']],
+        ],
+    ],
+
+    'grade_scale_bands' => [
+        'table' => 'grade_scale_bands',
+        'label' => ['en' => 'Grade Scale Bands', 'ar' => 'شرائح سلالم التقدير'],
+        'description' => [
+            'en' => 'Letter grades of each scale with minimum percentage, grade points and fail flag.',
+            'ar' => 'التقديرات الحرفية لكل سلّم مع الحد الأدنى للنسبة وعدد النقاط وعلامة الرسوب.',
+        ],
+        'icon' => 'award',
+        'primary_key' => 'id',
+        'default_sort' => 'id',
+        'default_sort_dir' => 'asc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'scale_id', 'references' => 'grade_scales', 'references_column' => 'id',
+                'label' => ['en' => 'Grade scale', 'ar' => 'سلّم التقدير']],
+        ],
+    ],
+
+    'course_materials' => [
+        'table' => 'course_materials',
+        'label' => ['en' => 'Course Materials', 'ar' => 'مواد المقررات'],
+        'description' => [
+            'en' => 'Lectures, files, links and announcements posted per course, with kind, status, pinning and author role. Stored file paths are hidden.',
+            'ar' => 'المحاضرات والملفات والروابط والإعلانات المنشورة لكل مقرر مع النوع والحالة والتثبيت ودور الناشر. مسارات الملفات المخزّنة مخفية.',
+        ],
+        'icon' => 'file',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['file_path'],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'id', 'references' => 'course_material_saves', 'references_column' => 'material_id',
+                'label' => ['en' => 'Student saves', 'ar' => 'حفظ الطلاب']],
+        ],
+    ],
+
+    'course_material_saves' => [
+        'table' => 'course_material_saves',
+        'label' => ['en' => 'Course Material Saves', 'ar' => 'حفظ الطلاب لمواد المقررات'],
+        'description' => [
+            'en' => 'Which students saved which course materials (an engagement signal).',
+            'ar' => 'أي الطلاب حفظوا أي مواد مقررات (مؤشر تفاعل).',
+        ],
+        'icon' => 'file',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'material_id', 'references' => 'course_materials', 'references_column' => 'id',
+                'label' => ['en' => 'Material', 'ar' => 'المادة']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
+        ],
+    ],
+
+    'course_videos' => [
+        'table' => 'course_videos',
+        'label' => ['en' => 'Course Videos', 'ar' => 'فيديوهات المقررات'],
+        'description' => [
+            'en' => 'Recorded lecture videos per course: duration, order and status. Stored file paths and video passwords are hidden.',
+            'ar' => 'فيديوهات المحاضرات المسجّلة لكل مقرر: المدة والترتيب والحالة. مسارات الملفات وكلمات سر الفيديو مخفية.',
+        ],
+        'icon' => 'folder',
+        'primary_key' => 'id',
+        'default_sort' => 'created_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => ['file_path', 'password_hash'],
+        'relationships' => [
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'id', 'references' => 'course_video_views', 'references_column' => 'video_id',
+                'label' => ['en' => 'Student views', 'ar' => 'مشاهدات الطلاب']],
+        ],
+    ],
+
+    'course_video_views' => [
+        'table' => 'course_video_views',
+        'label' => ['en' => 'Course Video Views', 'ar' => 'مشاهدات فيديوهات المقررات'],
+        'description' => [
+            'en' => 'Per student per video watch progress: watched seconds, percent, play count and completion.',
+            'ar' => 'تقدّم مشاهدة كل طالب لكل فيديو: الثواني المشاهدة والنسبة وعدد مرات التشغيل والإكمال.',
+        ],
+        'icon' => 'trend',
+        'primary_key' => 'id',
+        'default_sort' => 'last_watched_at',
+        'default_sort_dir' => 'desc',
+        'sensitive_columns' => [],
+        'relationships' => [
+            ['column' => 'video_id', 'references' => 'course_videos', 'references_column' => 'id',
+                'label' => ['en' => 'Video', 'ar' => 'الفيديو']],
+            ['column' => 'course_id', 'references' => 'courses', 'references_column' => 'id',
+                'label' => ['en' => 'Course', 'ar' => 'المقرر']],
+            ['column' => 'student_id', 'references' => 'students', 'references_column' => 'id',
+                'label' => ['en' => 'Student', 'ar' => 'الطالب']],
         ],
     ],
 
