@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\DataAnalysisAdvancedAnalyticsApiController;
 use App\Http\Controllers\Api\DataAnalysisAiInsightsApiController;
 use App\Http\Controllers\Api\DataAnalysisDashboardApiController;
 use App\Http\Controllers\Api\DataAnalysisDataQualityApiController;
+use App\Http\Controllers\Api\DataAnalysisEngagementApiController;
 use App\Http\Controllers\Api\DataAnalysisExamsApiController;
 use App\Http\Controllers\Api\DataAnalysisExplorerApiController;
 use App\Http\Controllers\Api\DataAnalysisExportsApiController;
@@ -1977,8 +1978,8 @@ Route::prefix('v1')->group(function () {
 
     // بند 24 — Data Analysis Portal. مدخل البورتال + batch 1 (Saved
     // Dashboards) + batch 2 (Exports التنفيذ الفعلي + Segments) خلصوا.
-    // باقي البورتال (kpis, reports, forecasting, advanced analytics,
-    // explorer, query builder, ...) جاي مع بنودها الفرعية.
+    // + batch 3/4/5 (KPIs, Forecasting, Explorer, Reports, ...) + التفاعل
+    // والنشاط (engagement). البورتال شغّال بكل أقسامه.
     Route::prefix('data-analysis')->middleware(['uip.auth', 'uip.can:data_analysis.dashboard.view'])->group(function () {
         Route::get('/dashboard', [DataAnalysisDashboardApiController::class, 'index']);
 
@@ -1988,6 +1989,15 @@ Route::prefix('v1')->group(function () {
             Route::get('/overview', [DataAnalysisExamsApiController::class, 'overview']);
             Route::get('/students', [DataAnalysisExamsApiController::class, 'students']);
             Route::get('/exam/{id}', [DataAnalysisExamsApiController::class, 'showExam'])->where('id', '[0-9]+');
+        });
+
+        // بند 6 (الناقص للمحلل) — التفاعل والنشاط: feed، إعلانات، إشعارات،
+        // user_activity_events، login_events، زيارات، اجتماعات، مكالمات،
+        // فورمات. قراءة تجميعية بس. الروتس الحرفية قبل أي {key}.
+        Route::prefix('engagement')->group(function () {
+            Route::get('/filters', [DataAnalysisEngagementApiController::class, 'filters']);
+            Route::get('/overview', [DataAnalysisEngagementApiController::class, 'overview']);
+            Route::get('/section/{key}', [DataAnalysisEngagementApiController::class, 'section'])->where('key', '[a-z_]+');
         });
 
         // بند 24 batch 1 — Saved Dashboards. catalog لازم يتسجل قبل
