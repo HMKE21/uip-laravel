@@ -1196,6 +1196,10 @@ Route::prefix('v1')->group(function () {
         Route::post('emergency/revoke-all-shares', [$c, 'revokeAllShares'])->middleware('throttle:admin-control-emergency');
 
         Route::get('audit', [$c, 'audit']);
+        Route::get('audit/access', [$c, 'auditAccess']);
+        Route::post('audit/access', [$c, 'auditUnlock'])->middleware('throttle:20,1');
+        Route::delete('audit/access', [$c, 'auditLock']);
+        Route::post('audit/delete', [$c, 'auditDelete'])->middleware('throttle:admin-control-emergency');
         Route::post('maintenance/purge-trash', [$c, 'purgeTrash'])->middleware('throttle:admin-control-emergency');
         Route::get('maintenance/missing-files', [$c, 'missingFiles'])->middleware('throttle:10,1');
     });

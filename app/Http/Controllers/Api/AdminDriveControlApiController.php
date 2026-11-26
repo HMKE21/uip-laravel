@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Services\AuditLogService;
 use App\Services\DriveAdminService;
 use App\Services\DriveAdminSettings;
+use App\Services\DriveAuditAccessService;
+use App\Services\MessagingOversightAccessService;
 use App\Support\DriveException;
 use Illuminate\Http\Request;
 
@@ -37,7 +39,10 @@ use Illuminate\Http\Request;
  *   POST   shares/{id}/pause|resume|revoke|reset-claim|clear-activity   ·   DELETE shares/{id}
  *   POST   shares/bulk                                {action: pause|resume|revoke|delete, ids:[..]}
  *   POST   emergency/revoke-all-shares                {confirm:true, user_id?}
- *   GET    audit ?action&user_id&subject_id            سجل إجراءات الأدمن (admin.drive.*)
+ *   GET    audit ?action&user_id&subject_id            سجل إجراءات الأدمن (admin.drive.*) — مخفي إلا بعد فتحه بالمفتاح السري
+ *   GET    audit/access        POST audit/access {key,reason,minutes?}   حالة القفل / فتح بالمفتاح (SECRET_KEY_TO_PC_CONTROL_ACTIVITY_LOG في .env)
+ *   DELETE audit/access                                قفل الآن
+ *   POST   audit/delete {ids[] | all+action?+subject_id?, confirm}   حذف من السجل (بعد الفتح بالمفتاح بس)
  *   POST   maintenance/purge-trash                    امسح سلة المحذوفات المنتهية دلوقتي
  *   GET    maintenance/missing-files ?after_id&limit  ملفات في الـ DB مفقودة من التخزين
  *
@@ -48,7 +53,8 @@ class AdminDriveControlApiController extends Controller
 {
     public function __construct(
         private DriveAdminService $admin,
-        private AuditLogService $auditLog
+        private AuditLogService $auditLog,
+        private DriveAuditAccessService $auditAccess
     ) {
     }
 
@@ -189,9 +195,13 @@ class AdminDriveControlApiController extends Controller
         return $this->apiSuccess($this->admin->searchUsers((string) $request->query('q', '')));
     }
 
-    public function user(int $id)
+    public function user(Request $request, int $id)
     {
         $d = $this->admin->userDetail($id);
+        if ($d && !$this->auditAccess->isUnlocked($this->adminId($request))) {
+            $d['history'] = [];
+            $d['history_locked'] = true;
+        }
 
         return $d ? $this->apiSuccess($d) : $this->apiError('User not found.', null, 404);
     }
@@ -532,7 +542,97 @@ class AdminDriveControlApiController extends Controller
 
     public function audit(Request $request)
     {
-        return $this->apiSuccess($this->admin->audit($request->query()));
+        $data = $this->admin->audit($request->query());
+
+        // مقفول: السيرفر بيرجّع صفوف مشفّرة من غير أي محتوى (مين/إيه/لمين/IP/القيم).
+        if (!$this->auditAccess->isUnlocked($this->adminId($request))) {
+            $data['items'] = array_map(fn ($a) => [
+                'id' => $a['id'], 'created_at' => $a['created_at'], 'locked' => true,
+                'cipher' => MessagingOversightAccessService::cipher('d' . $a['id']),
+            ], $data['items']);
+            $data['locked'] = true;
+        } else {
+            $data['locked'] = false;
+        }
+
+        return $this->apiSuccess($data);
+    }
+
+    private function requireAdminRole(Request $request)
+    {
+        return $request->attributes->get('uip_role') === 'admin' ? null : $this->apiError('Only admin accounts can open the activity log.', null, 403);
+    }
+
+    /** GET audit/access — حالة قفل سجل النشاط. */
+    public function auditAccess(Request $request)
+    {
+        if ($r = $this->requireAdminRole($request)) {
+            return $r;
+        }
+
+        return $this->apiSuccess($this->auditAccess->status($this->adminId($request)));
+    }
+
+    /** POST audit/access {key, reason, minutes?} — فتح السجل بالمفتاح السري (عرض + حذف). */
+    public function auditUnlock(Request $request)
+    {
+        if ($r = $this->requireAdminRole($request)) {
+            return $r;
+        }
+        try {
+            $st = $this->auditAccess->unlock(
+                $this->adminId($request),
+                (string) $request->input('key', ''),
+                (string) $request->input('reason', ''),
+                $request->filled('minutes') ? (int) $request->input('minutes') : null,
+                $request->ip()
+            );
+        } catch (\InvalidArgumentException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        } catch (\RuntimeException $e) {
+            $c = (int) $e->getCode();
+
+            return $this->apiError($e->getMessage(), null, in_array($c, [403, 429, 503], true) ? $c : 403);
+        }
+
+        return $this->apiSuccess($st, 'Activity log unlocked.');
+    }
+
+    /** DELETE audit/access — قفل فوري. */
+    public function auditLock(Request $request)
+    {
+        if ($r = $this->requireAdminRole($request)) {
+            return $r;
+        }
+        $this->auditAccess->lock($this->adminId($request), $request->ip());
+
+        return $this->apiSuccess($this->auditAccess->status($this->adminId($request)), 'Activity log locked.');
+    }
+
+    /** POST audit/delete — حذف صفوف من السجل. بيحتاج السجل يكون مفتوح بالمفتاح + confirm=true. */
+    public function auditDelete(Request $request)
+    {
+        if ($r = $this->requireAdminRole($request)) {
+            return $r;
+        }
+        $adminId = $this->adminId($request);
+        if (!$this->auditAccess->isUnlocked($adminId)) {
+            return $this->apiError('The activity log is locked. Enter the secret key first.', null, 403);
+        }
+        if (!$request->boolean('confirm')) {
+            return $this->apiError('Confirmation required (confirm=true).', null, 422);
+        }
+        $ids = $this->ids($request);
+        if (!$ids && !$request->boolean('all')) {
+            return $this->apiError('Choose the rows to delete.', null, 422);
+        }
+
+        $n = $this->auditAccess->purge($adminId, [
+            'ids' => $ids, 'all' => $request->boolean('all'),
+            'action' => $request->input('action'), 'subject_id' => $request->input('subject_id'),
+        ], $request->ip());
+
+        return $this->apiSuccess(['deleted' => $n], $n . ' log row(s) deleted.');
     }
 
     public function purgeTrash(Request $request)

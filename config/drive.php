@@ -14,6 +14,8 @@
  *   DRIVE_MAX_VERSIONS    كام نسخة قديمة نحتفظ بيها لكل ملف (0 = سجل الإصدارات مقفول). الأقدم بيتمسح أوتوماتيك.
  *   DRIVE_VERSION_MAX_MB  أكبر حجم ملف نحتفظ له بنسخ قديمة (الملفات الأكبر بتتستبدل من غير سجل).
  *   DRIVE_VERSIONS_MB     سقف مساحة كل النسخ القديمة لكل طالب (مش محسوبة من الحصة؛ لما يتعدّى الأقدم بيتمسح).
+ *   SECRET_KEY_TO_PC_CONTROL_ACTIVITY_LOG   المفتاح السري لقفل "سجل النشاط" في Admin → My PC Control (عرض + حذف). فاضي = السجل مقفول بالكامل.
+ *   DRIVE_AUDIT_GRANT_MINUTES                مدة بقاء السجل مفتوح بعد إدخال المفتاح (5–120 دقيقة).
  *   DRIVE_ROLES        الأدوار المسموح لها (افتراضي: كل الأدوار المتاحة في config/roles.php؛ للتضييق: DRIVE_ROLES=student,faculty).
  */
 return [
@@ -32,5 +34,10 @@ return [
     'versions_mb'      => max(1, (int) env('DRIVE_VERSIONS_MB', 300)),
     'direct'           => filter_var(env('DRIVE_DIRECT', true), FILTER_VALIDATE_BOOL),
     'direct_ttl_min'   => max(1, (int) env('DRIVE_DIRECT_TTL_MIN', 15)),
+    // سجل نشاط My PC Control: مقفول لحد ما الأدمن يدخل المفتاح ده (من .env مش من الكود).
+    'audit_access'     => [
+        'key'           => env('SECRET_KEY_TO_PC_CONTROL_ACTIVITY_LOG', ''),
+        'grant_minutes' => (int) env('DRIVE_AUDIT_GRANT_MINUTES', 15),
+    ],
     'roles'            => array_values(array_filter(array_map('trim', explode(',', (string) env('DRIVE_ROLES', implode(',', (array) ((require __DIR__ . '/roles.php')['available'] ?? ['student']))))))),
 ];
