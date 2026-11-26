@@ -1057,11 +1057,16 @@ class MessagingService
             ->first();
 
         if ($existing) {
+            // نفس الإيموجي تاني = شيل الريأكشن
             DB::table('message_reactions')->where('id', $existing->id)->delete();
         } else {
-            DB::table('message_reactions')->insert([
-                'message_id' => $messageId, 'user_id' => $userId, 'emoji' => $emoji, 'created_at' => now(),
-            ]);
+            // ريأكشن واحد بس لكل مستخدم على الرسالة: الجديد بيمسح القديم ويحل مكانه
+            DB::transaction(function () use ($messageId, $userId, $emoji) {
+                DB::table('message_reactions')->where('message_id', $messageId)->where('user_id', $userId)->delete();
+                DB::table('message_reactions')->insert([
+                    'message_id' => $messageId, 'user_id' => $userId, 'emoji' => $emoji, 'created_at' => now(),
+                ]);
+            });
         }
 
         $shaped = $this->messages->withRelations($messageId);
