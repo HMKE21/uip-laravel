@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\ContentSafetyService;
+use App\Services\MessagingOversightAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -19,11 +20,14 @@ use Illuminate\Support\Facades\DB;
  *   DELETE /api/v1/admin/content-safety/events/{id}       حذف محاولة واحدة من السجل
  *   DELETE /api/v1/admin/content-safety/events?kind=&category=   حذف كل المحاولات (أو المطابقة للفلتر الحالي)
  *
+ * المحتوى المحجوب نفسه (الكلمة المطابقة / عينة النص / اسم الملف / معاينة الملف / السماح) مقفول ومشفّر من السيرفر لحد ما الإدارة تفتحه
+ * بالمفتاح السري SECRET_KEY_TO_READ_BLOCKED_ATTEMPTS لفترة تاريخ محددة (MessagingOversightAccessService، scope = blocked).
+ *
  * RBAC: uip.auth + uip.admin على الـ group + نفس حارس uip_role === 'admin'.
  */
 class AdminContentSafetyApiController extends Controller
 {
-    public function __construct(private ContentSafetyService $safety)
+    public function __construct(private ContentSafetyService $safety, private MessagingOversightAccessService $access)
     {
     }
 
@@ -78,12 +82,48 @@ class AdminContentSafetyApiController extends Controller
             // الجدول لسه معمولش migrate — الصفحة تفتح بحالة الفاحص بس
         }
 
+        // الإخفاء على السيرفر: أي محاولة برا الفترة المصرّح بيها (أو من غير تصريح) بترجع من غير الكلمة/العينة/اسم الملف.
+        $adminId = (int) $request->attributes->get('uip_user_id');
+        $grants = [];
+        try {
+            $grants = $this->access->activeGrants($adminId, 'blocked');
+        } catch (\Throwable $e) {
+            // جدول التصاريح لسه معمولش migrate: كل حاجة تفضل مقفولة
+        }
+        $open = 0;
+        $locked = 0;
+        foreach ($items as $i => $it) {
+            if ($this->access->covers($grants, $it['created_at'] ?? null)) {
+                $items[$i]['locked'] = false;
+                $open++;
+            } else {
+                $items[$i] = $this->access->maskBlockedEvent($it);
+                $locked++;
+            }
+        }
+        foreach ($allowlist as $i => $a) {
+            if (!$this->access->covers($grants, $a['created_at'] ?? null)) {
+                $allowlist[$i]['label'] = null;
+                $allowlist[$i]['locked'] = true;
+                $allowlist[$i]['cipher'] = MessagingOversightAccessService::cipher('l' . (int) $a['id']);
+            }
+        }
+        if ($items) {
+            $this->audit($request, 'content_safety.list_viewed', ['opened' => $open, 'locked' => $locked]);
+        }
+
         return $this->apiSuccess([
             'status' => $this->safety->status(),
             'stats' => $stats,
             'items' => $items,
             'allowlist' => $allowlist,
             'has_more' => $hasMore,
+            'access' => [
+                'scope'      => 'blocked',
+                'open'       => $open,
+                'locked'     => $locked,
+                'configured' => $this->access->keyConfigured('blocked'),
+            ],
         ], 'Content safety retrieved.');
     }
 
@@ -104,6 +144,9 @@ class AdminContentSafetyApiController extends Controller
             return $deny;
         }
         $e = DB::table('content_safety_events')->where('id', (int) $id)->first();
+        if ($e && !$this->access->canRead((int) $request->attributes->get('uip_user_id'), 'blocked', (string) $e->created_at)) {
+            return $this->apiError('Blocked content is encrypted. Open it with the secret key first.', null, 403);
+        }
         $path = $e && !empty($e->content_hash) ? $this->safety->quarantinePath((string) $e->content_hash) : null;
         if (!$path) {
             return $this->apiError('The blocked file copy is not available (expired or too large).', null, 404);
@@ -128,6 +171,9 @@ class AdminContentSafetyApiController extends Controller
         $e = DB::table('content_safety_events')->where('id', (int) $id)->first();
         if (!$e) {
             return $this->apiError('Event not found.', null, 404);
+        }
+        if (!$this->access->canRead((int) $request->attributes->get('uip_user_id'), 'blocked', (string) $e->created_at)) {
+            return $this->apiError('Blocked content is encrypted. Open it with the secret key before approving it.', null, 403);
         }
         $hash = (string) ($e->content_hash ?? '');
         if ($hash === '') {

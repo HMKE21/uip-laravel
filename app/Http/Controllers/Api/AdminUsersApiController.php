@@ -696,7 +696,20 @@ class AdminUsersApiController extends Controller
             $out['total'] = (int) (clone $q)->count();
             $out['last_7d'] = (int) (clone $q)->where('created_at', '>=', now()->subDays(7))->count();
             $out['by_category'] = (clone $q)->selectRaw('category, COUNT(*) c')->groupBy('category')->pluck('c', 'category')->all();
-            $out['items'] = (clone $q)->orderByDesc('id')->limit(20)->get(['id', 'kind', 'category', 'detail', 'route', 'created_at'])->all();
+            $access = app(\App\Services\MessagingOversightAccessService::class);
+            $adminId = (int) $request->attributes->get('uip_user_id');
+            $rows = (clone $q)->orderByDesc('id')->limit(20)->get(['id', 'kind', 'category', 'detail', 'route', 'created_at'])->all();
+            // الكلمة المطابقة مقفولة ومشفّرة لحد ما الإدارة تفتحها بالمفتاح السري (scope = blocked).
+            $out['items'] = array_map(function ($r) use ($access, $adminId) {
+                $a = (array) $r;
+                if ($access->canRead($adminId, 'blocked', (string) ($a['created_at'] ?? ''))) {
+                    $a['locked'] = false;
+
+                    return $a;
+                }
+
+                return $access->maskBlockedEvent($a);
+            }, $rows);
         } catch (\Throwable $e) {
             // الجدول لسه معمولش migrate
         }

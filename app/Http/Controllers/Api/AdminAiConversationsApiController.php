@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\AuditLogService;
+use App\Services\MessagingOversightAccessService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -19,7 +20,7 @@ class AdminAiConversationsApiController extends Controller
 {
     private const PER_PAGE = 20;
 
-    public function __construct(private AuditLogService $auditLog)
+    public function __construct(private AuditLogService $auditLog, private MessagingOversightAccessService $access)
     {
     }
 
@@ -52,15 +53,10 @@ class AdminAiConversationsApiController extends Controller
         }
         if ($search !== '') {
             $like = '%' . $search . '%';
+            // البحث بالمستخدم فقط: البحث في العنوان/نص الرسايل كان هيكشف محتوى مقفول (تخمين كلمات).
             $query->where(function ($w) use ($like) {
-                $w->where('c.title', 'like', $like)
-                  ->orWhere('u.full_name', 'like', $like)
-                  ->orWhere('u.email', 'like', $like)
-                  ->orWhereExists(function ($sub) use ($like) {
-                      $sub->select(DB::raw(1))->from('ai_messages as m')
-                          ->whereColumn('m.conversation_id', 'c.id')
-                          ->where('m.content', 'like', $like);
-                  });
+                $w->where('u.full_name', 'like', $like)
+                  ->orWhere('u.email', 'like', $like);
             });
         }
 
@@ -79,6 +75,16 @@ class AdminAiConversationsApiController extends Controller
             ->get()
             ->map(fn ($r) => (array) $r)
             ->all();
+
+        // عنوان المحادثة بيتولّد من أول رسالة = محتوى: بيتخفى إلا لو فيه تصريح ساري بيغطيها.
+        $grants = $this->access->activeGrants((int) $request->attributes->get('uip_user_id'), 'ai');
+        foreach ($items as &$it) {
+            if (!$this->access->coversConversation($grants, (int) $it['id'])) {
+                $it['title'] = null;
+                $it['title_locked'] = true;
+            }
+        }
+        unset($it);
 
         $portals = DB::table('ai_conversations')->distinct()->orderBy('portal')->pluck('portal')->all();
 
@@ -130,17 +136,46 @@ class AdminAiConversationsApiController extends Controller
                 ->get(['id', 'message_id', 'kind', 'original_name', 'size_bytes'])->groupBy('message_id')
             : collect();
 
+        $adminId = (int) $request->attributes->get('uip_user_id');
+        $grants = $this->access->activeGrants($adminId, 'ai', (int) $id);
+        $open = 0;
+        $locked = 0;
+
         foreach ($messages as &$m) {
             $m['attachments'] = ($attachments[$m['id']] ?? collect())->map(fn ($a) => (array) $a)->values()->all();
             $m['is_deleted']  = (bool) $m['is_deleted'];
+            // الإخفاء على السيرفر: برا الفترة المصرّح بيها بترجع مشفّرة وبدون نص/أسماء ملفات/أخطاء.
+            if ($this->access->covers($grants, $m['created_at'] ?? null)) {
+                $m['locked'] = false;
+                $open++;
+            } else {
+                $m = $this->access->maskAiMessage($m);
+                $locked++;
+            }
         }
         unset($m);
 
-        $this->auditLog->record($request->attributes->get('uip_user_id'), 'admin.ai_conversation_viewed', 'AiConversation', (int) $id);
+        $conv = (array) $conversation;
+        if (!$this->access->coversConversation($grants, (int) $id)) {
+            $conv['title'] = null;
+            $conv['title_locked'] = true;
+        }
+
+        $this->auditLog->record($adminId, 'admin.ai_conversation_viewed', 'AiConversation', (int) $id, null, ['messages_opened' => $open, 'messages_locked' => $locked]);
 
         return $this->apiSuccess([
-            'conversation' => (array) $conversation,
+            'conversation' => $conv,
             'messages'     => $messages,
+            'access'       => [
+                'scope'      => 'ai',
+                'open'       => $open,
+                'locked'     => $locked,
+                'grants'     => array_map(fn ($g) => [
+                    'id' => (int) $g['id'], 'date_from' => substr((string) $g['date_from'], 0, 10), 'date_to' => substr((string) $g['date_to'], 0, 10),
+                    'expires_at' => (string) $g['expires_at'], 'conversation_id' => $g['conversation_id'] !== null ? (int) $g['conversation_id'] : null,
+                ], $grants),
+                'configured' => $this->access->keyConfigured('ai'),
+            ],
         ], 'AI conversation retrieved successfully.');
     }
 }

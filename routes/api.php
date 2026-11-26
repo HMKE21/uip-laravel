@@ -1292,6 +1292,10 @@ Route::prefix('v1')->group(function () {
     // fix") بالظبط، مفيش حاجة مختلَقة.
     Route::prefix('admin/messaging')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/oversight', [AdminMessagingOversightApiController::class, 'index']);
+        // فتح محتوى الرسايل بالمفتاح السري + فترة تاريخ (تصاريح مؤقتة ومتسجّلة).
+        Route::get('/oversight-access', [AdminMessagingOversightApiController::class, 'accessStatus']);
+        Route::post('/oversight-access', [AdminMessagingOversightApiController::class, 'grantAccess'])->middleware('throttle:20,1');
+        Route::delete('/oversight-access/{id}', [AdminMessagingOversightApiController::class, 'revokeAccess'])->where('id', '[0-9]+');
         Route::get('/oversight/{id}', [AdminMessagingOversightApiController::class, 'thread']);
         // محادثات المستخدمين مع المساعد الذكي (قراءة-فقط، كل فتح بيتسجل).
         Route::get('/ai-conversations', [AdminAiConversationsApiController::class, 'index']);

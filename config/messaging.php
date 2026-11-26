@@ -44,6 +44,16 @@ return [
         'timeout'    => 180, // ثواني لكل ملف
     ],
 
+    // إشراف الرسائل: محتوى الرسايل (بين الأشخاص / مع الـ AI) مقفول لحد ما إدارة المنصة تفتحه بالمفتاح السري ده.
+    // لو المفتاح فاضي الفتح بيتقفل بالكامل. القيم في .env (مش في الكود).
+    'oversight' => [
+        'key_people_to_people' => env('SECRET_KEY_TO_READ_MESSAGES_PEOPLE_TO_PEOPLE', ''),
+        'key_people_to_ai'     => env('SECRET_KEY_TO_READ_MESSAGES_PEOPLE_TO_AI', ''),
+        'key_blocked_attempts' => env('SECRET_KEY_TO_READ_BLOCKED_ATTEMPTS', ''), // المحاولات المحجوبة (سلامة المحتوى)
+        'grant_minutes'        => (int) env('MESSAGING_OVERSIGHT_GRANT_MINUTES', 15), // مدة صلاحية الفتح
+        'max_range_days'       => (int) env('MESSAGING_OVERSIGHT_MAX_RANGE_DAYS', 31), // أقصى فترة تاريخ في الفتح الواحد
+    ],
+
     // ffmpeg/ffprobe: صورة مصغّرة + مدة + تحويل أي فيديو مرفوع لـ mp4 (H.264/AAC) عشان يشتغل في كل المتصفحات.
     'media_probe' => [
         'ffmpeg_binary'        => env('FFMPEG_BINARY', 'ffmpeg'),

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\AuditLogService;
+use App\Services\MessagingOversightAccessService;
 use App\Services\MessagingPolicyService;
 use App\Services\MessagingService;
 use Illuminate\Http\Request;
@@ -34,7 +35,8 @@ class AdminMessagingOversightApiController extends Controller
     public function __construct(
         private MessagingService $messaging,
         private MessagingPolicyService $policy,
-        private AuditLogService $auditLog
+        private AuditLogService $auditLog,
+        private MessagingOversightAccessService $access
     ) {
     }
 
@@ -58,7 +60,19 @@ class AdminMessagingOversightApiController extends Controller
             fn ($v) => $v !== null && $v !== ''
         );
 
-        return $this->apiSuccess($this->messaging->adminSearchConversations($filters), 'Conversations retrieved successfully.');
+        $result = $this->messaging->adminSearchConversations($filters);
+
+        // عنوان/موضوع المحادثة ممكن يكشف محتوى: بيتخفى إلا لو فيه تصريح ساري بيغطي المحادثة دي.
+        $grants = $this->access->activeGrants((int) $request->attributes->get('uip_user_id'), 'people');
+        foreach ($result['items'] as &$row) {
+            if (!empty($row['subject']) && !$this->access->coversConversation($grants, (int) $row['id'])) {
+                $row['subject'] = null;
+                $row['subject_locked'] = true;
+            }
+        }
+        unset($row);
+
+        return $this->apiSuccess($result, 'Conversations retrieved successfully.');
     }
 
     /** GET /api/v1/admin/messaging/oversight/{id} — ثريد قراءة-فقط، بيتسجل. */
@@ -73,9 +87,85 @@ class AdminMessagingOversightApiController extends Controller
             return $this->apiError('Conversation not found.', null, 404);
         }
 
-        $this->auditLog->record($request->attributes->get('uip_user_id'), 'admin.messaging_conversation_viewed', 'Conversation', (int) $id);
+        $adminId = (int) $request->attributes->get('uip_user_id');
+        $grants = $this->access->activeGrants($adminId, 'people', (int) $id);
+
+        // الإخفاء على السيرفر: أي رسالة برا الفترة المصرّح بيها (أو من غير تصريح) بترجع مشفّرة وبدون أي محتوى/ملفات.
+        $open = 0;
+        $locked = 0;
+        foreach ($thread['messages'] as $i => $m) {
+            if ($this->access->covers($grants, $m['created_at'] ?? null)) {
+                $thread['messages'][$i]['locked'] = false;
+                $open++;
+            } else {
+                $thread['messages'][$i] = $this->access->maskPeopleMessage($m);
+                $locked++;
+            }
+        }
+        if (!empty($thread['conversation']['subject']) && !$this->access->coversConversation($grants, (int) $id)) {
+            $thread['conversation']['subject'] = null;
+            $thread['conversation']['subject_locked'] = true;
+        }
+        $thread['access'] = [
+            'scope'    => 'people',
+            'open'     => $open,
+            'locked'   => $locked,
+            'grants'   => array_map(fn ($g) => [
+                'id' => (int) $g['id'], 'date_from' => substr((string) $g['date_from'], 0, 10), 'date_to' => substr((string) $g['date_to'], 0, 10),
+                'expires_at' => (string) $g['expires_at'], 'conversation_id' => $g['conversation_id'] !== null ? (int) $g['conversation_id'] : null,
+            ], $grants),
+            'configured' => $this->access->keyConfigured('people'),
+        ];
+
+        $this->auditLog->record($adminId, 'admin.messaging_conversation_viewed', 'Conversation', (int) $id, null, ['messages_opened' => $open, 'messages_locked' => $locked]);
 
         return $this->apiSuccess($thread, 'Conversation retrieved successfully.');
+    }
+
+    /** GET /api/v1/admin/messaging/oversight-access — حالة المفاتيح + التصاريح السارية للأدمن الحالي. */
+    public function accessStatus(Request $request)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
+        return $this->apiSuccess($this->access->status((int) $request->attributes->get('uip_user_id')), 'Access status retrieved.');
+    }
+
+    /** POST /api/v1/admin/messaging/oversight-access — {scope: people|ai, key, reason, date_from, date_to, conversation_id?, minutes?} */
+    public function grantAccess(Request $request)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+
+        try {
+            $grant = $this->access->grant(
+                (int) $request->attributes->get('uip_user_id'),
+                (string) $request->input('scope', 'people'),
+                $request->only(['key', 'reason', 'date_from', 'date_to', 'conversation_id', 'minutes']),
+                $request->ip()
+            );
+
+            return $this->apiSuccess($grant, 'Access granted.');
+        } catch (\InvalidArgumentException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        } catch (\RuntimeException $e) {
+            $code = in_array($e->getCode(), [403, 429, 503], true) ? $e->getCode() : 403;
+
+            return $this->apiError($e->getMessage(), null, $code);
+        }
+    }
+
+    /** DELETE /api/v1/admin/messaging/oversight-access/{id} — قفل التصريح فورًا. */
+    public function revokeAccess(Request $request, string $id)
+    {
+        if ($err = $this->requireAdmin($request)) {
+            return $err;
+        }
+        $ok = $this->access->revoke((int) $request->attributes->get('uip_user_id'), (int) $id, $request->ip());
+
+        return $ok ? $this->apiSuccess(['id' => (int) $id], 'Access revoked.') : $this->apiError('Grant not found.', null, 404);
     }
 
     /** POST /api/v1/admin/messaging/oversight/messages/{id}/delete — حذف إجباري، أي محادثة. */

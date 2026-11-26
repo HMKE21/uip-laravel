@@ -374,11 +374,12 @@ class ConversationRepository
 
         $search = trim((string) ($filters['search'] ?? ''));
         if ($search !== '') {
-            $clauses[] = '(c.subject LIKE ? OR c.group_name LIKE ?
+            // البحث في موضوع المحادثة اتشال: الموضوع محتوى مقفول، والبحث فيه كان هيكشفه بالتخمين.
+            $clauses[] = '(c.group_name LIKE ?
                 OR EXISTS (SELECT 1 FROM conversation_participants cp2 INNER JOIN users u2 ON u2.id = cp2.user_id
                            WHERE cp2.conversation_id = c.id AND (u2.full_name LIKE ? OR u2.email LIKE ?)))';
             $needle = '%' . $search . '%';
-            array_push($params, $needle, $needle, $needle, $needle);
+            array_push($params, $needle, $needle, $needle);
         }
 
         $type = (string) ($filters['type'] ?? '');
