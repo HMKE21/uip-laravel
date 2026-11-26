@@ -33,9 +33,31 @@ class SavedDashboardService
         'top_doctors'        => ['en' => 'Top Doctors (exams)',      'ar' => 'أكثر الدكاترة نشاطًا',    'icon' => 'briefcase'],
         'students_at_risk'   => ['en' => 'Students at Risk',         'ar' => 'الطلاب المعرّضون للخطر', 'icon' => 'alert-triangle'],
         'exam_integrity'     => ['en' => 'Exam Integrity & Appeals', 'ar' => 'النزاهة والتظلمات',       'icon' => 'shield'],
+        // المقررات / الحضور / الرسوم / التخرج / النشاط + المشاريع والامتحانات العميقة (DataAnalysisDashboardExtrasService)
+        'courses_kpis'            => ['en' => 'Courses Overview',          'ar' => 'نظرة على المقررات',          'icon' => 'book-open'],
+        'course_enrollment_trend' => ['en' => 'Course Enrollment Trend',   'ar' => 'اتجاه التسجيل في المقررات',   'icon' => 'trend'],
+        'attendance_kpis'         => ['en' => 'Attendance KPIs',           'ar' => 'مؤشرات الحضور',              'icon' => 'check-circle'],
+        'attendance_status'       => ['en' => 'Attendance by Status',      'ar' => 'الحضور حسب الحالة',          'icon' => 'bar-chart'],
+        'fees_kpis'               => ['en' => 'Fees & Collection',         'ar' => 'الرسوم والتحصيل',            'icon' => 'award'],
+        'fees_status'             => ['en' => 'Fees by Payment Status',    'ar' => 'الرسوم حسب حالة السداد',      'icon' => 'layers'],
+        'graduation_kpis'         => ['en' => 'Graduation KPIs',           'ar' => 'مؤشرات التخرج',              'icon' => 'award'],
+        'graduation_by_year'      => ['en' => 'Graduates by Year',         'ar' => 'الخريجون حسب السنة',          'icon' => 'bar-chart'],
+        'activity_kpis'           => ['en' => 'Platform Activity KPIs',    'ar' => 'مؤشرات نشاط المنصة',          'icon' => 'trend'],
+        'activity_trend'          => ['en' => 'Daily Activity Trend',      'ar' => 'اتجاه النشاط اليومي',         'icon' => 'trend'],
+        'project_approvals_kpis'  => ['en' => 'Project Approvals (30d)',   'ar' => 'اعتمادات المشاريع (٣٠ يومًا)', 'icon' => 'check-circle'],
+        'project_grading_kpis'    => ['en' => 'Project Grading (30d)',     'ar' => 'تقييم المشاريع (٣٠ يومًا)',    'icon' => 'note'],
+        'project_team_kpis'       => ['en' => 'Project Teams (30d)',       'ar' => 'فرق المشاريع (٣٠ يومًا)',      'icon' => 'users'],
+        'exam_ai_kpis'            => ['en' => 'Exam AI Grading (30d)',     'ar' => 'التصحيح بالذكاء الاصطناعي (٣٠ يومًا)', 'icon' => 'note'],
+        'exam_proctoring_kpis'    => ['en' => 'Exam Proctoring (30d)',     'ar' => 'مراقبة الامتحانات (٣٠ يومًا)', 'icon' => 'shield'],
     ];
 
     private const ACADEMIC_WIDGETS = ['academic_kpis', 'exam_kpis', 'exam_status', 'score_distribution', 'exam_trend', 'top_doctors', 'students_at_risk', 'exam_integrity'];
+
+    private const EXTRA_WIDGETS = [
+        'courses_kpis', 'course_enrollment_trend', 'attendance_kpis', 'attendance_status', 'fees_kpis', 'fees_status',
+        'graduation_kpis', 'graduation_by_year', 'activity_kpis', 'activity_trend',
+        'project_approvals_kpis', 'project_grading_kpis', 'project_team_kpis', 'exam_ai_kpis', 'exam_proctoring_kpis',
+    ];
 
     /** تخطيطات جاهزة لقائمة "Templates" في الـ builder — اختيار widgets بس، بدون بيانات. */
     public const TEMPLATES = [
@@ -64,18 +86,42 @@ class SavedDashboardService
             'ar'      => 'الدكاترة والطلاب',
             'widgets' => ['academic_kpis', 'top_doctors', 'students_at_risk', 'exam_integrity'],
         ],
+        'campus' => [
+            'en'      => 'Courses & Attendance',
+            'ar'      => 'المقررات والحضور',
+            'widgets' => ['courses_kpis', 'course_enrollment_trend', 'attendance_kpis', 'attendance_status'],
+        ],
+        'finance' => [
+            'en'      => 'Fees & Graduation',
+            'ar'      => 'الرسوم والتخرج',
+            'widgets' => ['fees_kpis', 'fees_status', 'graduation_kpis', 'graduation_by_year'],
+        ],
+        'projects_pipeline' => [
+            'en'      => 'Projects Pipeline',
+            'ar'      => 'مسار المشاريع',
+            'widgets' => ['project_approvals_kpis', 'project_grading_kpis', 'project_team_kpis'],
+        ],
+        'platform_activity' => [
+            'en'      => 'Platform Activity',
+            'ar'      => 'نشاط المنصة',
+            'widgets' => ['activity_kpis', 'activity_trend', 'exam_ai_kpis', 'exam_proctoring_kpis'],
+        ],
         'full' => [
             'en'      => 'Everything',
             'ar'      => 'كل شيء',
             'widgets' => ['kpis', 'user_growth', 'users_by_role', 'category_dist', 'leaderboard', 'trends', 'university_map',
-                'academic_kpis', 'exam_kpis', 'exam_status', 'score_distribution', 'exam_trend', 'top_doctors', 'students_at_risk', 'exam_integrity'],
+                'academic_kpis', 'exam_kpis', 'exam_status', 'score_distribution', 'exam_trend', 'top_doctors', 'students_at_risk', 'exam_integrity',
+                'courses_kpis', 'course_enrollment_trend', 'attendance_kpis', 'attendance_status', 'fees_kpis', 'fees_status',
+                'graduation_kpis', 'graduation_by_year', 'activity_kpis', 'activity_trend',
+                'project_approvals_kpis', 'project_grading_kpis', 'project_team_kpis', 'exam_ai_kpis', 'exam_proctoring_kpis'],
         ],
     ];
 
     public function __construct(
         private AnalyticsService $analytics,
         private SavedDashboardRepository $repo,
-        private DataAnalysisAcademicService $academic
+        private DataAnalysisAcademicService $academic,
+        private DataAnalysisDashboardExtrasService $extras
     ) {
     }
 
@@ -198,6 +244,12 @@ class SavedDashboardService
         foreach ($needed as $type) {
             if (isset(self::WIDGETS[$type]) && !array_key_exists($type, $data) && in_array($type, self::ACADEMIC_WIDGETS, true)) {
                 $data[$type] = $this->academic->widget($type);
+            }
+        }
+
+        foreach ($needed as $type) {
+            if (in_array($type, self::EXTRA_WIDGETS, true) && !array_key_exists($type, $data)) {
+                $data[$type] = $this->extras->widget($type);
             }
         }
 

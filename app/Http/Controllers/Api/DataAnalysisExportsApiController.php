@@ -9,6 +9,7 @@ use App\Repositories\UniversityRepository;
 use App\Services\AnalyticsService;
 use App\Services\AuditLogService;
 use App\Services\DataAnalysisExamsService;
+use App\Services\DataAnalysisSectionExportService;
 use App\Services\Export\ExportLocalizer;
 use App\Services\Export\ExportFileBuilder;
 use App\Services\ExportSchedulerService;
@@ -42,6 +43,8 @@ class DataAnalysisExportsApiController extends Controller
         'platform_kpis', 'user_growth', 'category_distribution', 'university_leaderboard', 'full_platform_export',
         // نظام الامتحانات — الصفوف من DataAnalysisExamsService::exportRows (نفس أرقام Exam Analytics)
         'exam_overview', 'exam_scores_detail', 'student_exam_performance', 'exam_summary', 'doctor_exam_performance',
+        // بند 2 — أقسام المشاريع والامتحانات العميقة والتفاعل (DataAnalysisSectionExportService)
+        ...DataAnalysisSectionExportService::TYPE_KEYS,
     ];
 
     private const ALLOWED_FORMATS = ExportFileBuilder::FORMATS;
@@ -57,6 +60,7 @@ class DataAnalysisExportsApiController extends Controller
         'student_exam_performance' => 'Student Exam Performance',
         'exam_summary'             => 'Exams Summary (per exam)',
         'doctor_exam_performance'  => 'Doctors Exam Performance',
+        ...DataAnalysisSectionExportService::LABELS,
     ];
 
     public function __construct(
@@ -67,6 +71,7 @@ class DataAnalysisExportsApiController extends Controller
         private MailService $mail,
         private ExportSchedulerService $scheduler,
         private DataAnalysisExamsService $exams,
+        private DataAnalysisSectionExportService $sections,
         private AuditLogService $auditLog
     ) {
     }
@@ -89,7 +94,7 @@ class DataAnalysisExportsApiController extends Controller
         return $this->apiSuccess([
             'exports'   => $this->exports->forUser($userId, 50),
             'schedules' => $schedules,
-        ], 'Exports retrieved successfully.', 200, ['allowed_types' => self::ALLOWED_TYPES, 'allowed_formats' => self::ALLOWED_FORMATS, 'exam_types' => DataAnalysisExamsService::EXPORT_TYPES]);
+        ], 'Exports retrieved successfully.', 200, ['allowed_types' => self::ALLOWED_TYPES, 'allowed_formats' => self::ALLOWED_FORMATS, 'exam_types' => DataAnalysisExamsService::EXPORT_TYPES, 'section_types' => DataAnalysisSectionExportService::TYPE_KEYS]);
     }
 
     /**
@@ -164,7 +169,8 @@ class DataAnalysisExportsApiController extends Controller
     {
         $emailTo = $recipients ? implode(', ', $recipients) : null;
         $isExam = in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true);
-        $typeFilters = $isExam ? $filters : []; // الفلاتر بتخص تصديرات الامتحانات بس
+        $isSection = DataAnalysisSectionExportService::handles($type);
+        $typeFilters = ($isExam || $isSection) ? $filters : []; // الفلاتر بتخص تصديرات الامتحانات والأقسام العميقة بس
 
         $export = $this->exports->create([
             'user_id'     => $userId,
@@ -187,7 +193,7 @@ class DataAnalysisExportsApiController extends Controller
             throw new \RuntimeException('Could not prepare the exports folder.');
         }
 
-        $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes($isExam ? 16 : 4)) . '.' . $format;
+        $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(($isExam || $isSection) ? 16 : 4)) . '.' . $format;
         $fullPath = $dir . '/' . $filename;
 
         ExportFileBuilder::write($format, $fullPath, $title, $header, $rows, $ar);
@@ -195,9 +201,9 @@ class DataAnalysisExportsApiController extends Controller
         $relativePath = rtrim(config('upload.paths.reports', 'uploads/reports'), '/') . '/' . $filename;
         $this->exports->markCompleted($export->id, $relativePath);
 
-        if ($isExam) {
+        if ($isExam || $isSection) {
             // بيانات طلاب (أسماء/إيميلات/درجات) — بنسجّل كل تصدير في الـ audit log.
-            $this->auditLog->record($userId, 'data_analysis.exam_exported', 'data_export', $export->id, null, [
+            $this->auditLog->record($userId, $isExam ? 'data_analysis.exam_exported' : 'data_analysis.section_exported', 'data_export', $export->id, null, [
                 'export_type' => $type,
                 'format'      => $format,
                 'filters'     => $typeFilters,
@@ -303,7 +309,7 @@ class DataAnalysisExportsApiController extends Controller
         if (is_string($rawFilters)) {
             $rawFilters = json_decode($rawFilters, true) ?: [];
         }
-        $isExam = in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true);
+        $isExam = in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true) || DataAnalysisSectionExportService::handles($type);
         $filters = $isExam ? $this->sanitizeExamFilters(is_array($rawFilters) ? $rawFilters : []) : [];
 
         try {
@@ -519,6 +525,9 @@ class DataAnalysisExportsApiController extends Controller
     {
         if (in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true)) {
             return $this->exams->exportRows($type, $filters);
+        }
+        if (DataAnalysisSectionExportService::handles($type)) {
+            return $this->sections->rows($type, $filters);
         }
 
         switch ($type) {

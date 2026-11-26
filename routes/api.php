@@ -1983,6 +1983,7 @@ Route::prefix('v1')->group(function () {
     // والنشاط (engagement). البورتال شغّال بكل أقسامه.
     Route::prefix('data-analysis')->middleware(['uip.auth', 'uip.can:data_analysis.dashboard.view'])->group(function () {
         Route::get('/dashboard', [DataAnalysisDashboardApiController::class, 'index']);
+        Route::get('/dashboard/extras', [DataAnalysisDashboardApiController::class, 'extras']);
 
         // تحليلات الامتحانات والدرجات (قراءة بس) — الروتس الحرفية قبل أي {id}.
         Route::prefix('exams')->group(function () {

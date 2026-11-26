@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\DataAnalysisDashboardExtrasService;
 use App\Services\DataAnalysisDashboardService;
 use Illuminate\Http\Request;
 
@@ -22,7 +23,7 @@ use Illuminate\Http\Request;
  */
 class DataAnalysisDashboardApiController extends Controller
 {
-    public function __construct(private DataAnalysisDashboardService $dashboard)
+    public function __construct(private DataAnalysisDashboardService $dashboard, private DataAnalysisDashboardExtrasService $extras)
     {
     }
 
@@ -42,5 +43,21 @@ class DataAnalysisDashboardApiController extends Controller
                 'recent_exports'   => array_slice($this->dashboard->recentExportsFor($userId), 0, 5),
             ]
         ), 'Dashboard data retrieved successfully.');
+    }
+
+    /**
+     * GET /api/v1/data-analysis/dashboard/extras — بند 1 (الناقص للمحلل):
+     * المقررات، الحضور، الرسوم، التخرج، النشاط، + kpis المشاريع والامتحانات
+     * العميقة. endpoint منفصل عن index() عشان الداشبورد الرئيسي يفتح بسرعة
+     * والفرونت يحمّل الأقسام دي بعده. كل قسم null لو فشل (جدول ناقص).
+     * نفس قاعدة RBAC بتاعة index().
+     */
+    public function extras(Request $request)
+    {
+        if (!in_array($request->attributes->get('uip_role'), ['data_analyst', 'admin'], true)) {
+            return $this->apiError('Only Data Analysis Portal accounts can view this dashboard.', null, 403);
+        }
+
+        return $this->apiSuccess($this->extras->overview(), 'Dashboard extras retrieved successfully.');
     }
 }

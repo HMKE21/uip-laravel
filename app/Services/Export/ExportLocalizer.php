@@ -85,6 +85,20 @@ final class ExportLocalizer
         'Total Universities' => 'إجمالي الجامعات', 'Verified Universities' => 'الجامعات الموثّقة',
         'Pending Universities' => 'الجامعات قيد المراجعة', 'Published Projects' => 'المشاريع المنشورة',
         'Pending Approvals' => 'طلبات قيد الموافقة', 'Rejected Projects' => 'المشاريع المرفوضة',
+        // بند 2 — تصديرات أقسام المشاريع والامتحانات العميقة والتفاعل
+        'Group' => 'المجموعة', 'Item' => 'العنصر',
+        'Project Approvals' => 'اعتمادات المشاريع', 'Project Grading' => 'تقييم المشاريع', 'Project Teams' => 'فرق المشاريع',
+        'Project Deadlines' => 'مواعيد المشاريع', 'Project Supervisors' => 'مشرفو المشاريع', 'Project Readiness' => 'جاهزية المشاريع',
+        'Project IP & Ownership' => 'الملكية الفكرية للمشاريع',
+        'Exam Targeting' => 'استهداف الامتحانات', 'Exam Grading (deep)' => 'تصحيح الامتحانات (تفصيلي)',
+        'Exam AI Grading' => 'التصحيح بالذكاء الاصطناعي', 'Exam Proctoring' => 'مراقبة الامتحانات',
+        'Question Pools & Banks' => 'مجموعات وبنوك الأسئلة', 'Exam Grade Overrides' => 'تعديلات درجات الامتحانات',
+        'Engagement — Feed' => 'التفاعل — الفيد', 'Engagement — Announcements' => 'التفاعل — الإعلانات',
+        'Engagement — Notifications' => 'التفاعل — الإشعارات', 'Engagement — User Activity' => 'التفاعل — نشاط المستخدمين',
+        'Engagement — Logins' => 'التفاعل — تسجيلات الدخول', 'Engagement — Visits' => 'التفاعل — الزيارات',
+        'Engagement — Meetings' => 'التفاعل — الاجتماعات', 'Engagement — Calls' => 'التفاعل — المكالمات',
+        'Engagement — Forms' => 'التفاعل — الفورمات', 'Engagement — AI Usage' => 'التفاعل — استخدام الذكاء الاصطناعي',
+        'KPIs' => 'المؤشرات',
         'Users - ' => 'المستخدمون - ', 'Projects - ' => 'المشاريع - ', 'Overview - ' => 'نظرة عامة - ',
     ];
 

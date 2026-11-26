@@ -25,6 +25,8 @@ class DataExportService
         'platform_kpis', 'user_growth', 'category_distribution', 'university_leaderboard', 'full_platform_export',
         // تصديرات نظام الامتحانات (بتتبني في DataAnalysisExamsService::exportRows)
         'exam_overview', 'exam_scores_detail', 'student_exam_performance', 'exam_summary', 'doctor_exam_performance',
+        // بند 2 — أقسام المشاريع والامتحانات العميقة والتفاعل (DataAnalysisSectionExportService)
+        ...DataAnalysisSectionExportService::TYPE_KEYS,
     ];
 
     public const ALLOWED_FORMATS = ExportFileBuilder::FORMATS;
@@ -40,6 +42,7 @@ class DataExportService
         'student_exam_performance' => 'Student Exam Performance',
         'exam_summary'             => 'Exams Summary (per exam)',
         'doctor_exam_performance'  => 'Doctors Exam Performance',
+        ...DataAnalysisSectionExportService::LABELS,
     ];
 
     public function __construct(
@@ -48,7 +51,8 @@ class DataExportService
         private ProjectRepository $projects,
         private UniversityRepository $universities,
         private MailService $mail,
-        private DataAnalysisExamsService $exams
+        private DataAnalysisExamsService $exams,
+        private DataAnalysisSectionExportService $sections
     ) {
     }
 
@@ -74,12 +78,13 @@ class DataExportService
 
         $emailTo = $recipients ? implode(', ', $recipients) : null;
         $isExam = in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true);
+        $isSection = DataAnalysisSectionExportService::handles($type);
 
         $export = $this->exports->create([
             'user_id'     => $userId,
             'export_type' => $type,
             'format'      => $format,
-            'filters'     => $isExam ? $filters : [],
+            'filters'     => ($isExam || $isSection) ? $filters : [],
             'status'      => 'pending',
             'email_to'    => $emailTo,
             'batch_id'    => $batchId,
@@ -97,7 +102,7 @@ class DataExportService
             throw new \RuntimeException('Could not prepare the exports folder.');
         }
 
-        $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes($isExam ? 16 : 4)) . '.' . $format;
+        $filename = 'export_' . $type . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(($isExam || $isSection) ? 16 : 4)) . '.' . $format;
         $fullPath = $dir . '/' . $filename;
 
         ExportFileBuilder::write($format, $fullPath, $title, $header, $rows, $ar);
@@ -126,6 +131,9 @@ class DataExportService
     {
         if (in_array($type, DataAnalysisExamsService::EXPORT_TYPES, true)) {
             return $this->exams->exportRows($type, $filters);
+        }
+        if (DataAnalysisSectionExportService::handles($type)) {
+            return $this->sections->rows($type, $filters);
         }
 
         switch ($type) {
