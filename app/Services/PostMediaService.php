@@ -20,7 +20,7 @@ class PostMediaService
 {
     private const KIND_MAP = [
         'image'    => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'],
-        'video'    => ['mp4', 'webm', 'mov', 'mkv'],
+        'video'    => ['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'qt', '3gp', '3g2', 'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv'],
         'audio'    => ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'weba'],
         'pdf'      => ['pdf'],
         'archive'  => ['zip', 'rar', '7z'],
@@ -86,6 +86,14 @@ class PostMediaService
                 [$width, $height] = $this->imageDimensions($abs);
                 $thumb = $this->imageThumbnail($abs, $relDir, $ext, $width, $height);
             } elseif ($kind === 'video') {
+                // أي صيغة/ترميز → mp4 (H.264/AAC) عشان يشتغل في كل المتصفحات (fail-open: لو فشل بيفضل الأصلي)
+                $conv = $this->probe->makeWebPlayable($stored['stored_path']);
+                if ($conv) {
+                    $stored = MediaProbeService::applyConversion($stored, $conv);
+                    $ext = (string) $stored['extension'];
+                    $size = (int) $stored['size_bytes'];
+                    $abs = FileUploadService::absolutePath($stored['stored_path']);
+                }
                 $thumb = $this->probe->videoThumbnail($abs, $relDir);
                 $duration = $this->probe->duration($abs);
             } elseif ($kind === 'audio') {

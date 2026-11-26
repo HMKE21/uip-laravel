@@ -120,6 +120,160 @@ class MediaProbeService
         return null;
     }
 
+    /** كل صيغ الفيديو المقبولة للرفع (بتتحوّل لـ mp4/H.264 على السيرفر بعد الرفع). */
+    public const VIDEO_EXTENSIONS = [
+        'mp4', 'm4v', 'mov', 'qt', 'webm', 'mkv', 'avi', '3gp', '3g2',
+        'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv',
+    ];
+
+    /**
+     * يخلّي أي فيديو مرفوع قابل للتشغيل في كل المتصفحات: mp4 (H.264 + AAC) و yuv420p و faststart.
+     *  - لو الترميز أصلاً مناسب: بيعمل remux بدون إعادة ترميز (سريع، من غير فقد جودة) عشان الحاوية/الـ moov تبقى سليمة.
+     *  - لو الفيديو (HEVC / VP9 / AV1 / MPEG-4 / WMV / 10-bit ...) أو الصوت (AC3 / Opus / PCM ...) مش مناسب: بيحوّله.
+     * Fail-open: لو ffmpeg مش موجود أو فشل أي شيء، الملف الأصلي بيفضل زي ما هو والدالة بترجع null.
+     *
+     * @param  string $storedPath مسار نسبي (نفس stored_path)
+     * @return array{stored_path:string,extension:string,mime_type:string,size_bytes:int}|null  null = ماتغيّرش حاجة
+     */
+    public function makeWebPlayable(string $storedPath): ?array
+    {
+        if (!config('messaging.media_probe.transcode_enabled', true)) {
+            return null;
+        }
+        $abs = FileUploadService::absolutePath($storedPath);
+        if (!is_file($abs) || !$this->available()) {
+            return null;
+        }
+
+        $info = $this->probeStreams($abs);
+        if ($info === null || $info['video'] === null) {
+            return null; // مش فيديو (أو ffprobe مش قادر يقراه)
+        }
+
+        $videoOk = $info['video']['codec'] === 'h264'
+            && in_array($info['video']['pix_fmt'], ['yuv420p', 'yuvj420p', ''], true);
+        $audioOk = $info['audio'] === null || in_array($info['audio'], ['aac', 'mp3'], true);
+
+        $dir = dirname($storedPath);
+        $targetRel = ($dir === '.' ? '' : $dir . '/') . bin2hex(random_bytes(16)) . '.mp4';
+        $target = FileUploadService::diskDir($dir) . '/' . basename($targetRel); // diskDir: من غير ما نحاول نستعيد ملف لسه مش موجود من S3
+
+        @set_time_limit(0);
+        $timeout = max(60, (int) config('messaging.media_probe.transcode_timeout', 1800));
+
+        // المحاولة الأولى: ننسخ اللي مناسب وبنحوّل الباقي فقط. لو فشلت (ملف غريب) نحوّل كل حاجة.
+        $attempts = [[$videoOk, $audioOk]];
+        if ($videoOk || $audioOk) {
+            $attempts[] = [false, false];
+        }
+
+        $done = false;
+        foreach ($attempts as [$copyVideo, $copyAudio]) {
+            \App\Support\SafePath::delete($target);
+            $argv = [
+                $this->ffmpegBinary(), '-nostdin', '-v', 'error', '-y', '-i', $abs,
+                '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn', '-map_metadata', '0',
+            ];
+            if ($copyVideo) {
+                array_push($argv, '-c:v', 'copy');
+            } else {
+                array_push(
+                    $argv,
+                    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+                    '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2'
+                );
+            }
+            if ($copyAudio) {
+                array_push($argv, '-c:a', 'copy');
+            } else {
+                array_push($argv, '-c:a', 'aac', '-b:a', '128k', '-ac', '2');
+            }
+            array_push($argv, '-movflags', '+faststart', '-max_muxing_queue_size', '2048', '-f', 'mp4', $target);
+
+            $res = Cmd::run($argv, $timeout, true);
+            if ($res['code'] === 0 && is_file($target) && filesize($target) > 0) {
+                $check = $this->probeStreams($target);
+                if ($check !== null && $check['video'] !== null) {
+                    $done = true;
+                    break;
+                }
+            }
+            Log::warning('ffmpeg video normalize attempt failed', [
+                'file' => basename($abs), 'copy_video' => $copyVideo, 'copy_audio' => $copyAudio,
+                'timeout' => $res['timeout'], 'output' => mb_substr(implode(' | ', $res['lines']), -600),
+            ]);
+        }
+
+        if (!$done) {
+            \App\Support\SafePath::delete($target);
+            return null;
+        }
+
+        clearstatcache(true, $target);
+        $size = (int) (@filesize($target) ?: 0);
+
+        // النسخة الجديدة تتحفظ على S3 والأصلية تتشال (محلي + S3).
+        \App\Support\UploadMirror::push($targetRel, $target);
+        \App\Support\SafePath::delete($abs);
+        \App\Support\UploadMirror::forget($storedPath);
+
+        return [
+            'stored_path' => $targetRel,
+            'extension'   => 'mp4',
+            'mime_type'   => 'video/mp4',
+            'size_bytes'  => $size,
+        ];
+    }
+
+    /** يطبّق نتيجة makeWebPlayable على مصفوفة store() (المسار/الامتداد/النوع/الحجم/اسم الملف الأصلي). */
+    public static function applyConversion(array $stored, array $conv): array
+    {
+        $stored['stored_path'] = $conv['stored_path'];
+        $stored['extension'] = $conv['extension'];
+        $stored['mime_type'] = $conv['mime_type'];
+        $stored['size_bytes'] = $conv['size_bytes'];
+        if (!empty($stored['original_name'])) {
+            $base = preg_replace('/\.[A-Za-z0-9]{1,5}$/', '', (string) $stored['original_name']);
+            $stored['original_name'] = ($base !== '' ? $base : 'video') . '.mp4';
+        }
+
+        return $stored;
+    }
+
+    /** @return array{video:?array{codec:string,pix_fmt:string},audio:?string}|null */
+    private function probeStreams(string $abs): ?array
+    {
+        $res = Cmd::run(
+            [$this->ffprobeBinary(), '-v', 'error', '-print_format', 'json', '-show_streams', $abs],
+            max(15, $this->timeout())
+        );
+        if ($res['code'] !== 0) {
+            return null;
+        }
+        $json = json_decode($res['out'], true);
+        if (!is_array($json)) {
+            return null;
+        }
+        $video = null;
+        $audio = null;
+        foreach ((array) ($json['streams'] ?? []) as $st) {
+            $type = (string) ($st['codec_type'] ?? '');
+            if ($type === 'video' && $video === null) {
+                if (!empty($st['disposition']['attached_pic'])) {
+                    continue; // غلاف صوت مش فيديو حقيقي
+                }
+                $video = [
+                    'codec'   => strtolower((string) ($st['codec_name'] ?? '')),
+                    'pix_fmt' => strtolower((string) ($st['pix_fmt'] ?? '')),
+                ];
+            } elseif ($type === 'audio' && $audio === null) {
+                $audio = strtolower((string) ($st['codec_name'] ?? ''));
+            }
+        }
+
+        return ['video' => $video, 'audio' => $audio];
+    }
+
     private function extractFrame(string $absoluteVideoPath, string $targetPath, string $seekTo): bool
     {
         \App\Support\SafePath::delete($targetPath);

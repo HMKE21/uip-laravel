@@ -126,6 +126,9 @@ class StoriesApiController extends Controller
         $mimes = [
             'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png', 'gif' => 'image/gif', 'webp' => 'image/webp',
             'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mov' => 'video/quicktime',
+            'm4v' => 'video/mp4', 'qt' => 'video/quicktime', 'avi' => 'video/x-msvideo', 'mkv' => 'video/x-matroska',
+            '3gp' => 'video/3gpp', '3g2' => 'video/3gpp2', 'wmv' => 'video/x-ms-wmv', 'asf' => 'video/x-ms-asf', 'flv' => 'video/x-flv',
+            'mpg' => 'video/mpeg', 'mpeg' => 'video/mpeg', 'mts' => 'video/mp2t', 'm2ts' => 'video/mp2t', 'ogv' => 'video/ogg',
         ];
         $mime = $mimes[strtolower(pathinfo($path, PATHINFO_EXTENSION))] ?? 'application/octet-stream';
         if ($mime === 'application/octet-stream') {

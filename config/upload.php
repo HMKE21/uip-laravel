@@ -94,7 +94,7 @@ return [
         // category with formats outside that signature list.
         'messages' => [
             'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'svg',
-            'mp4', 'webm', 'mov', 'avi', 'mkv',
+            'mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'qt', '3gp', '3g2', 'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv',
             'mp3', 'wav', 'ogg', 'm4a',
             'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'csv',
             'json', 'xml', 'zip', 'rar', '7z',
@@ -168,7 +168,7 @@ return [
         // الأدمن يضيّق القايمة وقت التشغيل من FileUploadPolicyService (مش بيوسّعها).
         'posts' => [
             'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
-            'mp4', 'webm', 'mov', 'mkv',
+            'mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'qt', '3gp', '3g2', 'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv',
             'mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'weba',
             'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odp', 'odt', 'rtf', 'csv', 'json', 'xml', 'txt', 'md', 'log',
             'zip', 'rar', '7z',

@@ -25,7 +25,7 @@ class StoryService
     public const REACTIONS = ['❤', '😂', '😮', '😢', '👏', '🔥', '👍', '🙏'];
 
     private const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
-    private const VIDEO_EXT = ['mp4', 'webm', 'mov'];
+    private const VIDEO_EXT = ['mp4', 'webm', 'mov', 'm4v', 'qt', '3gp', '3g2', 'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv', 'avi', 'mkv'];
 
     public function __construct(
         private FileUploadService $uploads,
@@ -298,7 +298,7 @@ class StoryService
             $isVideo = in_array($ext, self::VIDEO_EXT, true);
             $isImage = in_array($ext, self::IMAGE_EXT, true);
             if (!$isVideo && !$isImage) {
-                throw new \InvalidArgumentException('Unsupported file. Use JPG, PNG, WEBP, GIF, MP4, WEBM or MOV.');
+                throw new \InvalidArgumentException('Unsupported file. Use a photo (JPG, PNG, WEBP, GIF) or a video (MP4, MOV, WEBM, AVI, MKV, 3GP ...).');
             }
             $row['type'] = $isVideo ? 'video' : 'image';
 
@@ -318,19 +318,37 @@ class StoryService
             if ($isVideo) {
                 $abs = FileUploadService::absolutePath($stored['stored_path']); // الملف في storage/app/private مش public/
                 $dur = null;
+                $tooLong = function () use (&$dur, $lim, &$stored, &$row) {
+                    if ($dur !== null && $dur > $lim['max_video_seconds']) {
+                        $this->uploads->delete($stored['stored_path']);
+                        if (!empty($row['thumbnail_path'])) {
+                            $this->uploads->delete($row['thumbnail_path']);
+                        }
+                        throw new \InvalidArgumentException("Video is too long (max {$lim['max_video_seconds']} seconds).");
+                    }
+                };
                 try {
                     $dur = $this->probe->duration($abs);
-                    $row['thumbnail_path'] = $this->probe->videoThumbnail($abs, dirname($stored['stored_path']));
                 } catch (\Throwable $e) {
                     \Log::warning('Story video probe failed', ['error' => $e->getMessage()]); // ffmpeg اختياري (fail-open)
                 }
-                if ($dur !== null && $dur > $lim['max_video_seconds']) {
-                    $this->uploads->delete($stored['stored_path']);
-                    if (!empty($row['thumbnail_path'])) {
-                        $this->uploads->delete($row['thumbnail_path']);
+                $tooLong(); // قبل التحويل عشان منضيّعش وقت على فيديو هيترفض
+                try {
+                    // أي صيغة/ترميز → mp4 (H.264/AAC) عشان يشتغل عند كل المشاهدين
+                    $conv = $this->probe->makeWebPlayable($stored['stored_path']);
+                    if ($conv) {
+                        $stored = MediaProbeService::applyConversion($stored, $conv);
+                        $row['media_path'] = $stored['stored_path'];
+                        $abs = FileUploadService::absolutePath($stored['stored_path']);
                     }
-                    throw new \InvalidArgumentException("Video is too long (max {$lim['max_video_seconds']} seconds).");
+                    if ($dur === null) {
+                        $dur = $this->probe->duration($abs);
+                    }
+                    $row['thumbnail_path'] = $this->probe->videoThumbnail($abs, dirname($stored['stored_path']));
+                } catch (\Throwable $e) {
+                    \Log::warning('Story video normalize failed', ['error' => $e->getMessage()]);
                 }
+                $tooLong();
                 $row['duration_seconds'] = $dur;
             }
         }

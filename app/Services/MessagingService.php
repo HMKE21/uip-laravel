@@ -777,7 +777,7 @@ class MessagingService
         }
         $map = [
             'image'    => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'svg'],
-            'video'    => ['mp4', 'webm', 'mov', 'avi', 'mkv'],
+            'video'    => ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'qt', '3gp', '3g2', 'wmv', 'asf', 'flv', 'mpg', 'mpeg', 'mts', 'm2ts', 'ogv'],
             'audio'    => ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'opus', 'weba'],
             'archive'  => ['zip', 'rar', '7z'],
             'code'     => ['php', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'html', 'css', 'sql', 'sh', 'yml', 'yaml'],
@@ -808,6 +808,12 @@ class MessagingService
         if ($kind === 'video') {
             try {
                 $probe = app(\App\Services\MediaProbeService::class);
+                // أي صيغة/ترميز → mp4 (H.264/AAC) عشان يشتغل عند كل المستلمين (fail-open)
+                $conv = $probe->makeWebPlayable($stored['stored_path']);
+                if ($conv) {
+                    $stored = \App\Services\MediaProbeService::applyConversion($stored, $conv);
+                    $absolutePath = FileUploadService::absolutePath($stored['stored_path']);
+                }
                 $thumbnailPath = $probe->videoThumbnail($absolutePath, dirname($stored['stored_path']));
                 $duration = $probe->duration($absolutePath);
             } catch (\Throwable $e) {
