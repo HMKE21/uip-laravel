@@ -41,6 +41,7 @@ class ProjectTeamMember extends Model
     {
         return [
             'id'             => $this->id,
+            'user_id'        => $this->user_id !== null ? (int) $this->user_id : null,
             'display_name'   => $this->member_name ?: ($this->invited_email ?: 'Team member'),
             'is_manual'      => $this->isManual(),
             'academic_year'  => $this->academic_year,
