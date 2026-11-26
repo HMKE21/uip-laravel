@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\DataAnalysisDashboardApiController;
 use App\Http\Controllers\Api\DataAnalysisDataQualityApiController;
 use App\Http\Controllers\Api\DataAnalysisEngagementApiController;
 use App\Http\Controllers\Api\DataAnalysisExamsApiController;
+use App\Http\Controllers\Api\DataAnalysisProjectsApiController;
 use App\Http\Controllers\Api\DataAnalysisExplorerApiController;
 use App\Http\Controllers\Api\DataAnalysisExportsApiController;
 use App\Http\Controllers\Api\DataAnalysisForecastingApiController;
@@ -1989,6 +1990,15 @@ Route::prefix('v1')->group(function () {
             Route::get('/overview', [DataAnalysisExamsApiController::class, 'overview']);
             Route::get('/students', [DataAnalysisExamsApiController::class, 'students']);
             Route::get('/exam/{id}', [DataAnalysisExamsApiController::class, 'showExam'])->where('id', '[0-9]+');
+        });
+
+        // بند 4 (الناقص للمحلل) — المشاريع بعمق: approvals، grading، team،
+        // deadlines، supervisors، readiness، ip. قراءة تجميعية بس. الروتس
+        // الحرفية قبل أي {key}.
+        Route::prefix('project-insights')->group(function () {
+            Route::get('/filters', [DataAnalysisProjectsApiController::class, 'filters']);
+            Route::get('/overview', [DataAnalysisProjectsApiController::class, 'overview']);
+            Route::get('/section/{key}', [DataAnalysisProjectsApiController::class, 'section'])->where('key', '[a-z_]+');
         });
 
         // بند 6 (الناقص للمحلل) — التفاعل والنشاط: feed، إعلانات، إشعارات،
