@@ -113,4 +113,79 @@ class ForecastRepository
         $rows = array_map(fn ($r) => ['month' => $r->month, 'total' => round((float) $r->total, 1)], $rows);
         return $this->zeroFill($rows, $months);
     }
+
+    /**
+     * نسبة الحضور الشهرية (0-100): (present + late) ÷ (present + late +
+     * absent) على attendance_records، حسب شهر فتح التحضير
+     * (attendance_windows.opens_at). excused بره المقام — غياب بعذر مش
+     * "ضعف حضور". الشهور اللي مفيهاش أي تحضير بتتشال من السلسلة بدل ما
+     * تتملى بصفر: 0% في شهر إجازة معناه "ماحدش حضر" وده غلط، والمطلوب
+     * "مفيش بيانات". فالسلسلة ممكن تبقى أقصر من $months، وده طبيعي.
+     */
+    public function attendanceRate(int $months = 12): array
+    {
+        $rows = DB::select(
+            "SELECT DATE_FORMAT(w.opens_at, '%Y-%m') AS month,
+                    SUM(CASE WHEN r.status IN ('present','late') THEN 1 ELSE 0 END) AS attended,
+                    SUM(CASE WHEN r.status IN ('present','late','absent') THEN 1 ELSE 0 END) AS counted
+               FROM attendance_records r
+               JOIN attendance_windows w ON w.id = r.window_id
+              WHERE w.opens_at >= DATE(?)
+              GROUP BY month ORDER BY month ASC",
+            [$this->since($months)]
+        );
+
+        $series = [];
+        foreach ($rows as $r) {
+            if ((int) $r->counted <= 0) {
+                continue;
+            }
+            $series[] = ['month' => $r->month, 'value' => round(((int) $r->attended / (int) $r->counted) * 100, 1)];
+        }
+        return $series;
+    }
+
+    /** تسجيلات الطلاب في المواد كل شهر (course_enrollments، بتاريخ enrolled_at أو created_at لو فاضي). */
+    public function enrollmentTrends(int $months = 12): array
+    {
+        $rows = DB::select(
+            "SELECT DATE_FORMAT(COALESCE(enrolled_at, created_at), '%Y-%m') AS month, COUNT(*) AS total
+               FROM course_enrollments
+              WHERE COALESCE(enrolled_at, created_at) >= DATE(?)
+              GROUP BY month ORDER BY month ASC",
+            [$this->since($months)]
+        );
+        return $this->zeroFill(array_map(fn ($r) => (array) $r, $rows), $months);
+    }
+
+    /** إجمالي المصاريف المحصَّلة فعليًا كل شهر: fee_payments المؤكَّدة بس (مش pending ولا rejected). */
+    public function feeCollection(int $months = 12): array
+    {
+        $rows = DB::select(
+            "SELECT DATE_FORMAT(COALESCE(decided_at, created_at), '%Y-%m') AS month, SUM(amount) AS total
+               FROM fee_payments
+              WHERE status = 'confirmed' AND COALESCE(decided_at, created_at) >= DATE(?)
+              GROUP BY month ORDER BY month ASC",
+            [$this->since($months)]
+        );
+        $rows = array_map(fn ($r) => ['month' => $r->month, 'total' => round((float) $r->total, 2)], $rows);
+        return $this->zeroFill($rows, $months);
+    }
+
+    /**
+     * النشاط: عدد المستخدمين النشطين (مميّزين) كل شهر من
+     * user_activity_events. ملحوظة: الجدول ده بيتقصّ بأمر activity:prune
+     * فالتاريخ بيقف عند فترة الاحتفاظ — الشهور الأقدم منها هتبان صفر.
+     */
+    public function activeUsers(int $months = 12): array
+    {
+        $rows = DB::select(
+            "SELECT DATE_FORMAT(occurred_at, '%Y-%m') AS month, COUNT(DISTINCT user_id) AS total
+               FROM user_activity_events
+              WHERE occurred_at >= DATE(?)
+              GROUP BY month ORDER BY month ASC",
+            [$this->since($months)]
+        );
+        return $this->zeroFill(array_map(fn ($r) => (array) $r, $rows), $months);
+    }
 }

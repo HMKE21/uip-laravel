@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Validator;
  * القديمة — بند 24 batch 2 (Data Segments). غلاف JSON رفيع فوق
  * App\Repositories\DataSegmentRepository — نفس الريبوزيتوري بالظبط، مفيش
  * منطق أو استعلامات جديدة. الـ criteria بتتقيّم حية ضد جداول
- * projects/users الحقيقية عبر DataSegmentRepository::countMatches() —
+ * projects/users/students/exams/courses الحقيقية عبر DataSegmentRepository::countMatches() —
  * الكنترولر ده مش بيكرر المنطق ده.
  *
  * RBAC: uip.auth بيغطي الجروب؛ كل ميثود كمان بتتأكد data_analyst أو
@@ -20,8 +20,6 @@ use Illuminate\Support\Facades\Validator;
  */
 class DataAnalysisSegmentsApiController extends Controller
 {
-    private const ALLOWED_ENTITIES = ['projects', 'users'];
-
     public function __construct(private DataSegmentRepository $segments)
     {
     }
@@ -39,6 +37,8 @@ class DataAnalysisSegmentsApiController extends Controller
             'segments'            => $this->segments->forUser($userId),
             'role_options'        => DataSegmentRepository::USER_ROLE_SLUGS,
             'user_status_options' => DataSegmentRepository::USER_STATUS_VALUES,
+            'entities'            => DataSegmentRepository::ENTITIES,
+            'criteria_options'    => DataSegmentRepository::criteriaOptions(),
         ], 'Segments retrieved successfully.');
     }
 
@@ -55,7 +55,7 @@ class DataAnalysisSegmentsApiController extends Controller
         }
 
         $entity = (string) $request->input('entity');
-        if (!in_array($entity, self::ALLOWED_ENTITIES, true)) {
+        if (!in_array($entity, DataSegmentRepository::ENTITIES, true)) {
             return $this->apiError('Unknown data entity.', null, 422);
         }
 
@@ -71,6 +71,11 @@ class DataAnalysisSegmentsApiController extends Controller
             }
 
             $criteria = array_filter(['status' => $status, 'role' => $role]);
+        } elseif (in_array($entity, ['students', 'exams', 'courses'], true)) {
+            $criteria = $this->allowListedCriteria($request, $entity);
+            if ($criteria === null) {
+                return $this->apiError('Invalid segment criteria value.', null, 422);
+            }
         } else {
             $criteria = array_filter([
                 'category' => $request->input('category') ?: null,
@@ -95,6 +100,35 @@ class DataAnalysisSegmentsApiController extends Controller
         }
 
         return $this->apiSuccess(null, 'Segment deleted successfully.');
+    }
+
+    /**
+     * بتقرا بس المفاتيح المسموحة للكيان من DataSegmentRepository::criteriaOptions()
+     * وبتتحقق إن كل قيمة ضمن القائمة المسموحة بالظبط (مقارنة نصية، فـ "3"
+     * و3 يتطابقوا). بترجع null لو أي قيمة مش مسموحة، ومفاتيح فاضية بتتتجاهل.
+     * القيم الرقمية بتتخزن int.
+     * @return array<string,string|int>|null
+     */
+    private function allowListedCriteria(Request $request, string $entity): ?array
+    {
+        $criteria = [];
+        foreach (DataSegmentRepository::criteriaOptions()[$entity] as $key => $allowed) {
+            $raw = $request->input($key);
+            if ($raw === null || $raw === '') {
+                continue;
+            }
+            if (!is_scalar($raw)) {
+                return null;
+            }
+            foreach ($allowed as $candidate) {
+                if ((string) $candidate === (string) $raw) {
+                    $criteria[$key] = $candidate;
+                    continue 2;
+                }
+            }
+            return null;
+        }
+        return $criteria;
     }
 
     private function isDataAnalyst(Request $request): bool

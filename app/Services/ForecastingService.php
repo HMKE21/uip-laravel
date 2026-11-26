@@ -70,6 +70,38 @@ class ForecastingService
                 'ar' => 'متوسط درجة جاهزية الذكاء الاصطناعي (0-100) للمشاريع التي قُيِّمت لأول مرة كل شهر.',
             ],
         ],
+        'attendance_rate' => [
+            'method' => 'attendanceRate', 'unit' => 'percent',
+            'label' => ['en' => 'Attendance Rate', 'ar' => 'نسبة الحضور'],
+            'description' => [
+                'en' => 'Share of attendance records marked present or late (excused excluded), per month. Months with no attendance sessions are skipped.',
+                'ar' => 'نسبة سجلات الحضور المسجَّلة حاضر أو متأخر (بدون الغياب بعذر) شهريًا. الشهور بدون أي حصص تحضير يتم تخطيها.',
+            ],
+        ],
+        'enrollment_trends' => [
+            'method' => 'enrollmentTrends', 'unit' => 'count',
+            'label' => ['en' => 'Course Enrollment', 'ar' => 'التسجيل في المواد'],
+            'description' => [
+                'en' => 'Student course enrollments per month.',
+                'ar' => 'تسجيلات الطلاب في المواد شهريًا.',
+            ],
+        ],
+        'fee_collection' => [
+            'method' => 'feeCollection', 'unit' => 'amount',
+            'label' => ['en' => 'Fee Collection', 'ar' => 'تحصيل المصاريف'],
+            'description' => [
+                'en' => 'Total confirmed fee payments received per month (pending and rejected payments excluded).',
+                'ar' => 'إجمالي دفعات المصاريف المؤكَّدة المستلمة شهريًا (بدون المعلّقة والمرفوضة).',
+            ],
+        ],
+        'user_activity' => [
+            'method' => 'activeUsers', 'unit' => 'count',
+            'label' => ['en' => 'User Activity', 'ar' => 'نشاط المستخدمين'],
+            'description' => [
+                'en' => 'Distinct active users per month, from the activity log (history is limited by the log retention period).',
+                'ar' => 'عدد المستخدمين النشطين (مميّزين) شهريًا من سجل النشاط (التاريخ محدود بفترة الاحتفاظ بالسجل).',
+            ],
+        ],
     ];
 
     public function __construct(
