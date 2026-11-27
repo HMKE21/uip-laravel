@@ -2858,6 +2858,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/summary', [\App\Http\Controllers\Api\SecurityHealthApiController::class, 'summary'])->middleware('throttle:60,1');
         });
 
+        // بند 3 — Intrusion Defense: لوحة واحدة (التهديدات + صحة السيرفر + الاستجابة التلقائية). قراءة بس لأي موظف أمن.
+        Route::prefix('intrusion-defense')->middleware('uip.can:security.notifications.manage,security.policies.manage')->group(function () {
+            Route::get('/summary', [\App\Http\Controllers\Api\SecurityIntrusionDefenseApiController::class, 'summary'])->middleware('throttle:60,1');
+        });
+
         // بند 4 — Network Control: حظر IP/CIDR بمدة + استيراد جماعي، قائمة الموثوقين، قواعد حد المعدل. القراءة: أي موظف أمن،
         // الكتابة: policies.manage بس (security_admin/admin) — نفس منطق Detection/Policies.
         Route::prefix('network')->middleware(['uip.can:security.notifications.manage,security.policies.manage', 'uip.can:write:security.policies.manage'])->group(function () {

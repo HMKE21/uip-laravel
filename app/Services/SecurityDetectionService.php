@@ -23,7 +23,17 @@ use Illuminate\Support\Facades\Schema;
 class SecurityDetectionService
 {
     public const SEVERITIES = ['info', 'warning', 'high', 'critical'];
-    public const ACTIONS = ['alert', 'block_ip', 'lock_account', 'revoke_sessions'];
+    public const ACTIONS = ['alert', 'block_ip', 'lock_account', 'revoke_sessions', 'open_incident', 'notify_admins'];
+
+    /** رتبة الخطورة → خطورة الحادث (الحوادث: low/medium/high/critical). */
+    private const INCIDENT_SEVERITY = ['info' => 'low', 'warning' => 'medium', 'high' => 'high', 'critical' => 'critical'];
+    /** نوع القاعدة → تصنيف الحادث. أي نوع مش هنا = other. */
+    private const INCIDENT_CATEGORY = [
+        'failed_login_ip' => 'brute_force', 'password_spray' => 'brute_force', 'failed_login_user' => 'brute_force', 'credential_stuffing' => 'brute_force',
+        'attack_probe_ip' => 'unauthorized_access', 'path_scan' => 'unauthorized_access', 'new_country' => 'unauthorized_access',
+        'new_device' => 'unauthorized_access', 'privilege_escalation' => 'unauthorized_access', 'sensitive_change' => 'unauthorized_access',
+        'mass_export' => 'data_leak', 'mass_download' => 'data_leak', 'mass_delete' => 'policy_violation', 'mass_modify' => 'policy_violation',
+    ];
 
     /**
      * كتالوج أنواع القواعد. الفرونت بيرسم الفورم منه (الوحدة، الإجراءات المسموحة، هل فيه window).
@@ -35,118 +45,118 @@ class SecurityDetectionService
     public const TYPES = [
         'failed_login_ip' => [
             'event' => 'failed_login', 'subject' => 'ip', 'alert_type' => 'brute_force',
-            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert', 'block_ip', 'open_incident', 'notify_admins'],
         ],
         'password_spray' => [
             'event' => 'failed_login', 'subject' => 'ip', 'distinct' => 'identifier', 'alert_type' => 'password_spray',
-            'unit' => 'different accounts', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+            'unit' => 'different accounts', 'windowed' => true, 'actions' => ['alert', 'block_ip', 'open_incident', 'notify_admins'],
         ],
         'failed_login_user' => [
             'event' => 'failed_login', 'subject' => 'identifier', 'alert_type' => 'account_under_attack',
-            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert', 'lock_account'],
+            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert', 'lock_account', 'open_incident', 'notify_admins'],
         ],
         'mass_download' => [
             'event' => 'file_download', 'subject' => 'user', 'alert_type' => 'mass_download',
-            'unit' => 'downloads', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+            'unit' => 'downloads', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account', 'open_incident', 'notify_admins'],
         ],
         'new_country' => [
             'event' => 'login_success', 'baseline' => 'country', 'alert_type' => 'suspicious_login_location',
-            'unit' => '', 'windowed' => false, 'actions' => ['alert', 'revoke_sessions'],
+            'unit' => '', 'windowed' => false, 'actions' => ['alert', 'revoke_sessions', 'open_incident', 'notify_admins'],
         ],
         'new_device' => [
             'event' => 'login_success', 'baseline' => 'device', 'alert_type' => 'new_device_login',
-            'unit' => '', 'windowed' => false, 'actions' => ['alert', 'revoke_sessions'],
+            'unit' => '', 'windowed' => false, 'actions' => ['alert', 'revoke_sessions', 'open_incident', 'notify_admins'],
         ],
         'privilege_escalation' => [
             'event' => 'role_granted', 'alert_type' => 'privilege_escalation',
-            'unit' => '', 'windowed' => false, 'actions' => ['alert'],
+            'unit' => '', 'windowed' => false, 'actions' => ['alert', 'open_incident', 'notify_admins'],
         ],
         // بند 10 — كشف هجمات الـ API (UipAttackProbeMiddleware بيغذّي الأحداث دي)
         'attack_probe_ip' => [
             'event' => 'attack_probe', 'subject' => 'ip', 'alert_type' => 'injection_attempt',
-            'unit' => 'attack attempts', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+            'unit' => 'attack attempts', 'windowed' => true, 'actions' => ['alert', 'block_ip', 'open_incident', 'notify_admins'],
         ],
         'path_scan' => [
             'event' => 'path_probe', 'subject' => 'ip', 'alert_type' => 'path_scanning',
-            'unit' => 'probing requests', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+            'unit' => 'probing requests', 'windowed' => true, 'actions' => ['alert', 'block_ip', 'open_incident', 'notify_admins'],
         ],
         // بند 1 (مراقبة الداتا) — UipDataGuardMiddleware بيغذّي الأحداث دي (config/data_guard.php)
         'mass_export' => [
             'event' => 'data_export', 'subject' => 'user', 'alert_type' => 'mass_export',
-            'unit' => 'exports', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+            'unit' => 'exports', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account', 'open_incident', 'notify_admins'],
         ],
         'mass_delete' => [
             'event' => 'data_delete', 'subject' => 'user', 'sum' => 'amount', 'alert_type' => 'mass_delete',
-            'unit' => 'deleted items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+            'unit' => 'deleted items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account', 'open_incident', 'notify_admins'],
         ],
         'mass_modify' => [
             'event' => 'data_bulk_update', 'subject' => 'user', 'sum' => 'amount', 'alert_type' => 'mass_modify',
-            'unit' => 'modified items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+            'unit' => 'modified items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account', 'open_incident', 'notify_admins'],
         ],
         'sensitive_change' => [
             'event' => 'config_change', 'subject' => 'user', 'alert_type' => 'sensitive_change',
-            'unit' => 'sensitive changes', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions'],
+            'unit' => 'sensitive changes', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'open_incident', 'notify_admins'],
         ],
         // بند 2 — صحة السيرفر. SecurityHealthService بيقيس كل دقيقة (security:health-sample) و evaluateHealth() بيقارن بالـ threshold.
         //  threshold = القيمة، window_minutes = المدة اللي بنقيس عليها. الإجراء الوحيد: تنبيه (مفيش حظر/قفل لمشكلة في السيرفر).
         //  health.agg: avg | max | last | growth (آخر - أول قيمة في الـ window) | sum | failed_window (failed_jobs جديدة).
         //  spike: threshold = نسبة الزيادة % عن الطبيعي (config.baseline_minutes) و config.min_value = أرضية مطلقة.
         'server_cpu' => [
-            'event' => 'health_sample', 'alert_type' => 'health_cpu', 'unit' => '% CPU (average)', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_cpu', 'unit' => '% CPU (average)', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'cpu_percent', 'agg' => 'avg'],
         ],
         'server_ram' => [
-            'event' => 'health_sample', 'alert_type' => 'health_ram', 'unit' => '% RAM (average)', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_ram', 'unit' => '% RAM (average)', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'mem_percent', 'agg' => 'avg'],
         ],
         'server_disk' => [
-            'event' => 'health_sample', 'alert_type' => 'health_disk', 'unit' => '% disk used', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_disk', 'unit' => '% disk used', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'disk_percent', 'agg' => 'max'],
         ],
         'db_size' => [
-            'event' => 'health_sample', 'alert_type' => 'health_db_size', 'unit' => 'MB database size', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_db_size', 'unit' => 'MB database size', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'db_size_mb', 'agg' => 'last'],
         ],
         'db_growth' => [
-            'event' => 'health_sample', 'alert_type' => 'health_db_growth', 'unit' => 'MB growth in the window', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_db_growth', 'unit' => 'MB growth in the window', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'db_size_mb', 'agg' => 'growth'],
         ],
         'queue_backlog' => [
-            'event' => 'health_sample', 'alert_type' => 'health_queue_backlog', 'unit' => 'jobs waiting', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_queue_backlog', 'unit' => 'jobs waiting', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'queue_pending', 'agg' => 'max'],
         ],
         'queue_stalled' => [
-            'event' => 'health_sample', 'alert_type' => 'health_queue_stalled', 'unit' => 'minutes the oldest job has waited', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_queue_stalled', 'unit' => 'minutes the oldest job has waited', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'queue_oldest_age_s', 'agg' => 'max', 'div' => 60],
         ],
         'queue_failures' => [
-            'event' => 'health_sample', 'alert_type' => 'health_queue_failures', 'unit' => 'failed jobs', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_queue_failures', 'unit' => 'failed jobs', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'queue_failed', 'agg' => 'failed_window'],
         ],
         'http_5xx' => [
-            'event' => 'health_sample', 'alert_type' => 'health_5xx', 'unit' => 'server errors (5xx)', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_5xx', 'unit' => 'server errors (5xx)', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'http_5xx', 'agg' => 'sum'],
         ],
         'cpu_spike' => [
-            'event' => 'health_sample', 'alert_type' => 'health_cpu_spike', 'unit' => '% above normal CPU', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_cpu_spike', 'unit' => '% above normal CPU', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'cpu_percent', 'agg' => 'avg'], 'spike' => true,
         ],
         'ram_spike' => [
-            'event' => 'health_sample', 'alert_type' => 'health_ram_spike', 'unit' => '% above normal RAM', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_ram_spike', 'unit' => '% above normal RAM', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'mem_percent', 'agg' => 'avg'], 'spike' => true,
         ],
         'http_5xx_spike' => [
-            'event' => 'health_sample', 'alert_type' => 'health_5xx_spike', 'unit' => '% above normal error rate', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_5xx_spike', 'unit' => '% above normal error rate', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'http_5xx', 'agg' => 'sum'], 'spike' => true,
         ],
         'queue_spike' => [
-            'event' => 'health_sample', 'alert_type' => 'health_queue_spike', 'unit' => '% above normal queue size', 'windowed' => true, 'actions' => ['alert'],
+            'event' => 'health_sample', 'alert_type' => 'health_queue_spike', 'unit' => '% above normal queue size', 'windowed' => true, 'actions' => ['alert', 'notify_admins'],
             'health' => ['metric' => 'queue_pending', 'agg' => 'max'], 'spike' => true,
         ],
         // Credential stuffing: فشل دخول كتير من عناوين وحسابات كتير (موزّع) — مش مرتبط بـ IP أو حساب واحد.
         'credential_stuffing' => [
             'event' => 'failed_login', 'subject' => 'global', 'alert_type' => 'credential_stuffing',
-            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert'],
+            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert', 'open_incident', 'notify_admins'],
         ],
     ];
 
@@ -470,8 +480,9 @@ class SecurityDetectionService
         }
 
         $alertId = null;
+        $incidentId = null;
+        [$title, $message] = $this->describe($rule, $subjectType, $subjectValue, $observed, $ctx, $extra, $taken);
         if (in_array('alert', $actions, true)) {
-            [$title, $message] = $this->describe($rule, $subjectType, $subjectValue, $observed, $ctx, $extra, $taken);
             $alertUser = $userId ?: ($subjectType === 'user' && ctype_digit(explode(':', $subjectValue)[0]) ? (int) explode(':', $subjectValue)[0] : null);
             // صحة السيرفر: النوع بيشيل الـ severity (health_disk_warning / health_disk_critical) عشان تنبيه "حرج" مايتدمجش
             // جوه تنبيه "تحذير" مفتوح لنفس المقياس (التجميع في raise() بيتم بالنوع).
@@ -495,7 +506,16 @@ class SecurityDetectionService
             );
         }
 
-        DB::table('security_detection_hits')->insert([
+        // فتح حادث (بيتربط بالتنبيه والحساب) ثم تنبيه المسؤولين (برقم الحادث لو اتفتح). كل واحد فيهم بيفشل لوحده من غير ما يوقف الباقي.
+        if (in_array('open_incident', $actions, true)) {
+            [$incidentId, $note] = $this->actionOpenIncident($rule, $def, (string) $severity, $subjectValue, $title, $message, $ip, $userId, $alertId, $taken);
+            $taken[] = $note;
+        }
+        if (in_array('notify_admins', $actions, true)) {
+            $taken[] = $this->actionNotifyAdmins((string) $severity, $title, $message, $incidentId, $alertId);
+        }
+
+        $hit = [
             'rule_id'       => $rule->id,
             'rule_key'      => $rule->rule_key,
             'subject_type'  => $subjectType,
@@ -508,7 +528,11 @@ class SecurityDetectionService
             'actions_taken' => json_encode($taken, JSON_UNESCAPED_UNICODE),
             'alert_id'      => $alertId,
             'created_at'    => now(),
-        ]);
+        ];
+        if ($this->hitsHaveIncidentColumn()) {
+            $hit['incident_id'] = $incidentId;
+        }
+        DB::table('security_detection_hits')->insert($hit);
 
         DB::table('security_detection_rules')->where('id', $rule->id)->update([
             'trigger_count'     => DB::raw('trigger_count + 1'),
@@ -652,6 +676,100 @@ class SecurityDetectionService
         Cache::forget('acct:status:' . \App\Services\Tenancy\TenantContext::ns() . $user->id);
 
         return $minutes > 0 ? "locked account #{$user->id} for {$minutes} minutes" : "locked account #{$user->id} permanently";
+    }
+
+    private static ?bool $hitsIncidentCol = null;
+
+    private function hitsHaveIncidentColumn(): bool
+    {
+        if (self::$hitsIncidentCol === null) {
+            try {
+                self::$hitsIncidentCol = Schema::hasColumn('security_detection_hits', 'incident_id');
+            } catch (\Throwable) {
+                self::$hitsIncidentCol = false;
+            }
+        }
+        return self::$hitsIncidentCol;
+    }
+
+    /**
+     * فتح حادث تلقائي. لو نفس القاعدة فتحت حادث لنفس الـ subject وهو لسه مفتوح (open/investigating/contained)
+     * بنضيف عليه حدث + تنبيه جديد بدل ما نفتح حادث تاني.
+     *
+     * @return array{0:?int,1:string} [incident id, نص يتسجّل في actions_taken]
+     */
+    private function actionOpenIncident(object $rule, array $def, string $severity, string $subjectValue, string $title, string $message, ?string $ip, ?int $userId, ?int $alertId, array $taken): array
+    {
+        try {
+            $repo = app(\App\Repositories\SecurityIncidentRepository::class);
+
+            if ($this->hitsHaveIncidentColumn()) {
+                $open = DB::table('security_detection_hits as h')
+                    ->join('security_incidents as i', 'i.id', '=', 'h.incident_id')
+                    ->where('h.rule_id', $rule->id)
+                    ->where('h.subject_value', mb_substr($subjectValue, 0, 190))
+                    ->whereIn('i.status', ['open', 'investigating', 'contained'])
+                    ->orderByDesc('h.id')->select('i.id', 'i.reference_code')->first();
+                if ($open) {
+                    $repo->addEvent((int) $open->id, null, 'auto_repeat', 'The detection rule "' . $rule->name_en . '" triggered again for the same source.');
+                    if ($alertId) {
+                        $repo->addLink((int) $open->id, 'alert', (string) $alertId, null);
+                    }
+                    return [(int) $open->id, "added to open incident {$open->reference_code}"];
+                }
+            }
+
+            $incSeverity = self::INCIDENT_SEVERITY[$severity] ?? 'medium';
+            $category = self::INCIDENT_CATEGORY[$rule->rule_type] ?? 'other';
+            $affected = $userId && DB::table('users')->where('id', $userId)->exists() ? $userId : null;
+            $desc = $message . ($taken ? "\n\nAutomatic actions: " . implode('; ', $taken) . '.' : '')
+                . "\n\nOpened automatically by detection rule \"{$rule->name_en}\" ({$rule->rule_key}).";
+
+            $incident = $repo->create([
+                'title'            => mb_substr('[Auto] ' . $title, 0, 200),
+                'description'      => $desc,
+                'category'         => $category,
+                'severity'         => $incSeverity,
+                'source_ip'        => $ip && filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null,
+                'affected_user_id' => $affected,
+                'created_by'       => null,
+            ]);
+            $repo->addEvent((int) $incident->id, null, 'created', 'Incident opened automatically by detection rule "' . $rule->name_en . '".');
+            if ($alertId) {
+                $repo->addLink((int) $incident->id, 'alert', (string) $alertId, null);
+            }
+            if ($affected) {
+                $repo->addLink((int) $incident->id, 'user', (string) $affected, null);
+            }
+
+            return [(int) $incident->id, "opened incident {$incident->reference_code}"];
+        } catch (\Throwable $e) {
+            Log::warning('Detection open_incident failed: ' . $e->getMessage(), ['rule' => $rule->rule_key ?? null]);
+            return [null, 'open_incident failed'];
+        }
+    }
+
+    /** إشعار داخلي (جرس + push) لكل security_admin و admin نشطين. القنوات الخارجية بتتصعّد من EscalationService مع التنبيه/الحادث. */
+    private function actionNotifyAdmins(string $severity, string $title, string $message, ?int $incidentId, ?int $alertId): string
+    {
+        try {
+            $ids = DB::table('users as u')->join('user_roles as ur', 'ur.user_id', '=', 'u.id')->join('roles as r', 'r.id', '=', 'ur.role_id')
+                ->whereIn('r.slug', ['security_admin', 'admin'])->where('u.status', 'active')->whereNull('u.deleted_at')
+                ->distinct()->limit(25)->pluck('u.id')->all();
+            if (!$ids) {
+                return 'notify_admins skipped (no active security administrators)';
+            }
+            $link = $incidentId ? '/security/incidents/' . $incidentId : ($alertId ? '/security/alerts' : '/security/intrusion-defense');
+            $priority = in_array($severity, ['critical', 'high'], true) ? ($severity === 'critical' ? 'urgent' : 'high') : 'normal';
+            $svc = app(NotificationService::class);
+            foreach ($ids as $id) {
+                $svc->notify((int) $id, 'security_intrusion', mb_substr($title, 0, 150), mb_substr($message, 0, 400), $link, $priority);
+            }
+            return 'notified ' . count($ids) . ' administrator(s)';
+        } catch (\Throwable $e) {
+            Log::warning('Detection notify_admins failed: ' . $e->getMessage());
+            return 'notify_admins failed';
+        }
     }
 
     private function actionRevokeSessions(?int $userId): string
