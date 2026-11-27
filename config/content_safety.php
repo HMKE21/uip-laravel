@@ -64,7 +64,7 @@ return [
         'api/v1/attempts/*/answers/*', 'api/v1/attempts/*/snapshots', 'api/v1/attempts/*/security-events', 'api/v1/attempts/*/heartbeat',
         'api/v1/zipbench/*', 'api/v1/terminal/*', 'api/v1/sandbox/*', 'api/v1/code/run*',
         // الأدمن بيكتب كلمات ممنوعة هنا + المستخدم لازم يقدر يبلّغ عن محتوى مسيء بنص صريح => مستثنى.
-        'api/v1/admin/content-safety*', 'api/v1/admin/chat-media*', 'api/v1/*report*', 'api/v1/*abuse*', 'api/v1/security/*',
+        'api/v1/admin/content-safety*', 'api/v1/admin/chat-media*', 'api/v1/content-appeals*', 'api/v1/admin/content-appeals*', 'api/v1/*report*', 'api/v1/*abuse*', 'api/v1/security/*',
     ],
 
     // مسارات مفيهاش فحص صور (كاميرا مراقبة الامتحان: وش الطالب + خصوصية) — النصوص لسه بتتفحص.
@@ -87,6 +87,9 @@ return [
 
     // عدد المخالفات في 24 ساعة اللي يطلّع تنبيه للأدمن.
     'strike_alert' => (int) env('CONTENT_SAFETY_STRIKE_ALERT', 5),
+
+    // حساب الأدمن اللي بيظهر للمستخدم في تحذير الحجب (id). فاضي = أول أدمن نشط.
+    'contact_admin_id' => (int) env('CONTENT_SAFETY_CONTACT_ADMIN_ID', 0),
 
     // Giphy: أعلى تصنيف مسموح (g | pg | pg-13). مفيش 'r' أبدًا.
     'gif_max_rating' => env('CONTENT_SAFETY_GIF_MAX_RATING', 'pg'),

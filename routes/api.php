@@ -1291,6 +1291,19 @@ Route::prefix('v1')->group(function () {
         Route::delete('/events', [\App\Http\Controllers\Api\AdminContentSafetyApiController::class, 'clear'])->middleware('throttle:10,1');
     });
 
+    // اعتراض المستخدم على حجب المحتوى: محادثة مع الإدارة (المستخدم) + صندوق الاعتراضات (الأدمن).
+    Route::prefix('content-appeals')->middleware('uip.auth')->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'mine']);
+        Route::post('/', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'store'])->middleware('throttle:10,1');
+        Route::get('/{id}', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'showMine'])->where('id', '[0-9]+');
+        Route::post('/{id}/reply', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'replyMine'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+    });
+    Route::prefix('admin/content-appeals')->middleware(['uip.auth', 'uip.admin'])->group(function () {
+        Route::get('/', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'adminIndex']);
+        Route::get('/{id}', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'adminShow'])->where('id', '[0-9]+');
+        Route::post('/{id}/reply', [\App\Http\Controllers\Api\ContentAppealApiController::class, 'adminReply'])->where('id', '[0-9]+')->middleware('throttle:60,1');
+    });
+
     Route::prefix('admin/notification-settings')->middleware(['uip.auth', 'uip.admin'])->group(function () {
         Route::get('/', [AdminNotificationSettingsApiController::class, 'show']);
         Route::patch('/', [AdminNotificationSettingsApiController::class, 'update']);

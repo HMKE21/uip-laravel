@@ -22,14 +22,21 @@ class ContentBlockedException extends \RuntimeException
         parent::__construct($message, 422);
     }
 
-    /** @return array{code:string,category:string,kind:string,reason:string} */
+    /** @return array{code:string,category:string,kind:string,reason:string,appeal:?array} */
     public function errors(): array
     {
+        try {
+            $appeal = app(ContentAppealService::class)->publicInfo();   // حساب الإدارة + هل الاعتراض متاح — بتعرضه الواجهة في نافذة التحذير
+        } catch (\Throwable) {
+            $appeal = null;
+        }
+
         return [
             'code' => 'content_not_allowed',
             'category' => $this->category,
             'kind' => $this->kind,
             'reason' => app(ContentSafetyService::class)->reasonLabel($this->category),
+            'appeal' => $appeal,
         ];
     }
 

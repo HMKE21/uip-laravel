@@ -1186,6 +1186,8 @@ class ContentSafetyService
                     app(AuditLogService::class)->record($uid, 'content_safety.repeat_offender', 'User', $uid, null, ['violations_24h' => $n, 'last' => $kind . '/' . $category], $ip);
                     SecurityLog::write('Content safety: repeated violations by user', ['user_id' => $uid, 'violations_24h' => $n]);
                 }
+                // تحذير ودّي بسيط للمستخدم (سبب الحجب + لينك الاعتراض) — مرة كل 10 دقايق كحد أقصى.
+                app(ContentAppealService::class)->warnUser((int) $uid, $category, $n);
             }
         } catch (\Throwable $e) {
             // التسجيل مايكسرش الحجب
