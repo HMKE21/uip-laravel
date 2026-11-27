@@ -151,6 +151,11 @@ Schedule::command('tenant:domains-check')->everyMinute()->withoutOverlapping();
 // مسح نسخ الملفات المحجوبة (حجر Content Safety) الأقدم من CONTENT_SAFETY_QUARANTINE_DAYS.
 Schedule::call(fn () => app(\App\Services\ContentSafetyService::class)->purgeQuarantine())->name('content-safety:purge-quarantine')->daily();
 
+// صحة السيرفر (Security Portal — بند 2): قياس CPU/RAM/ديسك/حجم DB/الطابور كل دقيقة + تقييم قواعد الصحة (والارتفاعات المفاجئة).
+// على قاعدة المنصة الأم بس (مش tenants:run) لأن السيرفر واحد. محتاج cron السيرفر (schedule:run كل دقيقة) زي باقي الأوامر.
+Schedule::command('security:health-sample')->everyMinute()->withoutOverlapping();
+Schedule::command('security:health-sample', ['--prune'])->dailyAt('03:50')->withoutOverlapping();
+
 // Network control (بند 4): تنضيف الحظر المنتهي وإدخالات الموثوقين المنتهية (الفحص نفسه بيتجاهل المنتهي حتى لو الأمر ده ما اشتغلش).
 Schedule::call(fn () => app(\App\Repositories\BlockedIpRepository::class)->purgeExpired())->name('network:purge-expired')->hourly()->withoutOverlapping();
 

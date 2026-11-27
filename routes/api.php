@@ -2853,6 +2853,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/geo-resolve', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'geoResolve'])->middleware('throttle:20,1');
         });
 
+        // بند 2 — صحة السيرفر (CPU/RAM/ديسك/5xx/طابور/DB). قراءة بس لأي موظف أمن؛ الحدود بتتظبط من Detection Rules.
+        Route::prefix('health')->middleware('uip.can:security.notifications.manage,security.policies.manage')->group(function () {
+            Route::get('/summary', [\App\Http\Controllers\Api\SecurityHealthApiController::class, 'summary'])->middleware('throttle:60,1');
+        });
+
         // بند 4 — Network Control: حظر IP/CIDR بمدة + استيراد جماعي، قائمة الموثوقين، قواعد حد المعدل. القراءة: أي موظف أمن،
         // الكتابة: policies.manage بس (security_admin/admin) — نفس منطق Detection/Policies.
         Route::prefix('network')->middleware(['uip.can:security.notifications.manage,security.policies.manage', 'uip.can:write:security.policies.manage'])->group(function () {

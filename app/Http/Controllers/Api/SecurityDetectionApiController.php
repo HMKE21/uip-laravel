@@ -56,6 +56,8 @@ class SecurityDetectionApiController extends Controller
                 'windowed' => $def['windowed'],
                 'actions'  => $def['actions'],
                 'baseline' => $def['baseline'] ?? null,
+                'health'   => isset($def['health']),
+                'spike'    => !empty($def['spike']),
             ];
         }
 
@@ -277,8 +279,10 @@ class SecurityDetectionApiController extends Controller
         $blockMinutes = (int) ($in['block_minutes'] ?? ($existing->block_minutes ?? 30));
 
         if ($def['windowed']) {
-            if ($threshold < 1 || $threshold > 100000) {
-                $errors['threshold'] = ['Threshold must be between 1 and 100000.'];
+            // صحة السيرفر: الحد ممكن يبقى حجم DB بالميجا (مثلًا 5120) أو نسبة ارتفاع %، فالسقف أعلى.
+            $maxThreshold = isset($def['health']) ? 10000000 : 100000;
+            if ($threshold < 1 || $threshold > $maxThreshold) {
+                $errors['threshold'] = ["Threshold must be between 1 and {$maxThreshold}."];
             }
             if ($window < 1 || $window > 10080) {
                 $errors['window_minutes'] = ['Window must be between 1 minute and 7 days (10080).'];
@@ -310,6 +314,11 @@ class SecurityDetectionApiController extends Controller
             $config['min_known'] = max(1, min(50, (int) ($cfgIn['min_known'] ?? 1)));
             // مقصورة على أدوار معيّنة (فاضي = كل المستخدمين) — مثلًا دخول من جهاز/بلد جديد للأدمن بس.
             $config['roles'] = array_values(array_filter(array_map('strval', (array) ($cfgIn['roles'] ?? [])), fn ($r) => preg_match('/^[a-z0-9_\-]{2,60}$/', $r)));
+        }
+        if (!empty($def['spike'])) {
+            // ارتفاع مفاجئ: أرضية مطلقة + طول فترة "الطبيعي" اللي بنقارن بيها.
+            $config['min_value'] = max(0, min(1000000, (int) ($cfgIn['min_value'] ?? 0)));
+            $config['baseline_minutes'] = max(10, min(1440, (int) ($cfgIn['baseline_minutes'] ?? 60)));
         }
         if ($type === 'credential_stuffing') {
             $config['min_ips'] = max(1, min(1000, (int) ($cfgIn['min_ips'] ?? 5)));

@@ -87,6 +87,62 @@ class SecurityDetectionService
             'event' => 'config_change', 'subject' => 'user', 'alert_type' => 'sensitive_change',
             'unit' => 'sensitive changes', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions'],
         ],
+        // بند 2 — صحة السيرفر. SecurityHealthService بيقيس كل دقيقة (security:health-sample) و evaluateHealth() بيقارن بالـ threshold.
+        //  threshold = القيمة، window_minutes = المدة اللي بنقيس عليها. الإجراء الوحيد: تنبيه (مفيش حظر/قفل لمشكلة في السيرفر).
+        //  health.agg: avg | max | last | growth (آخر - أول قيمة في الـ window) | sum | failed_window (failed_jobs جديدة).
+        //  spike: threshold = نسبة الزيادة % عن الطبيعي (config.baseline_minutes) و config.min_value = أرضية مطلقة.
+        'server_cpu' => [
+            'event' => 'health_sample', 'alert_type' => 'health_cpu', 'unit' => '% CPU (average)', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'cpu_percent', 'agg' => 'avg'],
+        ],
+        'server_ram' => [
+            'event' => 'health_sample', 'alert_type' => 'health_ram', 'unit' => '% RAM (average)', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'mem_percent', 'agg' => 'avg'],
+        ],
+        'server_disk' => [
+            'event' => 'health_sample', 'alert_type' => 'health_disk', 'unit' => '% disk used', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'disk_percent', 'agg' => 'max'],
+        ],
+        'db_size' => [
+            'event' => 'health_sample', 'alert_type' => 'health_db_size', 'unit' => 'MB database size', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'db_size_mb', 'agg' => 'last'],
+        ],
+        'db_growth' => [
+            'event' => 'health_sample', 'alert_type' => 'health_db_growth', 'unit' => 'MB growth in the window', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'db_size_mb', 'agg' => 'growth'],
+        ],
+        'queue_backlog' => [
+            'event' => 'health_sample', 'alert_type' => 'health_queue_backlog', 'unit' => 'jobs waiting', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'queue_pending', 'agg' => 'max'],
+        ],
+        'queue_stalled' => [
+            'event' => 'health_sample', 'alert_type' => 'health_queue_stalled', 'unit' => 'minutes the oldest job has waited', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'queue_oldest_age_s', 'agg' => 'max', 'div' => 60],
+        ],
+        'queue_failures' => [
+            'event' => 'health_sample', 'alert_type' => 'health_queue_failures', 'unit' => 'failed jobs', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'queue_failed', 'agg' => 'failed_window'],
+        ],
+        'http_5xx' => [
+            'event' => 'health_sample', 'alert_type' => 'health_5xx', 'unit' => 'server errors (5xx)', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'http_5xx', 'agg' => 'sum'],
+        ],
+        'cpu_spike' => [
+            'event' => 'health_sample', 'alert_type' => 'health_cpu_spike', 'unit' => '% above normal CPU', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'cpu_percent', 'agg' => 'avg'], 'spike' => true,
+        ],
+        'ram_spike' => [
+            'event' => 'health_sample', 'alert_type' => 'health_ram_spike', 'unit' => '% above normal RAM', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'mem_percent', 'agg' => 'avg'], 'spike' => true,
+        ],
+        'http_5xx_spike' => [
+            'event' => 'health_sample', 'alert_type' => 'health_5xx_spike', 'unit' => '% above normal error rate', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'http_5xx', 'agg' => 'sum'], 'spike' => true,
+        ],
+        'queue_spike' => [
+            'event' => 'health_sample', 'alert_type' => 'health_queue_spike', 'unit' => '% above normal queue size', 'windowed' => true, 'actions' => ['alert'],
+            'health' => ['metric' => 'queue_pending', 'agg' => 'max'], 'spike' => true,
+        ],
         // Credential stuffing: فشل دخول كتير من عناوين وحسابات كتير (موزّع) — مش مرتبط بـ IP أو حساب واحد.
         'credential_stuffing' => [
             'event' => 'failed_login', 'subject' => 'global', 'alert_type' => 'credential_stuffing',
@@ -417,8 +473,10 @@ class SecurityDetectionService
         if (in_array('alert', $actions, true)) {
             [$title, $message] = $this->describe($rule, $subjectType, $subjectValue, $observed, $ctx, $extra, $taken);
             $alertUser = $userId ?: ($subjectType === 'user' && ctype_digit(explode(':', $subjectValue)[0]) ? (int) explode(':', $subjectValue)[0] : null);
+            // صحة السيرفر: النوع بيشيل الـ severity (health_disk_warning / health_disk_critical) عشان تنبيه "حرج" مايتدمجش
+            // جوه تنبيه "تحذير" مفتوح لنفس المقياس (التجميع في raise() بيتم بالنوع).
             $alertId = app(SecurityAlertService::class)->raise(
-                $def['alert_type'],
+                isset($def['health']) ? $def['alert_type'] . '_' . $severity : $def['alert_type'],
                 $severity,
                 $title,
                 $message,
@@ -467,6 +525,9 @@ class SecurityDetectionService
     /** @return array{0:string,1:string} */
     private function describe(object $rule, string $subjectType, string $subjectValue, int $observed, array $ctx, array $extra, array $taken): array
     {
+        if (isset(self::TYPES[$rule->rule_type]['health'])) {
+            return $this->describeHealth($rule, $extra);
+        }
         $w = $extra['window_minutes'] ?? $rule->window_minutes;
         $email = (string) ($ctx['identifier'] ?? '');
         if ($email === '' && !empty($ctx['user_id'])) {
@@ -618,7 +679,7 @@ class SecurityDetectionService
     public function preview(string $ruleType, int $threshold, int $windowMinutes): array
     {
         $def = self::TYPES[$ruleType] ?? null;
-        if (!$def || !$def['windowed'] || ($def['subject'] ?? null) === 'global' || !$this->available()) {
+        if (!$def || !$def['windowed'] || isset($def['health']) || ($def['subject'] ?? null) === 'global' || !$this->available()) {
             return ['supported' => false, 'rows' => [], 'would_trigger' => 0, 'events_in_window' => 0];
         }
         $col = ['ip' => 'ip_address', 'identifier' => 'identifier', 'user' => 'user_id'][$def['subject']];
@@ -640,6 +701,97 @@ class SecurityDetectionService
             'would_trigger'    => count(array_filter($rows, fn ($r) => $r['would_trigger'])),
             'events_in_window' => (int) (clone $base)->count(),
         ];
+    }
+
+    // ---------------------------------------------------------------- server health (بند 2)
+
+    /**
+     * بيقيّم قواعد صحة السيرفر المفعّلة (cpu/ram/disk/db/queue/5xx + الارتفاعات المفاجئة). بيتنادى من `security:health-sample`
+     * كل دقيقة بعد القياس. القيمة بتيجي من SecurityHealthService::observe()؛ لو فوق الـ threshold بنعدّي على نفس fire()
+     * (cooldown + تنبيه مدموج + سجل hit) زي باقي القواعد. أي فشل في قاعدة بيتسجّل بس.
+     */
+    public function evaluateHealth(SecurityHealthService $health): void
+    {
+        if (!$this->available() || !$this->settings()['enabled']) {
+            return;
+        }
+        foreach (self::TYPES as $type => $def) {
+            if (!isset($def['health'])) {
+                continue;
+            }
+            foreach ($this->enabledRules($type) as $rule) {
+                try {
+                    $obs = $health->observe($rule, $def);
+                    if (!$obs || $obs['observed'] < (float) $rule->threshold) {
+                        continue;
+                    }
+                    $this->fire($rule, $def, 'server', 'server', (int) round($obs['observed']), [], $obs['extra']);
+                } catch (\Throwable $e) {
+                    Log::warning('Health rule failed: ' . $e->getMessage(), ['rule' => $rule->rule_key ?? null]);
+                }
+            }
+        }
+    }
+
+    /** @return array{0:string,1:string} */
+    private function describeHealth(object $rule, array $extra): array
+    {
+        $w = (int) ($extra['window_minutes'] ?? $rule->window_minutes);
+        $cur = $extra['current'] ?? null;
+        $th = (int) $rule->threshold;
+        $title = (string) $rule->name_en;
+
+        switch ($rule->rule_type) {
+            case 'server_cpu':
+                $title = 'High CPU usage';
+                $msg = "CPU averaged {$cur}% over the last {$w} minutes (alert level {$th}%).";
+                break;
+            case 'server_ram':
+                $title = 'High memory usage';
+                $msg = "Memory usage averaged {$cur}% over the last {$w} minutes (alert level {$th}%).";
+                break;
+            case 'server_disk':
+                $title = 'Disk almost full';
+                $msg = "Disk usage reached {$cur}% (alert level {$th}%). Free space or enlarge the volume before uploads and logs start failing.";
+                break;
+            case 'db_size':
+                $title = 'Database size limit reached';
+                $msg = "The database is {$cur} MB (limit {$th} MB).";
+                break;
+            case 'db_growth':
+                $title = 'Database growing fast';
+                $msg = "The database grew by {$cur} MB in the last {$w} minutes (alert level {$th} MB).";
+                break;
+            case 'queue_backlog':
+                $title = 'Job queue backlog';
+                $msg = "Up to {$cur} jobs were waiting in the queue during the last {$w} minutes (alert level {$th}). Check that the queue worker is running.";
+                break;
+            case 'queue_stalled':
+                $title = 'Queue jobs waiting too long';
+                $msg = "The oldest queued job has been waiting about {$cur} minutes (alert level {$th}). The queue worker may be stopped or overloaded.";
+                break;
+            case 'queue_failures':
+                $title = 'Queue jobs failing';
+                $msg = "{$cur} jobs failed in the last {$w} minutes (alert level {$th}). See the failed_jobs table.";
+                break;
+            case 'http_5xx':
+                $title = 'Server errors (5xx)';
+                $msg = "{$cur} requests ended with a 5xx server error in the last {$w} minutes (alert level {$th}).";
+                break;
+            default: // *_spike
+                $map = [
+                    'cpu_spike'      => ['Sudden CPU spike', 'CPU usage'],
+                    'ram_spike'      => ['Sudden memory spike', 'Memory usage'],
+                    'http_5xx_spike' => ['Sudden surge of 5xx errors', 'Server errors (5xx)'],
+                    'queue_spike'    => ['Sudden queue growth', 'Queue size'],
+                ];
+                [$title, $what] = $map[$rule->rule_type] ?? [$title, 'The metric'];
+                $base = $extra['baseline'] ?? '?';
+                $bm = (int) ($extra['baseline_minutes'] ?? 60);
+                $msg = "{$what} over the last {$w} minutes: {$cur}, versus {$base} over the previous {$bm} minutes (alert level: +{$th}% above normal).";
+        }
+
+        return [$title, $msg . " [rule: {$rule->name_en}]"];
     }
 
     // ---------------------------------------------------------------- maintenance

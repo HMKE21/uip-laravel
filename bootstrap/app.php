@@ -145,6 +145,8 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\UipDetectionTapMiddleware::class,
             // مراقبة الداتا: تصدير / حذف / تعديل جماعي / تغيير صلاحيات (مراقبة بس، بعد الرد).
             \App\Http\Middleware\UipDataGuardMiddleware::class,
+            // صحة السيرفر: عدّ أخطاء 5xx (مراقبة بس، بعد الرد).
+            \App\Http\Middleware\UipHealthTapMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
