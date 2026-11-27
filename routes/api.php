@@ -2882,6 +2882,12 @@ Route::prefix('v1')->group(function () {
             Route::get('/', [SecurityVulnerabilitiesApiController::class, 'index']);
             Route::post('/', [SecurityVulnerabilitiesApiController::class, 'store']);
             Route::get('/export', [SecurityVulnerabilitiesApiController::class, 'export']);
+            Route::get('/cvss', [SecurityVulnerabilitiesApiController::class, 'cvss']);
+            Route::get('/{id}', [SecurityVulnerabilitiesApiController::class, 'show'])->whereNumber('id');
+            Route::patch('/{id}', [SecurityVulnerabilitiesApiController::class, 'update'])->whereNumber('id');
+            Route::post('/{id}/comment', [SecurityVulnerabilitiesApiController::class, 'comment']);
+            Route::post('/{id}/retest', [SecurityVulnerabilitiesApiController::class, 'requestRetest']);
+            Route::post('/{id}/retest/result', [SecurityVulnerabilitiesApiController::class, 'retestResult']);
             Route::patch('/{id}/status', [SecurityVulnerabilitiesApiController::class, 'updateStatus']);
             Route::patch('/{id}/deadline', [SecurityVulnerabilitiesApiController::class, 'setDeadline']);
             Route::patch('/{id}/assign', [SecurityVulnerabilitiesApiController::class, 'assign']);

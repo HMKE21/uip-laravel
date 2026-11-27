@@ -238,7 +238,7 @@ class AIInsightsDigest
                 ->select('type', DB::raw('COUNT(*) as c'))->groupBy('type')->orderByDesc('c')->limit(6)->pluck('c', 'type')->map(fn ($v) => (int) $v)->all();
         }
         if (Schema::hasTable('vulnerabilities')) {
-            $open = DB::table('vulnerabilities')->whereIn('status', ['open', 'in_progress']);
+            $open = DB::table('vulnerabilities')->whereIn('status', ['open', 'in_progress', 'pending_verification']);
             $out['vulnerabilities_open_by_severity'] = (clone $open)->select('severity', DB::raw('COUNT(*) as c'))->groupBy('severity')->pluck('c', 'severity')->map(fn ($v) => (int) $v)->all();
             $out['vulnerabilities_past_deadline'] = (int) (clone $open)->whereNotNull('deadline')->where('deadline', '<', now()->toDateString())->count();
         }

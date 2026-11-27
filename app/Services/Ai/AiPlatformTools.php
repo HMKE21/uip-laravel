@@ -1647,7 +1647,7 @@ class AiPlatformTools
             $out['open_alerts_by_severity'] = $this->countBy(DB::table('security_alerts')->whereIn('status', ['open', 'escalated']), 'severity');
         }
         if ($this->has('vulnerabilities')) {
-            $openV = fn () => DB::table('vulnerabilities')->whereIn('status', ['open', 'in_progress']);
+            $openV = fn () => DB::table('vulnerabilities')->whereIn('status', ['open', 'in_progress', 'pending_verification']);
             $out['open_vulnerabilities_by_severity'] = $this->countBy($openV(), 'severity');
             $out['overdue_vulnerabilities'] = (int) $openV()->whereNotNull('deadline')->where('deadline', '<', now()->toDateString())->count();
         }
