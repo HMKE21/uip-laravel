@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -161,32 +162,31 @@ class DataAnalysisAcademicService
      */
     public function search(string $q, int $limit = 10): array
     {
-        $needle = '%' . $q . '%'; // القيمة bound كـ parameter، فمفيش SQL injection؛ أي % أو _ بتوسّع البحث بس.
-        $limit = max(1, min(25, $limit));
+                $limit = max(1, min(25, $limit));
 
         $exams = $this->safe(fn () => DB::table('exams as e')
             ->whereNull('e.deleted_at')
-            ->where(fn ($w) => $w->where('e.title', 'like', $needle)->orWhere('e.subject', 'like', $needle))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['e.title', 'e.subject'], $q))
             ->orderByDesc('e.id')->limit($limit)
             ->get(['e.id', 'e.title', 'e.subject', 'e.exam_type', 'e.status', 'e.start_at'])
             ->map(fn ($r) => (array) $r)->all()) ?? [];
 
         $students = $this->safe(fn () => DB::table('students as s')
             ->join('users as u', 'u.id', '=', 's.user_id')
-            ->where(fn ($w) => $w->where('u.full_name', 'like', $needle)->orWhere('s.student_number', 'like', $needle))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['u.full_name', 'u.name_ar', 'u.name_en', 's.student_number'], $q))
             ->orderBy('u.full_name')->limit($limit)
             ->get(['s.id', 'u.full_name', 's.student_number', 's.academic_year'])
             ->map(fn ($r) => (array) $r)->all()) ?? [];
 
         $doctors = $this->safe(fn () => DB::table('academic_staff as st')
             ->join('users as u', 'u.id', '=', 'st.user_id')
-            ->where(fn ($w) => $w->where('u.full_name', 'like', $needle)->orWhere('st.staff_number', 'like', $needle))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['u.full_name', 'u.name_ar', 'u.name_en', 'st.staff_number'], $q))
             ->orderBy('u.full_name')->limit($limit)
             ->get(['st.id', 'u.full_name', 'st.staff_number', 'st.status'])
             ->map(fn ($r) => (array) $r)->all()) ?? [];
 
         $courses = $this->safe(fn () => DB::table('courses')
-            ->where(fn ($w) => $w->where('code', 'like', $needle)->orWhere('name_en', 'like', $needle)->orWhere('name_ar', 'like', $needle))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['code', 'name_en', 'name_ar'], $q))
             ->orderBy('code')->limit($limit)
             ->get(['id', 'code', 'name_en', 'name_ar', 'status'])
             ->map(fn ($r) => (array) $r)->all()) ?? [];

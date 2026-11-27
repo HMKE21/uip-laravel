@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use App\Models\SecurityAlert;
 use Illuminate\Support\Facades\DB;
 
@@ -178,12 +179,7 @@ class SecurityAlertRepository
             $query->where('a.assigned_to', $filters['assigned_to']);
         }
         if (!empty($filters['q'])) {
-            $q = '%' . $filters['q'] . '%';
-            $query->where(function ($w) use ($q) {
-                $w->where('a.title', 'like', $q)
-                    ->orWhere('a.message', 'like', $q)
-                    ->orWhere('a.source_ip', 'like', $q);
-            });
+            SearchLike::apply($query, ['a.title', 'a.message', 'a.source_ip', 'a.type'], (string) $filters['q']);
         }
         if (!empty($filters['date_from'])) {
             $query->where('a.created_at', '>=', $filters['date_from'] . ' 00:00:00');

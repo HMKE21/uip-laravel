@@ -29,26 +29,53 @@ trait Paginates
     }
 
     /**
-     * مطابقة substring case-insensitive على $fields (اشتغل مع arrays
-     * وModel instances عبر toArray()) باستخدام query param `search` (أو
-     * `q`). لو مفيش قيمة بحث، بترجع $rows زي ما هي.
+     * بحث على $fields باستخدام query param `search` (أو `q`). لو مفيش قيمة بحث، بترجع $rows زي ما هي.
+     *
+     * - تطبيع عربي/إنجليزي: lower-case، شيل التشكيل والتطويل، توحيد الألف (أإآ→ا)، ى→ي، ئ→ي، ؤ→و، ة→ه، أرقام هندية→لاتينية.
+     * - "ال" التعريف في أول الكلمة بتتشال من كلمة البحث (الحوادث ← حوادث).
+     * - كل كلمات البحث لازم تظهر (بأي ترتيب وفي أي حقل من $fields) — مش لازم الجملة كلها حرفيًا.
      */
     private function filterBySearch(\Illuminate\Http\Request $request, array $rows, array $fields): array
     {
-        $needle = mb_strtolower(trim((string) $request->input('search', (string) $request->input('q', ''))));
-        if ($needle === '') {
+        $raw = trim((string) $request->input('search', (string) $request->input('q', '')));
+        if ($raw === '') {
             return $rows;
         }
 
-        return array_values(array_filter($rows, function ($row) use ($fields, $needle) {
+        $tokens = array_values(array_filter(explode(' ', $this->searchNormalize($raw)), fn ($t) => $t !== ''));
+        $tokens = array_map(fn ($t) => (mb_strlen($t) > 3 && str_starts_with($t, 'ال')) ? mb_substr($t, 2) : $t, $tokens);
+        if (!$tokens) {
+            return $rows;
+        }
+
+        return array_values(array_filter($rows, function ($row) use ($fields, $tokens) {
             $row = is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array) $row;
+            $parts = [];
             foreach ($fields as $field) {
-                if (isset($row[$field]) && str_contains(mb_strtolower((string) $row[$field]), $needle)) {
-                    return true;
+                if (isset($row[$field]) && is_scalar($row[$field])) {
+                    $parts[] = (string) $row[$field];
                 }
             }
-            return false;
+            $hay = $this->searchNormalize(implode(' ', $parts));
+            foreach ($tokens as $tk) {
+                if (!str_contains($hay, $tk)) {
+                    return false;
+                }
+            }
+            return true;
         }));
+    }
+
+    private function searchNormalize(string $s): string
+    {
+        $s = mb_strtolower($s);
+        $s = preg_replace('/[\x{064B}-\x{065F}\x{0670}\x{0640}]/u', '', $s) ?? $s;
+        $s = strtr($s, [
+            'أ' => 'ا', 'إ' => 'ا', 'آ' => 'ا', 'ٱ' => 'ا', 'ى' => 'ي', 'ئ' => 'ي', 'ؤ' => 'و', 'ة' => 'ه',
+            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4', '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+            '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4', '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+        ]);
+        return trim(preg_replace('/\s+/u', ' ', $s) ?? $s);
     }
 
     private function meta(int $page, int $perPage, int $total): array

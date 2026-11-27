@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use App\Models\University;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -133,13 +134,7 @@ class UniversityRepository
         $trashed ? $query->whereNotNull('uni.deleted_at') : $query->whereNull('uni.deleted_at');
 
         if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $like = '%' . $search . '%';
-                $q->where('uni.official_name_en', 'like', $like)
-                    ->orWhere('uni.official_name_ar', 'like', $like)
-                    ->orWhere('uni.city', 'like', $like)
-                    ->orWhere('uni.country', 'like', $like);
-            });
+            SearchLike::apply($query, ['uni.official_name_en', 'uni.official_name_ar', 'uni.city', 'uni.country', 'uni.slug'], $search);
         }
         if ($status !== '') {
             $query->where('uni.verification_status', $status);

@@ -54,7 +54,7 @@ class SecurityIncidentsApiController extends Controller
         $status = $request->input('status') ?: null;
         $severity = $request->input('severity') ?: null;
 
-        $rows = $this->filterBySearch($request, $this->incidents->allWithAssignee(500, $status, $severity), ['title', 'description']);
+        $rows = $this->filterBySearch($request, $this->incidents->allWithAssignee(500, $status, $severity), ['title', 'description', 'reference_code', 'category', 'source_ip', 'assignee_name', 'severity', 'status']);
 
         // SLA لكل حادثة + فلتر ?sla=breached|at_risk|on_track|met|missed
         $rows = array_map(function ($r) {

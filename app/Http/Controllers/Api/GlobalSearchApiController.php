@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Support\SearchLike;
 use App\Http\Controllers\Controller;
 use App\Services\NetworkService;
 use Illuminate\Http\Request;
@@ -52,16 +53,19 @@ class GlobalSearchApiController extends Controller
                 $hasMore = $res['has_more'];
             }
             if ($isAdmin) {
-                $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], ltrim($q, '@#')) . '%';
+                $core = ltrim($q, '@#');
                 if (in_array('projects', $types, true)) {
                     $out['projects'] = DB::table('projects')->whereNull('deleted_at')
-                        ->where(fn ($w) => $w->where('title_ar', 'like', $like)->orWhere('title_en', 'like', $like)->orWhere('uuid', $q))
+                        ->where(function ($w) use ($core, $q) {
+                            $w->where('uuid', $q);
+                            $w->orWhere(fn ($x) => SearchLike::apply($x, ['title_ar', 'title_en', 'category', 'summary'], $core));
+                        })
                         ->orderByDesc('id')->limit($limit)->get(['id', 'uuid', 'title_ar', 'title_en', 'status', 'visibility'])
                         ->map(fn ($r) => ['type' => 'projects', 'id' => (int) $r->id, 'uuid' => $r->uuid, 'title' => $r->title_en ?: $r->title_ar, 'subtitle' => $r->status . ' · ' . $r->visibility])->all();
                 }
                 if (in_array('universities', $types, true)) {
                     $out['universities'] = DB::table('universities')
-                        ->where(fn ($w) => $w->where('official_name_en', 'like', $like)->orWhere('official_name_ar', 'like', $like)->orWhere('slug', 'like', $like))
+                        ->tap(fn ($qb) => SearchLike::apply($qb, ['official_name_en', 'official_name_ar', 'slug', 'city'], $core))
                         ->orderBy('official_name_en')->limit($limit)->get(['id', 'official_name_en', 'official_name_ar', 'slug'])
                         ->map(fn ($r) => ['type' => 'universities', 'id' => (int) $r->id, 'title' => $r->official_name_en ?: $r->official_name_ar, 'subtitle' => $r->official_name_ar, 'slug' => $r->slug])->all();
                 }

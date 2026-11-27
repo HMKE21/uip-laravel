@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -88,13 +89,7 @@ class AuditLogRepository
             ->leftJoin('roles as r', 'r.id', '=', 'ur.role_id')
             ->leftJoin('universities as uni', 'uni.user_id', '=', 'a.user_id')
             ->when(!empty($filters['q']), function ($q) use ($filters) {
-                $like = '%' . $filters['q'] . '%';
-                $q->where(function ($w) use ($like) {
-                    $w->where('u.full_name', 'like', $like)
-                        ->orWhere('u.email', 'like', $like)
-                        ->orWhere('a.action', 'like', $like)
-                        ->orWhere('a.ip_address', 'like', $like);
-                });
+                SearchLike::apply($q, ['u.full_name', 'u.email', 'a.action', 'a.ip_address', 'a.subject_type'], (string) $filters['q']);
             })
             ->when(!empty($filters['user']), function ($q) use ($filters) {
                 $like = '%' . $filters['user'] . '%';

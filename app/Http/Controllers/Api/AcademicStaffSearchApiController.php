@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Repositories\AcademicStaffRepository;
 use Illuminate\Http\Request;
+use App\Support\SearchLike;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -35,12 +36,11 @@ class AcademicStaffSearchApiController extends Controller
             return $this->apiSuccess(['q' => $q, 'exams' => [], 'question_banks' => [], 'questions' => [], 'students' => []], 'Search results retrieved successfully.');
         }
 
-        $like = '%' . addcslashes($q, '\\%_') . '%';
         $sid = (int) $staff->id;
 
         $exams = DB::table('exams')
             ->where('created_by_academic_staff_id', $sid)->whereNull('deleted_at')
-            ->where(fn ($w) => $w->where('title', 'like', $like)->orWhere('subject', 'like', $like))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['title', 'subject'], $q))
             ->orderByDesc('id')->limit(self::PER_TYPE)
             ->get(['id', 'title', 'subject', 'status', 'start_at'])
             ->map(fn ($r) => ['id' => (int) $r->id, 'title' => $r->title, 'subject' => $r->subject, 'status' => $r->status, 'start_at' => $r->start_at])
@@ -48,7 +48,7 @@ class AcademicStaffSearchApiController extends Controller
 
         $banks = DB::table('question_banks')
             ->where('created_by_academic_staff_id', $sid)->whereNull('deleted_at')
-            ->where(fn ($w) => $w->where('title', 'like', $like)->orWhere('subject', 'like', $like))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['title', 'subject'], $q))
             ->orderByDesc('id')->limit(self::PER_TYPE)
             ->get(['id', 'title', 'subject', 'status'])
             ->map(fn ($r) => ['id' => (int) $r->id, 'title' => $r->title, 'subject' => $r->subject, 'status' => $r->status])
@@ -57,7 +57,7 @@ class AcademicStaffSearchApiController extends Controller
         $questions = DB::table('questions as qs')
             ->join('question_banks as b', 'b.id', '=', 'qs.question_bank_id')
             ->where('b.created_by_academic_staff_id', $sid)->whereNull('b.deleted_at')->whereNull('qs.deleted_at')
-            ->where(fn ($w) => $w->where('qs.prompt', 'like', $like)->orWhere('qs.topic', 'like', $like))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['qs.prompt', 'qs.topic'], $q))
             ->orderByDesc('qs.id')->limit(self::PER_TYPE)
             ->get(['qs.id', 'qs.prompt', 'qs.type', 'qs.topic', 'b.id as bank_id', 'b.title as bank_title'])
             ->map(fn ($r) => [
@@ -71,7 +71,7 @@ class AcademicStaffSearchApiController extends Controller
             ->join('students as s', 's.id', '=', 'a.student_id')
             ->join('users as u', 'u.id', '=', 's.user_id')
             ->where('e.created_by_academic_staff_id', $sid)
-            ->where(fn ($w) => $w->where('u.full_name', 'like', $like)->orWhere('s.student_number', 'like', $like))
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['u.full_name', 's.student_number'], $q))
             ->groupBy('s.id', 'u.full_name', 's.student_number')
             ->orderBy('u.full_name')->limit(self::PER_TYPE)
             ->get(['s.id', 'u.full_name', 's.student_number', DB::raw('COUNT(a.id) as attempts')])

@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use App\Models\Role;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -494,15 +495,7 @@ class UserRepository
 
         // ---- بحث نصي (اسم/إيميل/تليفون/رقم جامعي/uuid) ----
         if (!empty($f['search'])) {
-            $q = '%' . $f['search'] . '%';
-            $query->where(function ($w) use ($q) {
-                $w->where('u.full_name', 'like', $q)
-                    ->orWhere('u.email', 'like', $q)
-                    ->orWhere('u.phone', 'like', $q)
-                    ->orWhere('u.uuid', 'like', $q)
-                    ->orWhere('s.student_number', 'like', $q)
-                    ->orWhere('ast.staff_number', 'like', $q);
-            });
+            SearchLike::apply($query, ['u.full_name', 'u.email', 'u.phone', 'u.uuid', 's.student_number', 'ast.staff_number'], (string) $f['search']);
         }
     }
 

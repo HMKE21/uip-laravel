@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use App\Models\Project;
 use App\Models\Student;
 use Illuminate\Support\Facades\DB;
@@ -745,12 +746,7 @@ class ProjectRepository
         }
 
         if (!empty($filters['search'])) {
-            $q = '%' . $filters['search'] . '%';
-            $query->where(function ($w) use ($q) {
-                $w->where('p.title_en', 'like', $q)
-                    ->orWhere('p.title_ar', 'like', $q)
-                    ->orWhere('p.summary', 'like', $q);
-            });
+            SearchLike::apply($query, ['p.title_en', 'p.title_ar', 'p.summary'], (string) $filters['search']);
         }
     }
 
@@ -1363,16 +1359,10 @@ class ProjectRepository
      */
     public function searchAll(string $q, int $limit = 20): array
     {
-        $needle = '%' . $q . '%';
-
         return DB::table('projects as p')
             ->join('users as u', 'u.id', '=', 'p.owner_id')
             ->leftJoin('universities as uni', 'uni.id', '=', 'p.university_id')
-            ->where(function ($w) use ($needle) {
-                $w->where('p.title_en', 'like', $needle)
-                    ->orWhere('p.title_ar', 'like', $needle)
-                    ->orWhere('p.category', 'like', $needle);
-            })
+            ->tap(fn ($qb) => SearchLike::apply($qb, ['p.title_en', 'p.title_ar', 'p.category', 'p.summary', 'u.full_name'], $q))
             ->orderByDesc('p.created_at')
             ->limit(max(1, $limit))
             ->select('p.*', 'u.full_name as owner_name', 'uni.official_name_en as university_name_en', 'uni.official_name_ar as university_name_ar')
