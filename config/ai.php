@@ -76,6 +76,7 @@ return [
         'timeout'           => (int) env('AI_TRANSCRIBE_TIMEOUT', 120),
         'max_upload_kb'     => (int) env('AI_TRANSCRIBE_MAX_KB', 24000), // حد Whisper = 25MB
         'max_chunk_seconds' => (int) env('AI_TRANSCRIBE_CHUNK_SECONDS', 240),
+        'mt'                => env('SUBTITLE_MT', 'on'), // 'off' = ترجمة السطور بالـ LLM بس (من غير المترجم الآلي السريع)
     ],
 
     // مساعد الكود داخل محرر MyPC (App\Services\AiCodeAssistService). الأدمن يقدر يلبس فوق

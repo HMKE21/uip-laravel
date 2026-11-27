@@ -165,12 +165,89 @@ class SubtitleService
         if (!$todo) {
             return ['texts' => $texts, 'translated' => true];
         }
-        if (!$this->client->isConfigured()) {
-            return ['texts' => $texts, 'translated' => false];
+        // 1) مترجم آلي سريع (من غير LLM): كل سطر طلب صغير، والطلبات متوازية — ثواني لكل الدفعة، ويدعم كل اللغات.
+        $out = $texts;
+        $left = $todo;
+        if ($this->mtEnabled()) {
+            $mt = $this->machineTranslate(array_map(fn ($i) => $texts[$i], $todo), $target);
+            $left = [];
+            foreach ($todo as $k => $i) {
+                if (isset($mt[$k]) && $mt[$k] !== '') {
+                    $out[$i] = $mt[$k];
+                } else {
+                    $left[] = $i;
+                }
+            }
+            if (!$left) {
+                return ['texts' => $out, 'translated' => true];
+            }
         }
-        $cues = array_map(static fn ($t) => ['s' => 0.0, 'e' => 0.0, 'text' => $t], $texts);
-        [$cues, $ok] = $this->translate($cues, $target, $todo);
+
+        // 2) اللي فضل (المترجم الآلي مش متاح/رفض) بيروح للـ LLM لو متظبّط.
+        if (!$this->client->isConfigured()) {
+            return ['texts' => $out, 'translated' => false];
+        }
+        $cues = array_map(static fn ($t) => ['s' => 0.0, 'e' => 0.0, 'text' => $t], $out);
+        [$cues, $ok] = $this->translate($cues, $target, $left);
         return ['texts' => array_column($cues, 'text'), 'translated' => $ok];
+    }
+
+    /** SUBTITLE_MT=off في الـ .env يقفل المترجم الآلي ويرجّع للـ LLM بس. بيتقفل لوقت قصير تلقائيًا لو المزوّد رفض/اتحجب. */
+    private function mtEnabled(): bool
+    {
+        return strtolower((string) config('ai.transcribe.mt', 'on')) !== 'off' && !Cache::get('subtitle_mt_down');
+    }
+
+    /**
+     * ترجمة آلية سريعة عبر نقطة translate.googleapis.com (client=gtx — من غير مفتاح). كل سطر طلب لوحده والطلبات بتتنفّذ بالتوازي،
+     * فالدفعة كلها بتخلص في ثواني. اكتشاف لغة المصدر تلقائي (sl=auto) فعربي↔إنجليزي↔باقي اللغات كلهم نفس الطريق.
+     *
+     * @param string[] $texts
+     * @return array<int,?string> نفس ترتيب $texts (null = السطر ده معرفناش نترجمه)
+     */
+    private function machineTranslate(array $texts, string $target): array
+    {
+        $tl  = $target === 'zh' ? 'zh-CN' : $target;
+        $out = array_fill(0, count($texts), null);
+        try {
+            $responses = Http::pool(function ($pool) use ($texts, $tl) {
+                $reqs = [];
+                foreach ($texts as $k => $t) {
+                    $reqs[] = $pool->as((string) $k)->timeout(12)->acceptJson()
+                        ->withHeaders(['User-Agent' => 'Mozilla/5.0 (compatible; UIP-Subtitles)'])
+                        ->asForm()
+                        ->post('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=' . $tl . '&dt=t&dj=0', ['q' => $t]);
+                }
+                return $reqs;
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Subtitle MT pool failed', ['error' => mb_substr($e->getMessage(), 0, 200)]);
+            Cache::put('subtitle_mt_down', 1, 300);
+            return $out;
+        }
+
+        $failed = 0;
+        foreach ($texts as $k => $_) {
+            $r = $responses[(string) $k] ?? null;
+            if (!$r instanceof \Illuminate\Http\Client\Response || $r->failed()) {
+                $failed++;
+                continue;
+            }
+            $json = $r->json();
+            $text = '';
+            foreach ((array) ($json[0] ?? []) as $seg) {
+                $text .= (string) ($seg[0] ?? '');
+            }
+            $text = trim($text);
+            if ($text !== '') {
+                $out[$k] = $text;
+            }
+        }
+        if ($texts && $failed === count($texts)) {
+            // كل الطلبات فشلت (حجب/مهلة): نوقف المترجم الآلي 5 دقايق ونرجع للـ LLM بدل ما كل دفعة تستنى.
+            Cache::put('subtitle_mt_down', 1, 300);
+        }
+        return $out;
     }
 
     /**
