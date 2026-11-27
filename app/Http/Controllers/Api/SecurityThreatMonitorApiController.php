@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Services\SecurityThreatMonitorService;
+use App\Services\SecurityUserWarningService;
 use Illuminate\Http\Request;
 
 /**
@@ -14,6 +15,8 @@ use Illuminate\Http\Request;
  *   GET /security/threats/feed?since=<epoch>&limit=&kinds=&min_severity=&ip=  — تدفّق الأحداث (polling)
  *   GET /security/threats/geo-resolve                   — حلّ موقع (مدينة + إحداثيات) كام IP ناقصين (ميزانية صغيرة + cooldown)
  *   GET /security/threats/ip?ip=1.2.3.4                 — تفاصيل عنوان واحد: موقع مدمج من عدة مزوّدين + ISP + نوع الاتصال + الجهاز
+ *                                                         + الحسابات المسجّلة اللي دخلت من العنوان (accounts) والحسابات المستهدفة بمحاولات فاشلة (targeted)
+ *   POST /security/threats/warn-user {user_id, preset, note?, ip?} — تحذير مستخدم مسجّل (إشعار فقط، staff)
  */
 class SecurityThreatMonitorApiController extends Controller
 {
@@ -83,6 +86,27 @@ class SecurityThreatMonitorApiController extends Controller
         } catch (\InvalidArgumentException $e) {
             return $this->apiError($e->getMessage(), null, 422);
         }
+    }
+
+    public function warnUser(Request $request, SecurityUserWarningService $warnings)
+    {
+        if (!$this->isStaff($request)) {
+            return $this->apiError('Only Security Portal staff can warn users.', null, 403);
+        }
+        $ip = trim((string) $request->input('ip', ''));
+        $res = $warnings->warn(
+            (int) $request->input('user_id', 0),
+            (int) $request->attributes->get('uip_user_id'),
+            (string) $request->input('preset', 'custom'),
+            (string) $request->input('note', ''),
+            filter_var($ip, FILTER_VALIDATE_IP) ? $ip : null,
+            $request->ip()
+        );
+        if (!$res['ok']) {
+            return $this->apiError($res['error'], null, $res['status']);
+        }
+
+        return $this->apiSuccess($res['user'], 'Warning sent.');
     }
 
     private function isStaff(Request $request): bool

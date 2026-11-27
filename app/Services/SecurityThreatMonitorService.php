@@ -780,7 +780,177 @@ class SecurityThreatMonitorService
             'device'  => $ua[$ip] ?? null,
             'blocked' => $this->isBlocked($ip, $this->activeBlocks()),
             'last_24h' => ['events' => $events, 'last_ts' => $lastTs, 'kinds' => $kinds],
-        ];
+        ] + $this->accountsForIp($ip);
+    }
+
+    /** مدة اعتبار الجلسة "متصل الآن" (آخر نشاط). */
+    private const ONLINE_MINUTES = 15;
+    /** نافذة البحث عن حسابات دخلت من العنوان ده. */
+    private const ACCOUNT_DAYS = 30;
+
+    /**
+     * هل العنوان ده تابع لمستخدم مسجّل في المنصة؟ بنربطه بالحسابات اللي *دخلت فعلًا* منه (جلسات user_sessions، دخول ناجح في
+     * login_events / security_detection_events، آخر IP دخول في users) — مش أي حدث على العنوان (محاولات الدخول الفاشلة مش بتتحسب
+     * هنا، لأن المهاجم ممكن يجرّب إيميل شخص حقيقي). محاولات الفشل بترجع منفصلة في `targeted` عشان المحقق يشوف مين اتستهدف.
+     *
+     * @return array{accounts:array<int,array<string,mixed>>,accounts_total:int,is_member:bool,targeted:array<int,array<string,mixed>>}
+     */
+    private function accountsForIp(string $ip): array
+    {
+        $out = ['accounts' => [], 'accounts_total' => 0, 'is_member' => false, 'targeted' => []];
+        if (!$this->has('users')) {
+            return $out;
+        }
+        try {
+            $since = now()->subDays(self::ACCOUNT_DAYS);
+            $onlineCut = now()->subMinutes(self::ONLINE_MINUTES);
+            /** @var array<int,array{sources:array<int,string>,last_ts:int,logins:int,active_here:bool,online_here:bool}> $rel */
+            $rel = [];
+            $touch = function (int $uid, string $src, $when = null, int $n = 0) use (&$rel) {
+                if ($uid <= 0) {
+                    return;
+                }
+                $rel[$uid] ??= ['sources' => [], 'last_ts' => 0, 'logins' => 0, 'active_here' => false, 'online_here' => false];
+                if (!in_array($src, $rel[$uid]['sources'], true)) {
+                    $rel[$uid]['sources'][] = $src;
+                }
+                $ts = $when ? (int) strtotime((string) $when) : 0;
+                $rel[$uid]['last_ts'] = max($rel[$uid]['last_ts'], $ts);
+                $rel[$uid]['logins'] = max($rel[$uid]['logins'], $n);
+            };
+
+            // 1) جلسات على العنوان (نشطة أو حديثة)
+            if ($this->has('user_sessions')) {
+                $rows = DB::table('user_sessions')->where('ip_address', $ip)
+                    ->where(fn ($w) => $w->where('is_active', 1)->orWhere('created_at', '>=', $since))
+                    ->orderByDesc('id')->limit(300)->get(['user_id', 'is_active', 'expires_at', 'last_activity_at', 'created_at']);
+                foreach ($rows as $r) {
+                    $uid = (int) $r->user_id;
+                    $touch($uid, 'session', $r->last_activity_at ?: $r->created_at);
+                    $live = (int) $r->is_active === 1 && (!$r->expires_at || strtotime((string) $r->expires_at) > time());
+                    if ($live) {
+                        $rel[$uid]['active_here'] = true;
+                        if ($r->last_activity_at && strtotime((string) $r->last_activity_at) >= $onlineCut->getTimestamp()) {
+                            $rel[$uid]['online_here'] = true;
+                        }
+                    }
+                }
+            }
+
+            // 2) دخول ناجح مسجّل
+            if ($this->has('login_events')) {
+                $rows = DB::table('login_events')->where('ip_address', $ip)->where('success', 1)->whereNotNull('user_id')
+                    ->where('created_at', '>=', $since)->groupBy('user_id')
+                    ->selectRaw('user_id, COUNT(*) AS n, MAX(created_at) AS last_at')->limit(200)->get();
+                foreach ($rows as $r) {
+                    $touch((int) $r->user_id, 'login', $r->last_at, (int) $r->n);
+                }
+            }
+            if ($this->has('security_detection_events')) {
+                $rows = DB::table('security_detection_events')->where('ip_address', $ip)->where('event_type', 'login_success')
+                    ->whereNotNull('user_id')->where('created_at', '>=', $since)->groupBy('user_id')
+                    ->selectRaw('user_id, COUNT(*) AS n, MAX(created_at) AS last_at')->limit(200)->get();
+                foreach ($rows as $r) {
+                    $touch((int) $r->user_id, 'login', $r->last_at, (int) $r->n);
+                }
+            }
+
+            // 3) آخر IP دخول مخزّن على المستخدم نفسه
+            foreach (DB::table('users')->where('last_login_ip', $ip)->whereNull('deleted_at')->limit(100)->get(['id', 'last_login_at']) as $r) {
+                $touch((int) $r->id, 'last_login', $r->last_login_at);
+            }
+
+            // 4) محاولات دخول فاشلة من العنوان — الحسابات المستهدفة (مش حسابات تابعة للعنوان)
+            if ($this->has('security_detection_events')) {
+                $rows = DB::table('security_detection_events')->where('ip_address', $ip)->where('event_type', 'failed_login')
+                    ->where('created_at', '>=', now()->subDays(7))->groupBy('identifier', 'user_id')
+                    ->selectRaw('identifier, user_id, COUNT(*) AS n, MAX(created_at) AS last_at')
+                    ->orderByDesc('n')->limit(8)->get();
+                $emails = array_values(array_filter(array_map(fn ($r) => $r->user_id ? null : $r->identifier, $rows->all())));
+                $byEmail = $emails ? DB::table('users')->whereIn('email', $emails)->whereNull('deleted_at')->pluck('id', 'email')->all() : [];
+                $targetIds = array_values(array_filter(array_map(fn ($r) => (int) ($r->user_id ?: ($byEmail[$r->identifier] ?? 0)), $rows->all())));
+                $names = $targetIds ? DB::table('users')->whereIn('id', $targetIds)->pluck('full_name', 'id')->all() : [];
+                foreach ($rows as $r) {
+                    $uid = (int) ($r->user_id ?: ($byEmail[$r->identifier] ?? 0));
+                    $out['targeted'][] = [
+                        'identifier' => $r->identifier,
+                        'user_id'    => $uid ?: null,
+                        'full_name'  => $uid ? ($names[$uid] ?? null) : null,
+                        'attempts'   => (int) $r->n,
+                        'last_ts'    => $r->last_at ? (int) strtotime((string) $r->last_at) : null,
+                    ];
+                }
+            }
+
+            if (!$rel) {
+                return $out;
+            }
+
+            // الترتيب: متصل الآن من العنوان > جلسة نشطة > الأحدث
+            uasort($rel, fn ($a, $b) => [$b['online_here'], $b['active_here'], $b['last_ts']] <=> [$a['online_here'], $a['active_here'], $a['last_ts']]);
+            $out['accounts_total'] = count($rel);
+            $ids = array_slice(array_keys($rel), 0, 10);
+
+            $cols = ['id', 'uuid', 'full_name', 'email', 'status', 'avatar_path', 'last_login_at', 'last_login_ip', 'lock_permanent', 'locked_until', 'two_factor_enabled'];
+            if ($this->hasCol('users', 'username')) {
+                $cols[] = 'username';
+            }
+            $users = DB::table('users')->whereIn('id', $ids)->whereNull('deleted_at')->get($cols)->keyBy('id');
+
+            $roleRows = DB::table('user_roles as ur')->join('roles as r', 'r.id', '=', 'ur.role_id')->whereIn('ur.user_id', $ids)
+                ->orderBy('ur.assigned_at')->get(['ur.user_id', 'r.slug', 'r.name_en', 'r.name_ar']);
+            $roles = [];
+            foreach ($roleRows as $r) {
+                $roles[(int) $r->user_id][] = ['slug' => $r->slug, 'name_en' => $r->name_en, 'name_ar' => $r->name_ar];
+            }
+
+            // متصل الآن (من أي عنوان) + عدد الجلسات النشطة
+            $live = [];
+            if ($this->has('user_sessions')) {
+                $rows = DB::table('user_sessions')->whereIn('user_id', $ids)->where('is_active', 1)
+                    ->where(fn ($w) => $w->whereNull('expires_at')->orWhere('expires_at', '>', now()))
+                    ->groupBy('user_id')->selectRaw('user_id, COUNT(*) AS n, MAX(last_activity_at) AS last_at')->get();
+                foreach ($rows as $r) {
+                    $live[(int) $r->user_id] = ['sessions' => (int) $r->n, 'last_at' => $r->last_at ? (int) strtotime((string) $r->last_at) : 0];
+                }
+            }
+
+            foreach ($ids as $id) {
+                $u = $users->get($id);
+                if (!$u) {
+                    continue;
+                }
+                $myRoles = $roles[$id] ?? [];
+                $lv = $live[$id] ?? null;
+                $out['accounts'][] = [
+                    'id'            => (int) $u->id,
+                    'uuid'          => $u->uuid,
+                    'full_name'     => $u->full_name,
+                    'username'      => $u->username ?? null,
+                    'email'         => $u->email,
+                    'avatar_path'   => $u->avatar_path,
+                    'status'        => $u->status,
+                    'locked'        => (bool) $u->lock_permanent || ($u->locked_until && strtotime((string) $u->locked_until) > time()),
+                    'mfa'           => (bool) $u->two_factor_enabled,
+                    'role_slug'     => $myRoles[0]['slug'] ?? null,
+                    'roles'         => $myRoles,
+                    'sources'       => $rel[$id]['sources'],
+                    'logins'        => $rel[$id]['logins'],
+                    'seen_ts'       => $rel[$id]['last_ts'] ?: null,
+                    'active_here'   => $rel[$id]['active_here'],
+                    'online_here'   => $rel[$id]['online_here'],
+                    'online_now'    => $lv && $lv['last_at'] >= $onlineCut->getTimestamp(),
+                    'sessions'      => $lv['sessions'] ?? 0,
+                    'last_login_ts' => $u->last_login_at ? (int) strtotime((string) $u->last_login_at) : null,
+                    'last_login_ip' => $u->last_login_ip,
+                ];
+            }
+            $out['is_member'] = $out['accounts'] !== [];
+        } catch (\Throwable) {
+            // الربط بالحسابات إضافة — أي مشكلة فيه مبتكسرش تفاصيل العنوان.
+        }
+
+        return $out;
     }
 
     private function has(string $table): bool

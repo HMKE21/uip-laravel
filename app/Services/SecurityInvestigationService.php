@@ -45,10 +45,19 @@ class SecurityInvestigationService
             return [];
         }
         $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q) . '%';
+        $isIp = filter_var($q, FILTER_VALIDATE_IP) !== false;
 
         $rows = DB::table('users as u')
-            ->where(function ($w) use ($like, $q) {
+            ->where(function ($w) use ($like, $q, $isIp) {
                 $w->where('u.full_name', 'like', $like)->orWhere('u.email', 'like', $like);
+                // بحث بعنوان IP: الحسابات اللي دخلت منه فعلًا (آخر IP دخول / جلسة / دخول ناجح) — من شاشة Live Threat Monitor.
+                if ($isIp) {
+                    $w->orWhere('u.last_login_ip', $q)
+                        ->orWhereIn('u.id', DB::table('user_sessions')->select('user_id')->where('ip_address', $q));
+                    if (Schema::hasTable('login_events')) {
+                        $w->orWhereIn('u.id', DB::table('login_events')->select('user_id')->where('ip_address', $q)->where('success', 1)->whereNotNull('user_id'));
+                    }
+                }
                 if (ctype_digit($q)) {
                     $w->orWhere('u.id', (int) $q);
                 }
