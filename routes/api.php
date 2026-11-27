@@ -2845,6 +2845,14 @@ Route::prefix('v1')->group(function () {
             Route::patch('/settings', [SecurityDetectionApiController::class, 'updateSettings']);
         });
 
+        // بند 9 — Live Threat Monitor: تدفّق أحداث مباشر + اتجاهات + توزيع جغرافي. قراءة بس لأي موظف أمن
+        // (notifications.manage أو policies.manage) — الحظر من الشاشة بيروح لـ /network/blocks (policies.manage بس).
+        Route::prefix('threats')->middleware('uip.can:security.notifications.manage,security.policies.manage')->group(function () {
+            Route::get('/summary', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'summary'])->middleware('throttle:60,1');
+            Route::get('/feed', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'feed'])->middleware('throttle:180,1');
+            Route::get('/geo-resolve', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'geoResolve'])->middleware('throttle:20,1');
+        });
+
         // بند 4 — Network Control: حظر IP/CIDR بمدة + استيراد جماعي، قائمة الموثوقين، قواعد حد المعدل. القراءة: أي موظف أمن،
         // الكتابة: policies.manage بس (security_admin/admin) — نفس منطق Detection/Policies.
         Route::prefix('network')->middleware(['uip.can:security.notifications.manage,security.policies.manage', 'uip.can:write:security.policies.manage'])->group(function () {
