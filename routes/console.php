@@ -140,3 +140,6 @@ Schedule::command('tenant:domains-check')->everyMinute()->withoutOverlapping();
 
 // مسح نسخ الملفات المحجوبة (حجر Content Safety) الأقدم من CONTENT_SAFETY_QUARANTINE_DAYS.
 Schedule::call(fn () => app(\App\Services\ContentSafetyService::class)->purgeQuarantine())->name('content-safety:purge-quarantine')->daily();
+
+// Network control (بند 4): تنضيف الحظر المنتهي وإدخالات الموثوقين المنتهية (الفحص نفسه بيتجاهل المنتهي حتى لو الأمر ده ما اشتغلش).
+Schedule::call(fn () => app(\App\Repositories\BlockedIpRepository::class)->purgeExpired())->name('network:purge-expired')->hourly()->withoutOverlapping();

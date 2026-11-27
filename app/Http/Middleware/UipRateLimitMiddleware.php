@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Services\ApiRateLimitPolicyService;
+use App\Services\NetworkControlService;
 use App\Services\UipJwtService;
 use Closure;
 use Illuminate\Http\Request;
@@ -27,7 +28,8 @@ use Symfony\Component\HttpFoundation\Response;
 class UipRateLimitMiddleware
 {
     public function __construct(
-        private ApiRateLimitPolicyService $rateLimitPolicy
+        private ApiRateLimitPolicyService $rateLimitPolicy,
+        private NetworkControlService $network
     ) {
     }
 
@@ -39,6 +41,11 @@ class UipRateLimitMiddleware
         // ياخد 429 ويتأخر حفظ إجاباته. لسه فيه سقف (مش مفتوح) ضد أي إساءة استخدام.
         // السياسة متوقفة من Security > Policies => مفيش حد خالص (قبل كده كان بيرجع لـ 60 من الـ config).
         if ($this->policyDisabled()) {
+            return $next($request);
+        }
+
+        // عناوين موثوقة (Security > Network control): مفيش حد معدل عليها (شبكة جامعة/NAT مشترك).
+        if ($this->network->isTrusted((string) $request->ip())) {
             return $next($request);
         }
 

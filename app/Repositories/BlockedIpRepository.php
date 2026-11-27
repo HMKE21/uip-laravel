@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Models\BlockedIp;
+use App\Services\NetworkControlService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
@@ -47,21 +48,57 @@ class BlockedIpRepository
     {
         try {
             Cache::forget(self::cacheKey($ip));
+            if (NetworkControlService::isCidr($ip)) {
+                Cache::forget('netctl:cidrblocks:' . \App\Services\Tenancy\TenantContext::ns());
+            }
         } catch (\Throwable) {
         }
     }
 
-    /** يحترم الانتهاء. */
+    /** يحترم الانتهاء + النطاقات (CIDR) + قائمة الموثوقين (لا تُحظر أبدًا). */
     public function isBlocked(string $ip): bool
     {
         if ($ip === '') {
+            return false;
+        }
+        if (app(NetworkControlService::class)->isTrusted($ip)) {
             return false;
         }
         $q = BlockedIp::where('ip_address', $ip);
         if ($this->hasExpiryColumn()) {
             $q = $this->active($q);
         }
-        return $q->exists();
+        if ($q->exists()) {
+            return true;
+        }
+        foreach ($this->activeCidrs() as $cidr) {
+            if (NetworkControlService::matches($ip, $cidr)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** @return string[] نطاقات CIDR المحظورة النشطة (كاش 30 ثانية). */
+    private function activeCidrs(): array
+    {
+        try {
+            return Cache::remember('netctl:cidrblocks:' . \App\Services\Tenancy\TenantContext::ns(), self::CACHE_TTL, function () {
+                $q = BlockedIp::where('ip_address', 'like', '%/%');
+                if ($this->hasExpiryColumn()) {
+                    $q = $this->active($q);
+                }
+                return $q->pluck('ip_address')->all();
+            });
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /** الـ IP (مش CIDR) موثوق؟ — بنرفض حظره من أي مصدر. */
+    private function isTrustedEntry(string $ip): bool
+    {
+        return !NetworkControlService::isCidr($ip) && app(NetworkControlService::class)->isTrusted($ip);
     }
 
     /** نسخة بكاش قصير (30 ثانية) للـ middleware. الحظر/الفك بيمسحوا الكاش فيسري فورًا. */
@@ -80,7 +117,7 @@ class BlockedIpRepository
     /** منقولة من BlockedIpRepository::block() القديمة (حظر يدوي، دائم). */
     public function block(string $ip, ?string $reason, $adminId): bool
     {
-        if ($ip === '' || $this->isBlocked($ip)) {
+        if ($ip === '' || $this->isTrustedEntry($ip) || $this->isBlocked($ip)) {
             return false;
         }
         // صف منتهي لسه موجود (unique على ip_address): نمسحه الأول.
@@ -97,7 +134,7 @@ class BlockedIpRepository
     /** حظر يدوي مؤقت (من مركز التحقيق). $expires = null => دائم. */
     public function blockTimed(string $ip, ?string $reason, $adminId, $expires): bool
     {
-        if ($ip === '' || $this->isBlocked($ip)) {
+        if ($ip === '' || $this->isTrustedEntry($ip) || $this->isBlocked($ip)) {
             return false;
         }
         BlockedIp::where('ip_address', $ip)->delete();
@@ -127,7 +164,7 @@ class BlockedIpRepository
     /** حظر تلقائي من قاعدة كشف. $expires = null => دائم. */
     public function blockAuto(string $ip, string $reason, int $ruleId, $expires): bool
     {
-        if ($ip === '' || $this->isBlocked($ip)) {
+        if ($ip === '' || $this->isTrustedEntry($ip) || $this->isBlocked($ip)) {
             return false;
         }
         BlockedIp::where('ip_address', $ip)->delete();
@@ -144,6 +181,34 @@ class BlockedIpRepository
         $row->save();
         self::forget($ip);
         return true;
+    }
+
+    /**
+     * حظر من الصفحة اليدوية / الاستيراد الجماعي / حد المعدل. يقبل IP أو CIDR.
+     * @param string $source manual | import | rate
+     * @return string 'added' | 'exists' | 'trusted'
+     */
+    public function blockEntry(string $entry, ?string $reason, $adminId, $expires, string $source = 'manual'): string
+    {
+        if ($this->isTrustedEntry($entry)) {
+            return 'trusted';
+        }
+        $existing = BlockedIp::where('ip_address', $entry)->first();
+        if ($existing) {
+            $stillActive = !$this->hasExpiryColumn() || $existing->expires_at === null || $existing->expires_at->isFuture();
+            if ($stillActive) {
+                return 'exists';
+            }
+            $existing->delete();
+        }
+        $row = new BlockedIp(['ip_address' => $entry, 'reason' => $reason !== null ? mb_substr($reason, 0, 255) : null, 'blocked_by' => $adminId]);
+        if ($this->hasExpiryColumn()) {
+            $row->setAttribute('expires_at', $expires);
+            $row->setAttribute('source', $source);
+        }
+        $row->save();
+        self::forget($entry);
+        return 'added';
     }
 
     /** @return array<int,array<string,mixed>> الحظر النشط بس (المنتهي مش بيظهر). */
@@ -195,6 +260,14 @@ class BlockedIpRepository
         if (!$this->hasExpiryColumn()) {
             return 0;
         }
-        return (int) DB::table('blocked_ips')->whereNotNull('expires_at')->where('expires_at', '<=', now())->delete();
+        $n = (int) DB::table('blocked_ips')->whereNotNull('expires_at')->where('expires_at', '<=', now())->delete();
+        try {
+            if (\Illuminate\Support\Facades\Schema::hasTable('network_trusted_ips')) {
+                $n += (int) DB::table('network_trusted_ips')->whereNotNull('expires_at')->where('expires_at', '<=', now())->delete();
+            }
+        } catch (\Throwable) {
+        }
+        NetworkControlService::forgetCaches();
+        return $n;
     }
 }

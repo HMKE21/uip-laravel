@@ -2842,6 +2842,21 @@ Route::prefix('v1')->group(function () {
             Route::patch('/settings', [SecurityDetectionApiController::class, 'updateSettings']);
         });
 
+        // بند 4 — Network Control: حظر IP/CIDR بمدة + استيراد جماعي، قائمة الموثوقين، قواعد حد المعدل. القراءة: أي موظف أمن،
+        // الكتابة: policies.manage بس (security_admin/admin) — نفس منطق Detection/Policies.
+        Route::prefix('network')->middleware(['uip.can:security.notifications.manage,security.policies.manage', 'uip.can:write:security.policies.manage'])->group(function () {
+            Route::get('/overview', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'overview']);
+            Route::get('/blocks/export', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'exportBlocks']);
+            Route::post('/blocks', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'block'])->middleware('throttle:60,1');
+            Route::post('/blocks/import', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'importBlocks'])->middleware('throttle:20,1');
+            Route::delete('/blocks/{id}', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'unblock'])->where('id', '[0-9]+');
+            Route::post('/trusted', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'addTrusted'])->middleware('throttle:60,1');
+            Route::delete('/trusted/{id}', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'removeTrusted'])->where('id', '[0-9]+');
+            Route::post('/rate-rules', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'storeRule'])->middleware('throttle:60,1');
+            Route::patch('/rate-rules/{id}', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'updateRule'])->where('id', '[0-9]+');
+            Route::delete('/rate-rules/{id}', [\App\Http\Controllers\Api\SecurityNetworkApiController::class, 'destroyRule'])->where('id', '[0-9]+');
+        });
+
         // بند 25 batch 2 — Incidents. مفيش تعارض بين GET /{id} والباقي
         // لاختلاف عدد الأجزاء في المسار (زي faq-intents فوق).
         Route::prefix('incidents')->middleware('uip.can:security.incidents.manage')->group(function () {

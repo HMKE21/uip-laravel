@@ -130,6 +130,8 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\UipDeviceRestrictionMiddleware::class,
             // IP + Country Restrictions على كل الـ API (قبل كده كانوا متخزّنين بس ومش متطبقين).
             \App\Http\Middleware\UipNetworkRestrictionMiddleware::class,
+            // Network control: قواعد حد المعدل لكل مسار (بعد الحظر عشان الـ IP المحظور يتردّ الأول).
+            \App\Http\Middleware\UipNetworkRateRulesMiddleware::class,
             // فحص المحتوى: أي نص/ملف/صورة غير لائق أو مخلّ بيتحجب 422 قبل ما يوصل لأي controller (شوف config/content_safety.php).
             \App\Http\Middleware\UipContentSafetyMiddleware::class,
         ]);

@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Repositories\BlockedIpRepository;
 use App\Services\CountryRestrictionPolicyService;
 use App\Services\IpRestrictionPolicyService;
+use App\Services\NetworkControlService;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -25,7 +26,8 @@ class UipNetworkRestrictionMiddleware
     public function __construct(
         private IpRestrictionPolicyService $ipPolicy,
         private CountryRestrictionPolicyService $countryPolicy,
-        private BlockedIpRepository $blockedIps
+        private BlockedIpRepository $blockedIps,
+        private NetworkControlService $network
     ) {
     }
 
@@ -37,6 +39,11 @@ class UipNetworkRestrictionMiddleware
 
         $ip = (string) $request->ip();
         $ar = $request->header('X-Locale', 'en') === 'ar';
+
+        // قائمة الموثوقين (Security > Network control): بتتخطّى سياسة IP والحظر وحظر الدولة بالكامل.
+        if ($this->network->isTrusted($ip)) {
+            return $next($request);
+        }
 
         if (!$this->ipPolicy->isAllowed($ip)) {
             return $this->deny(
