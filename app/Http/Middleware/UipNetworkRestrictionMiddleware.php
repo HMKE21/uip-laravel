@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Repositories\BlockedIpRepository;
 use App\Services\CountryRestrictionPolicyService;
 use App\Services\IpRestrictionPolicyService;
 use Closure;
@@ -23,7 +24,8 @@ class UipNetworkRestrictionMiddleware
 {
     public function __construct(
         private IpRestrictionPolicyService $ipPolicy,
-        private CountryRestrictionPolicyService $countryPolicy
+        private CountryRestrictionPolicyService $countryPolicy,
+        private BlockedIpRepository $blockedIps
     ) {
     }
 
@@ -42,6 +44,19 @@ class UipNetworkRestrictionMiddleware
                 'ip_blocked',
                 ['ip_blocked' => true]
             );
+        }
+
+        // blocked_ips (حظر يدوي من الأدمن + الحظر التلقائي من قواعد الكشف، بانتهاء) — قبل كده الجدول مكانش بيتطبّق.
+        try {
+            if ($this->blockedIps->isBlockedCached($ip)) {
+                return $this->deny(
+                    $ar ? 'تم حظر عنوان الـ IP ده مؤقتًا بسبب نشاط مشبوه.' : 'This IP address is blocked because of suspicious activity.',
+                    'ip_blocked',
+                    ['ip_blocked' => true]
+                );
+            }
+        } catch (\Throwable $e) {
+            // جدول مش موجود/DB واقعة: مبنوقفش الطلب.
         }
 
         $country = $this->countryPolicy->evaluate($ip);

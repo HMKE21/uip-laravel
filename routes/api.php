@@ -107,6 +107,7 @@ use App\Http\Controllers\Api\FaqIntentController;
 use App\Http\Controllers\Api\SecurityDashboardApiController;
 use App\Http\Controllers\Api\SecuritySessionsApiController;
 use App\Http\Controllers\Api\SecurityAlertsApiController;
+use App\Http\Controllers\Api\SecurityDetectionApiController;
 use App\Http\Controllers\Api\SecurityLogsApiController;
 use App\Http\Controllers\Api\SecurityReportsApiController;
 use App\Http\Controllers\Api\SecurityReportFilesApiController;
@@ -2811,6 +2812,21 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/resolve', [SecurityAlertsApiController::class, 'resolve']);
             Route::post('/{id}/escalate', [SecurityAlertsApiController::class, 'escalate']);
             Route::patch('/{id}/assign', [SecurityAlertsApiController::class, 'assign']);
+        });
+
+        // بند 1 — Threat Detection Rules. القراءة: أي موظف أمن (notifications.manage أو policies.manage)،
+        // الكتابة: policies.manage بس (security_admin/admin) — نفس منطق Policies.
+        Route::prefix('detection')->middleware(['uip.can:security.notifications.manage,security.policies.manage', 'uip.can:write:security.policies.manage'])->group(function () {
+            Route::get('/rules', [SecurityDetectionApiController::class, 'index']);
+            Route::post('/rules', [SecurityDetectionApiController::class, 'store']);
+            Route::post('/preview', [SecurityDetectionApiController::class, 'preview']);
+            Route::patch('/rules/{id}', [SecurityDetectionApiController::class, 'update'])->where('id', '[0-9]+');
+            Route::delete('/rules/{id}', [SecurityDetectionApiController::class, 'destroy'])->where('id', '[0-9]+');
+            Route::get('/hits', [SecurityDetectionApiController::class, 'hits']);
+            Route::get('/blocks', [SecurityDetectionApiController::class, 'blocks']);
+            Route::post('/blocks/{id}/unblock', [SecurityDetectionApiController::class, 'unblock'])->where('id', '[0-9]+');
+            Route::get('/settings', [SecurityDetectionApiController::class, 'settings']);
+            Route::patch('/settings', [SecurityDetectionApiController::class, 'updateSettings']);
         });
 
         // بند 25 batch 2 — Incidents. مفيش تعارض بين GET /{id} والباقي

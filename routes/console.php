@@ -125,6 +125,8 @@ Schedule::command('tenants:run', ['calls:prune', '--feature=messaging'])->dailyA
 Schedule::command('tenants:run', ['posts:publish-due', '--feature=feed'])->everyMinute()->withoutOverlapping();
 Schedule::command('tenants:run', ['posts:prune', '--feature=feed'])->dailyAt('04:45')->withoutOverlapping();
 Schedule::command('tenants:run', ['activity:prune'])->dailyAt('04:30')->withoutOverlapping();
+// Threat Detection: تنضيف أحداث الكشف القديمة + فك الحظر التلقائي المنتهي.
+Schedule::command('tenants:run', ['security:detection-prune'])->hourly()->withoutOverlapping();
 Schedule::command('tenants:run', ['mail:process', '--feature=mail'])->everyMinute()->withoutOverlapping();
 Schedule::command('tenants:run', ['mail:process --purge', '--feature=mail'])->dailyAt('04:10')->withoutOverlapping();
 Schedule::command('tenants:run', ['mail:identity-sync --provision', '--feature=mail'])->everyTenMinutes()->withoutOverlapping();

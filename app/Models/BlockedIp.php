@@ -11,5 +11,7 @@ class BlockedIp extends Model
 
     protected $table = 'blocked_ips';
 
-    protected $fillable = ['ip_address', 'reason', 'blocked_by'];
+    protected $fillable = ['ip_address', 'reason', 'blocked_by', 'expires_at', 'source', 'rule_id'];
+
+    protected $casts = ['expires_at' => 'datetime'];
 }

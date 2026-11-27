@@ -94,6 +94,13 @@ class SecurityAlertService
             ['email' => $email]
         );
 
+        // بند 1: محرك القواعد (thresholds قابلة للضبط + حظر تلقائي). لو مفيش قاعدة مفعّلة/الجداول مش موجودة نرجع للمنطق القديم.
+        $engine = app(SecurityDetectionService::class);
+        $engine->record('failed_login', ['ip' => $ip, 'user_id' => $userId, 'identifier' => $email]);
+        if ($engine->handles('failed_login_ip')) {
+            return;
+        }
+
         if (!$ip) {
             return;
         }
@@ -128,8 +135,12 @@ class SecurityAlertService
     }
 
     /** بعد فتح جلسة جديدة: جلسات كتير أو دخول من دولة جديدة. */
-    public function newSession(int $userId, string $email, ?string $ip, ?string $location, ?int $sessionId): void
+    public function newSession(int $userId, string $email, ?string $ip, ?string $location, ?int $sessionId, ?string $deviceHash = null): void
     {
+        // بند 1: دولة/جهاز جديد بتتحكم فيهم قواعد الكشف (new_country / new_device).
+        $engine = app(SecurityDetectionService::class);
+        $engine->record('login_success', ['user_id' => $userId, 'ip' => $ip, 'identifier' => $email, 'country' => $location, 'device_hash' => $deviceHash]);
+
         $active = DB::table('user_sessions')->where('user_id', $userId)->where('is_active', 1);
         $count = (clone $active)->count();
         $ips = (clone $active)->whereNotNull('ip_address')->distinct()->pluck('ip_address')->all();
@@ -158,7 +169,7 @@ class SecurityAlertService
             // نفضل على الافتراضي (شغال)
         }
 
-        if ($location && $alertOnNew) {
+        if ($location && $alertOnNew && !$engine->handles('new_country')) {
             $seen = DB::table('user_sessions')
                 ->where('user_id', $userId)
                 ->when($sessionId, fn ($q) => $q->where('id', '!=', $sessionId))
@@ -184,6 +195,12 @@ class SecurityAlertService
     /** منح صلاحيات إدارية/أمنية لمستخدم موجود. */
     public function privilegeGranted(int $userId, string $roleSlug, ?int $actorId = null): void
     {
+        $engine = app(SecurityDetectionService::class);
+        if ($engine->handles('privilege_escalation')) {
+            $engine->record('role_granted', ['user_id' => $userId, 'ip' => request()?->ip(), 'meta' => ['role' => $roleSlug, 'granted_by' => $actorId]]);
+            return;
+        }
+
         $elevated = ['admin', 'security_admin', 'security_officer'];
         if (!in_array($roleSlug, $elevated, true)) {
             return;

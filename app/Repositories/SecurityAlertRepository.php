@@ -23,6 +23,8 @@ class SecurityAlertRepository
         'failed_login', 'account_lockout', 'privilege_escalation',
         'suspicious_login_location', 'brute_force', 'multiple_session_detection',
         'unauthorized_file_access', 'security_policy_violation',
+        // بند 1 — Detection Engine
+        'password_spray', 'account_under_attack', 'mass_download', 'new_device_login',
     ];
 
     public const STATUSES = ['open', 'acknowledged', 'resolved', 'escalated'];

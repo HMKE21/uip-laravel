@@ -74,6 +74,7 @@ class SecurityPolicyRepository
         'ip_restriction.policy'      => ['access_control', 'سياسة تقييد IP',          'IP restriction policy'],
         'country_restriction.policy' => ['access_control', 'سياسة تقييد الدول',       'Country restriction policy'],
         'device_restriction.policy'  => ['access_control', 'سياسة تقييد الأجهزة',     'Device restriction policy'],
+        'detection.settings'         => ['access_control', 'إعدادات محرك الكشف',      'Threat detection settings'],
     ];
 
     public function updateValue(string $key, string $value, $updatedBy): bool

@@ -58,7 +58,7 @@ class SecurityPoliciesApiController extends Controller
         $excludedKeys = [
             'login.lockout_policy', 'password.policy', 'upload.policy', 'session.policy',
             'mfa.policy', 'rate_limit.policy', 'ip_restriction.policy',
-            'country_restriction.policy', 'device_restriction.policy',
+            'country_restriction.policy', 'device_restriction.policy', 'detection.settings',
         ];
         $generic = array_values(array_map(
             function ($p) {

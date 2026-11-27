@@ -99,7 +99,7 @@ class LogDetailSupport
             return [];
         }
         try {
-            return array_fill_keys(BlockedIp::whereIn('ip_address', $ips)->pluck('ip_address')->all(), true);
+            return array_fill_keys(BlockedIp::whereIn('ip_address', $ips)->where(fn ($q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()))->pluck('ip_address')->all(), true);
         } catch (\Throwable $e) {
             return [];
         }

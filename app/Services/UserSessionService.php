@@ -101,7 +101,7 @@ class UserSessionService
 
         try {
             $email = (string) DB::table('users')->where('id', $userId)->value('email');
-            $this->alerts->newSession($userId, $email, $ip, $location, $id);
+            $this->alerts->newSession($userId, $email, $ip, $location, $id, $row['device_hash'] ?? null);
         } catch (\Throwable $e) {
             Log::warning('Session alert check failed: ' . $e->getMessage());
         }

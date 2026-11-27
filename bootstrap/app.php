@@ -137,6 +137,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // INSIDE the response-encryption middleware (the JSON answer is still readable) and writes after the response is sent.
         $middleware->api(append: [
             \App\Http\Middleware\UipActivityLogMiddleware::class,
+            // Threat Detection: يغذّي قاعدة mass_download بأحداث التحميل (مراقبة بس، بعد الرد).
+            \App\Http\Middleware\UipDetectionTapMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
