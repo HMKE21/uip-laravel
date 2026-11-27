@@ -16,6 +16,6 @@ class SecurityIncident extends Model
     protected $fillable = [
         'reference_code', 'title', 'description', 'category', 'severity', 'status',
         'source_ip', 'affected_user_id', 'related_log_ref', 'assigned_to', 'created_by',
-        'detected_at', 'resolved_at',
+        'detected_at', 'resolved_at', 'sla_due_at',
     ];
 }

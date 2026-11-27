@@ -79,6 +79,16 @@ return [
     // تفعيل حساب pending من غير لينك الإيميل (زرار "فعّل حسابي دلوقتي" في صفحة الدخول). always | outage | off
     'email_activation_fallback' => env('EMAIL_ACTIVATION_FALLBACK', 'always'),
 
+    // مهلة SLA للحوادث (بالساعات) حسب الخطورة: من وقت اكتشاف الحادثة لحد حلّها. تتغير من .env بدون deploy للكود.
+    'incident_sla_hours' => [
+        'critical' => (int) env('INCIDENT_SLA_CRITICAL_HOURS', 4),
+        'high'     => (int) env('INCIDENT_SLA_HIGH_HOURS', 24),
+        'medium'   => (int) env('INCIDENT_SLA_MEDIUM_HOURS', 72),
+        'low'      => (int) env('INCIDENT_SLA_LOW_HOURS', 168),
+    ],
+    // لما يعدّي الوقت المستهلك من المهلة النسبة دي والحادثة لسه مفتوحة تبقى "مهددة بالتأخير" (at_risk).
+    'incident_sla_at_risk_ratio' => (float) env('INCIDENT_SLA_AT_RISK_RATIO', 0.75),
+
     'geoip' => [
         'enabled'      => (bool) env('GEOIP_ENABLED', true),
         'provider_url' => env('GEOIP_PROVIDER_URL', 'https://ipapi.co/{ip}/country/'),

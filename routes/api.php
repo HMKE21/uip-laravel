@@ -2851,6 +2851,10 @@ Route::prefix('v1')->group(function () {
             Route::get('/{id}/export', [SecurityIncidentsApiController::class, 'exportReport']);
             Route::patch('/{id}/status', [SecurityIncidentsApiController::class, 'updateStatus']);
             Route::patch('/{id}/assign', [SecurityIncidentsApiController::class, 'assign']);
+            Route::patch('/{id}/severity', [SecurityIncidentsApiController::class, 'updateSeverity']);
+            Route::get('/{id}/lookup', [SecurityIncidentsApiController::class, 'lookup']);
+            Route::post('/{id}/links', [SecurityIncidentsApiController::class, 'addLink']);
+            Route::delete('/{id}/links/{linkId}', [SecurityIncidentsApiController::class, 'removeLink']);
             Route::post('/{id}/comment', [SecurityIncidentsApiController::class, 'comment']);
             Route::post('/{id}/evidence', [SecurityIncidentsApiController::class, 'uploadEvidence']);
             Route::get('/{id}/evidence/{evidenceId}/download', [SecurityIncidentsApiController::class, 'downloadEvidence']);

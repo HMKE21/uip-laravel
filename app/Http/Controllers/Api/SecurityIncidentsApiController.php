@@ -10,6 +10,7 @@ use App\Repositories\UserRepository;
 use App\Services\AuditLogService;
 use App\Services\FileUploadService;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 /**
  * منقولة من app/Controllers/Api/SecurityIncidentsApiController.php
@@ -54,7 +55,23 @@ class SecurityIncidentsApiController extends Controller
         $severity = $request->input('severity') ?: null;
 
         $rows = $this->filterBySearch($request, $this->incidents->allWithAssignee(500, $status, $severity), ['title', 'description']);
+
+        // SLA لكل حادثة + فلتر ?sla=breached|at_risk|on_track|met|missed
+        $rows = array_map(function ($r) {
+            $r['sla'] = $this->incidents->slaInfo($r);
+            return $r;
+        }, $rows);
+        $slaFilter = (string) $request->input('sla', '');
+        if ($slaFilter !== '') {
+            $rows = array_values(array_filter($rows, fn ($r) => $r['sla']['state'] === $slaFilter));
+        }
+
         [$page, $perPage, $total, $items] = $this->paginateArray($request, $rows);
+        $counts = $this->incidents->linkCounts(array_map(fn ($r) => (int) $r['id'], $items));
+        $items = array_map(function ($r) use ($counts) {
+            $r['links_count'] = $counts[(int) $r['id']] ?? 0;
+            return $r;
+        }, $items);
 
         return $this->apiSuccess(
             $items,
@@ -80,6 +97,8 @@ class SecurityIncidentsApiController extends Controller
             'incident'  => $incident,
             'timeline'  => $this->incidents->timeline($incident->id),
             'evidence'  => $this->evidence->forIncident($incident->id),
+            'sla'       => $this->incidents->slaInfo($incident),
+            'links'     => $this->incidents->links($incident->id),
             'assignees' => array_merge(
                 $this->users->allWithRoles(['role' => 'security_admin']),
                 $this->users->allWithRoles(['role' => 'security_officer'])
@@ -95,9 +114,9 @@ class SecurityIncidentsApiController extends Controller
         }
 
         $data = $request->validate([
-            'title'    => 'required',
-            'category' => 'required',
-            'severity' => 'required',
+            'title'    => 'required|string|max:200',
+            'category' => ['required', Rule::in(SecurityIncidentRepository::CATEGORIES)],
+            'severity' => ['required', Rule::in(SecurityIncidentRepository::SEVERITIES)],
         ]);
 
         $userId = $request->attributes->get('uip_user_id');
@@ -111,9 +130,25 @@ class SecurityIncidentsApiController extends Controller
             'created_by'  => $userId,
         ]);
 
-        $this->incidents->addEvent($incident->id, $userId, 'created', 'Incident reported.');
+        $sla = $this->incidents->slaInfo($incident);
+        $this->incidents->addEvent($incident->id, $userId, 'created', 'Incident reported. SLA: resolve within ' . $sla['total_hours'] . 'h.');
 
-        return $this->apiSuccess($incident->toArray(), 'Incident created successfully.', 201);
+        // ربط اختياري وقت الإنشاء (مثلًا من صفحة تنبيه): alert_ids[] / user_ids[] / log_refs[]
+        foreach (['alert' => 'alert_ids', 'user' => 'user_ids', 'log' => 'log_refs'] as $type => $field) {
+            foreach ((array) $request->input($field, []) as $ref) {
+                $ref = trim((string) $ref);
+                if ($ref !== '' && $this->incidents->linkTargetExists($type, $ref)) {
+                    $this->incidents->addLink($incident->id, $type, $ref, $userId);
+                    $this->incidents->addEvent($incident->id, $userId, 'link_add', 'Linked ' . $type . ' #' . $ref . '.');
+                }
+            }
+        }
+
+        $this->auditLog->record($userId, 'incident.create', 'security_incident', $incident->id, null, [
+            'reference' => $incident->reference_code, 'severity' => $incident->severity,
+        ], $request->ip());
+
+        return $this->apiSuccess($incident->toArray() + ['sla' => $sla], 'Incident created successfully.', 201);
     }
 
     /** PATCH /api/v1/security/incidents/{id}/status */
@@ -129,8 +164,19 @@ class SecurityIncidentsApiController extends Controller
             return $this->apiError('Invalid status.', ['status' => 'Must be one of open, investigating, contained, resolved, closed.'], 422);
         }
 
+        $incident = $this->incidents->find($id);
+        if (!$incident) {
+            return $this->apiError('Incident not found.', null, 404);
+        }
+
+        $from = $incident->status;
         $this->incidents->updateStatus($id, $status);
-        $this->incidents->addEvent($id, $request->attributes->get('uip_user_id'), 'status_change', 'Status changed to ' . $status . '.');
+        $note = 'Status changed from ' . $from . ' to ' . $status . '.';
+        if ($status === 'resolved' || $status === 'closed') {
+            $sla = $this->incidents->slaInfo($this->incidents->find($id));
+            $note .= $sla['state'] === 'met' ? ' Within SLA.' : ($sla['state'] === 'missed' ? ' SLA was missed.' : '');
+        }
+        $this->incidents->addEvent($id, $request->attributes->get('uip_user_id'), 'status_change', $note);
 
         return $this->apiSuccess(null, 'Incident status updated.');
     }
@@ -166,6 +212,106 @@ class SecurityIncidentsApiController extends Controller
         $this->incidents->addEvent($id, $request->attributes->get('uip_user_id'), 'comment', $note);
 
         return $this->apiSuccess(null, 'Comment added.', 201);
+    }
+
+    /** PATCH /api/v1/security/incidents/{id}/severity — بيعيد حساب الـ SLA من وقت الاكتشاف. */
+    public function updateSeverity(Request $request, $id)
+    {
+        if (!$this->isSecurityStaff($request)) {
+            return $this->apiError('Only Security Portal staff can change an incident\'s severity.', null, 403);
+        }
+
+        $incident = $this->incidents->find($id);
+        if (!$incident) {
+            return $this->apiError('Incident not found.', null, 404);
+        }
+
+        $severity = (string) $request->input('severity', '');
+        if (!in_array($severity, SecurityIncidentRepository::SEVERITIES, true)) {
+            return $this->apiError('Invalid severity.', ['severity' => 'Must be one of low, medium, high, critical.'], 422);
+        }
+        if ($severity === $incident->severity) {
+            return $this->apiSuccess(['sla' => $this->incidents->slaInfo($incident)], 'Severity unchanged.');
+        }
+
+        $userId = $request->attributes->get('uip_user_id');
+        $old = $incident->severity;
+        $this->incidents->updateSeverity($id, $severity);
+        $fresh = $this->incidents->find($id);
+        $sla = $this->incidents->slaInfo($fresh);
+        $this->incidents->addEvent($id, $userId, 'severity_change', 'Severity changed from ' . $old . ' to ' . $severity . '. New SLA: ' . $sla['total_hours'] . 'h from detection.');
+        $this->auditLog->record($userId, 'incident.severity', 'security_incident', $id, ['severity' => $old], ['severity' => $severity], $request->ip());
+
+        return $this->apiSuccess(['sla' => $sla], 'Incident severity updated.');
+    }
+
+    /** GET /api/v1/security/incidents/{id}/lookup?type=alert|user|log&q= — بحث لاختيار عنصر يتربط. */
+    public function lookup(Request $request, $id)
+    {
+        if (!$this->isSecurityStaff($request)) {
+            return $this->apiError('Only Security Portal staff can search linkable items.', null, 403);
+        }
+        if (!$this->incidents->find($id)) {
+            return $this->apiError('Incident not found.', null, 404);
+        }
+
+        $type = (string) $request->input('type', '');
+        if (!in_array($type, SecurityIncidentRepository::LINK_TYPES, true)) {
+            return $this->apiError('Invalid type.', ['type' => 'Must be one of alert, log, user.'], 422);
+        }
+
+        return $this->apiSuccess($this->incidents->lookup($type, (string) $request->input('q', ''), $id), 'Items retrieved successfully.');
+    }
+
+    /** POST /api/v1/security/incidents/{id}/links  { type, ref, note? } */
+    public function addLink(Request $request, $id)
+    {
+        if (!$this->isSecurityStaff($request)) {
+            return $this->apiError('Only Security Portal staff can link items to an incident.', null, 403);
+        }
+        if (!$this->incidents->find($id)) {
+            return $this->apiError('Incident not found.', null, 404);
+        }
+
+        $type = (string) $request->input('type', '');
+        $ref = trim((string) $request->input('ref', ''));
+        if (!in_array($type, SecurityIncidentRepository::LINK_TYPES, true) || $ref === '' || mb_strlen($ref) > 64) {
+            return $this->apiError('Invalid link.', ['type' => 'alert, log or user', 'ref' => 'Required (max 64 chars).'], 422);
+        }
+        if (!$this->incidents->linkTargetExists($type, $ref)) {
+            return $this->apiError('The ' . $type . ' you selected does not exist.', ['ref' => 'Not found.'], 422);
+        }
+
+        $userId = $request->attributes->get('uip_user_id');
+        $note = trim((string) $request->input('note', '')) ?: null;
+        $res = $this->incidents->addLink($id, $type, $ref, $userId, $note ? mb_substr($note, 0, 255) : null);
+
+        if ($res['created']) {
+            $this->incidents->addEvent($id, $userId, 'link_add', 'Linked ' . $type . ' #' . $ref . ($note ? ' — ' . $note : '') . '.');
+            $this->auditLog->record($userId, 'incident.link.add', 'security_incident', $id, null, ['type' => $type, 'ref' => $ref], $request->ip());
+        }
+
+        return $this->apiSuccess(['id' => $res['id'], 'created' => $res['created']], $res['created'] ? 'Linked.' : 'Already linked.', $res['created'] ? 201 : 200);
+    }
+
+    /** DELETE /api/v1/security/incidents/{id}/links/{linkId} */
+    public function removeLink(Request $request, $id, $linkId)
+    {
+        if (!$this->isSecurityStaff($request)) {
+            return $this->apiError('Only Security Portal staff can unlink items.', null, 403);
+        }
+
+        $row = $this->incidents->findLink($id, $linkId);
+        if (!$row) {
+            return $this->apiError('Link not found.', null, 404);
+        }
+
+        $userId = $request->attributes->get('uip_user_id');
+        $this->incidents->removeLink($id, $linkId);
+        $this->incidents->addEvent($id, $userId, 'link_remove', 'Unlinked ' . $row->link_type . ' #' . $row->ref . '.');
+        $this->auditLog->record($userId, 'incident.link.remove', 'security_incident', $id, ['type' => $row->link_type, 'ref' => $row->ref], null, $request->ip());
+
+        return $this->apiSuccess(null, 'Unlinked.');
     }
 
     /** POST /api/v1/security/incidents/{id}/evidence — رفع ملف multipart. */
@@ -287,6 +433,9 @@ class SecurityIncidentsApiController extends Controller
         fputcsv($stream, ['Source IP', $incident->source_ip ?: '—']);
         fputcsv($stream, ['Detected At', $incident->detected_at]);
         fputcsv($stream, ['Resolved At', $incident->resolved_at ?: '—']);
+        $slaInfo = $this->incidents->slaInfo($incident);
+        fputcsv($stream, ['SLA Due', $slaInfo['due_at']]);
+        fputcsv($stream, ['SLA State', $slaInfo['state']]);
         fputcsv($stream, ['Description', $incident->description ?: '—']);
         fputcsv($stream, []);
 
@@ -294,6 +443,15 @@ class SecurityIncidentsApiController extends Controller
         fputcsv($stream, ['Time', 'Actor', 'Event', 'Note']);
         foreach ($timeline as $ev) {
             fputcsv($stream, [$ev['created_at'], $ev['actor_name'] ?? 'System', $ev['event_type'], $ev['note'] ?? '']);
+        }
+        fputcsv($stream, []);
+
+        fputcsv($stream, ['Linked Items']);
+        fputcsv($stream, ['Type', 'Reference', 'Details', 'Linked By']);
+        foreach ($this->incidents->links($id) as $ln) {
+            $it = $ln['item'] ?? null;
+            $detail = $it ? ($ln['link_type'] === 'user' ? ($it['full_name'] . ' <' . $it['email'] . '>') : ($it['title'] ?? $it['event_type'] ?? '')) : '';
+            fputcsv($stream, [$ln['link_type'], $ln['ref'], $detail, $ln['created_by_name'] ?? '—']);
         }
         fputcsv($stream, []);
 
