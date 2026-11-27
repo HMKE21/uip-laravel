@@ -107,12 +107,23 @@ class SubtitleService
 
         $translated = false;
         $wantsTranslation = $target !== null && $target !== '' && $target !== 'orig' && isset(self::LANGUAGES[$target]);
-        if ($cues && $wantsTranslation && !$this->sameLanguage($detected, $target)) {
-            if ($this->client->isConfigured()) {
-                [$cues, $translated] = $this->translate($cues, $target);
+        if ($cues && $wantsTranslation) {
+            // Whisper بيحدد لغة واحدة للقطعة كلها (ممكن تكون غلط لو الفيديو مخلوط عربي/إنجليزي) — فالقرار بيتاخد على كل سطر
+            // لوحده: السطر اللي مكتوب أصلاً باللغة المطلوبة بيفضل زي ما هو، وأي سطر غيرها بيتترجم (عربي→إنجليزي والعكس).
+            $differs = !$this->sameLanguage($detected, $target);
+            $todo = [];
+            foreach ($cues as $i => $cue) {
+                if ($this->cueNeedsTranslation((string) $cue['text'], $target, $differs)) {
+                    $todo[] = $i;
+                }
+            }
+            if (!$todo) {
+                $translated = true; // كل السطور أصلاً باللغة المطلوبة
+            } elseif ($this->client->isConfigured()) {
+                [$cues, $translated] = $this->translate($cues, $target, $todo);
             }
         } elseif ($wantsTranslation) {
-            $translated = true; // الكلام أصلاً باللغة المطلوبة
+            $translated = true;
         }
 
         return ['language' => $detected, 'translated' => $translated, 'cues' => $cues];
@@ -122,7 +133,7 @@ class SubtitleService
      * @return array{language:?string, cues:array<int,array{s:float,e:float,text:string}>}
      * @throws \RuntimeException
      */
-    private function transcribe(UploadedFile $audio, ?string $sourceHint): array
+    protected function transcribe(UploadedFile $audio, ?string $sourceHint): array
     {
         $stt = $this->sttConfig();
         if ($stt === null) {
@@ -188,40 +199,70 @@ class SubtitleService
 
     /**
      * @param array<int,array{s:float,e:float,text:string}> $cues
-     * @return array{0:array<int,array{s:float,e:float,text:string}>, 1:bool} [cues, كل الدفعات اتترجمت؟]
+     * @param int[]|null $only أرقام السطور اللي محتاجة ترجمة (null = كلها)
+     * @return array{0:array<int,array{s:float,e:float,text:string}>, 1:bool} [cues, كل السطور المطلوبة اتترجمت؟]
      */
-    private function translate(array $cues, string $target): array
+    private function translate(array $cues, string $target, ?array $only = null): array
     {
         $name = self::LANGUAGES[$target];
         $all  = true;
         $out  = $cues;
-        foreach (array_chunk(array_keys($cues), self::BATCH) as $idxs) {
+        foreach (array_chunk($only ?? array_keys($cues), self::BATCH) as $idxs) {
             $texts = array_map(fn ($i) => $cues[$i]['text'], $idxs);
-            $translated = $this->translateBatch($texts, $name);
-            if ($translated === null) {
-                $all = false; // الدفعة دي بتفضل بلغتها الأصلية بدل ما تضيع.
-                continue;
-            }
+            $translated = $this->translateResilient($texts, $name);
             foreach ($idxs as $k => $i) {
-                $out[$i]['text'] = $translated[$k];
+                if (isset($translated[$k]) && $translated[$k] !== '') {
+                    $out[$i]['text'] = $translated[$k];
+                } else {
+                    $all = false; // السطر ده بيفضل بلغته الأصلية بدل ما يضيع.
+                }
             }
         }
         return [$out, $all];
     }
 
-    /** @param string[] $texts @return string[]|null */
-    private function translateBatch(array $texts, string $languageName): ?array
+    /**
+     * لو الموديل رجّع عدد سطور غلط (بيحصل مع الدفعات الكبيرة) بنقسم الدفعة نصين ونعيد، بدل ما الدفعة كلها تفضل من غير ترجمة.
+     *
+     * @param string[] $texts
+     * @return array<int,?string> نفس عدد السطور (null = السطر ده معرفناش نترجمه)
+     */
+    private function translateResilient(array $texts, string $languageName, int $depth = 0): array
     {
         $n = count($texts);
-        $system = "You are a professional subtitle translator. The user sends a JSON array of {$n} subtitle lines. "
+        $res = $this->translateBatch($texts, $languageName);
+        if (is_array($res)) {
+            return $res;
+        }
+        // false = المزوّد نفسه واقع/رافض (تقسيم الدفعة مش هيفيد)، null = رد بصيغة غلط
+        if ($res === false || $n <= 1 || $depth >= 4) {
+            return array_fill(0, $n, null);
+        }
+        $mid = intdiv($n, 2);
+        return array_merge(
+            $this->translateResilient(array_slice($texts, 0, $mid), $languageName, $depth + 1),
+            $this->translateResilient(array_slice($texts, $mid), $languageName, $depth + 1)
+        );
+    }
+
+    /** @param string[] $texts @return string[]|null|false  false = فشل الاتصال بالمزوّد في المحاولتين */
+    private function translateBatch(array $texts, string $languageName): array|null|false
+    {
+        $n = count($texts);
+        $system = "You are a professional subtitle translator. The user sends a JSON array of {$n} subtitle lines "
+            . "that were transcribed automatically from speech (the speaker may use colloquial speech or a dialect, e.g. Egyptian Arabic, "
+            . "and the transcript may contain small recognition errors — translate the intended meaning). "
             . "Translate every line into {$languageName}. Keep the meaning, tone and brevity suited to on-screen subtitles; "
-            . "keep names, numbers, code and technical terms accurate. Do not merge, split, reorder, add or drop lines. "
+            . "keep names, numbers, code and technical terms accurate. A line that is already written in {$languageName} must be returned unchanged. "
+            . "Do not merge, split, reorder, add or drop lines. "
             . "Reply with ONLY a JSON array of exactly {$n} strings. No markdown fences, no commentary.";
 
+        $failedCalls = 0;
         for ($attempt = 0; $attempt < 2; $attempt++) {
             try {
                 $raw = $this->client->complete($system, json_encode($texts, JSON_UNESCAPED_UNICODE), 0.2);
             } catch (\RuntimeException $e) {
+                $failedCalls++;
                 Log::warning('Subtitle translation request failed', ['attempt' => $attempt, 'error' => mb_substr($e->getMessage(), 0, 300)]);
                 continue;
             }
@@ -230,7 +271,38 @@ class SubtitleService
                 return array_map(fn ($v) => trim((string) $v), array_values($arr));
             }
         }
-        return null;
+        return $failedCalls >= 2 ? false : null;
+    }
+
+    /**
+     * السطر ده محتاج ترجمة للغة $target؟ بنعتمد على الحروف نفسها: عربي↔إنجليزي بيتميّزوا بالأبجدية مهما كانت لغة Whisper المكتشفة.
+     * اللغات اللي بتشترك في نفس الأبجدية (إنجليزي/فرنسي/ألماني… أو عربي/فارسي/أردو) مفيش طريقة نفرّق بيها من الحروف،
+     * فبنرجع للغة اللي Whisper اكتشفها ($detectedDiffers).
+     */
+    private function cueNeedsTranslation(string $text, string $target, bool $detectedDiffers): bool
+    {
+        $count = static fn (string $re): int => (int) preg_match_all($re, $text);
+        $letters = $count('/\p{L}/u');
+        if ($letters === 0) {
+            return false; // أرقام / رموز / علامات موسيقى
+        }
+        $own = match ($target) {
+            'ar', 'fa', 'ur' => $count('/\p{Arabic}/u'),
+            'ru'             => $count('/\p{Cyrillic}/u'),
+            'ko'             => $count('/\p{Hangul}/u'),
+            'hi'             => $count('/\p{Devanagari}/u'),
+            'zh', 'ja'       => $count('/[\p{Han}\p{Hiragana}\p{Katakana}]/u'),
+            default          => $count('/\p{Latin}/u'),
+        };
+        if ($own / $letters < 0.5) {
+            return true; // السطر أغلبه بأبجدية تانية غير بتاعة اللغة المطلوبة
+        }
+        // أبجدية مميزة للغة (روسي / كوري / هندي): السطر بيها فعلاً → مفيش ترجمة
+        if (in_array($target, ['ru', 'ko', 'hi'], true)) {
+            return false;
+        }
+        // نفس الأبجدية: نفرّق بس بلغة Whisper
+        return $detectedDiffers;
     }
 
     private function parseJsonArray(string $raw): ?array
