@@ -60,4 +60,39 @@ class SubtitlesApiController extends Controller
             return $this->apiError('Could not generate subtitles right now.', ['code' => 'transcribe_failed'], 502);
         }
     }
+
+    /**
+     * POST /api/v1/subtitles/auto/translate — JSON: texts[] (≤ 40 سطر)، target (ar|en|…)، source (اختياري: اللغة اللي Whisper اكتشفها).
+     * الفرونت بيفرّغ الصوت الأول (target=orig) وبعدين يبعت السطور هنا دفعات صغيرة: كل طلب قصير فمفيش تعليق ولا timeout،
+     * والعربي→إنجليزي والإنجليزي→عربي (وباقي اللغات) كلهم بنفس المسار.
+     */
+    public function translate(Request $request)
+    {
+        if (!$this->subtitles->available()) {
+            return $this->apiError('Automatic subtitles are not enabled on this server.', ['code' => 'ai_unavailable'], 503);
+        }
+        $v = Validator::make($request->all(), [
+            'texts'   => ['required', 'array', 'min:1', 'max:40'],
+            'texts.*' => ['nullable', 'string', 'max:1500'],
+            'target'  => ['required', 'string', 'in:' . implode(',', array_keys(SubtitleService::LANGUAGES))],
+            'source'  => ['nullable', 'string', 'max:30'],
+        ]);
+        if ($v->fails()) {
+            return $this->apiError('Invalid request.', $v->errors()->toArray(), 422);
+        }
+
+        @set_time_limit(150);
+
+        try {
+            $data = $this->subtitles->translateLines(
+                (array) $request->input('texts', []),
+                (string) $request->input('target'),
+                $request->filled('source') ? strtolower((string) $request->input('source')) : null
+            );
+            return $this->apiSuccess($data, 'Subtitles translated successfully.');
+        } catch (\Throwable $e) {
+            Log::warning('Subtitle translate failed', ['error' => mb_substr($e->getMessage(), 0, 500)]);
+            return $this->apiError('Could not translate subtitles right now.', ['code' => 'translate_failed'], 502);
+        }
+    }
 }

@@ -130,6 +130,37 @@ class SubtitleService
     }
 
     /**
+     * ترجمة دفعة سطور صغيرة (بتتنده من الفرونت دفعات قصيرة — طلب التفريغ بقى منفصل عن الترجمة عشان مفيش طلب واحد يعلّق).
+     * القرار بيتاخد على كل سطر: اللي أصلاً باللغة المطلوبة بيفضل زي ما هو، وأي لغة تانية (عربي↔إنجليزي↔…) بتتترجم.
+     *
+     * @param string[] $texts
+     * @return array{texts:string[], translated:bool}  translated=false لو في سطر فضل بلغته الأصلية (المزوّد واقع/مش مفعّل)
+     */
+    public function translateLines(array $texts, string $target, ?string $detected = null): array
+    {
+        $texts = array_values(array_map(static fn ($t) => (string) $t, $texts));
+        if (!isset(self::LANGUAGES[$target])) {
+            return ['texts' => $texts, 'translated' => false];
+        }
+        $differs = !$this->sameLanguage($detected, $target);
+        $todo = [];
+        foreach ($texts as $i => $t) {
+            if ($this->cueNeedsTranslation($t, $target, $differs)) {
+                $todo[] = $i;
+            }
+        }
+        if (!$todo) {
+            return ['texts' => $texts, 'translated' => true];
+        }
+        if (!$this->client->isConfigured()) {
+            return ['texts' => $texts, 'translated' => false];
+        }
+        $cues = array_map(static fn ($t) => ['s' => 0.0, 'e' => 0.0, 'text' => $t], $texts);
+        [$cues, $ok] = $this->translate($cues, $target, $todo);
+        return ['texts' => array_column($cues, 'text'), 'translated' => $ok];
+    }
+
+    /**
      * @return array{language:?string, cues:array<int,array{s:float,e:float,text:string}>}
      * @throws \RuntimeException
      */
