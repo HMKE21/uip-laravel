@@ -61,6 +61,20 @@ class SecurityDetectionService
             'event' => 'role_granted', 'alert_type' => 'privilege_escalation',
             'unit' => '', 'windowed' => false, 'actions' => ['alert'],
         ],
+        // بند 10 — كشف هجمات الـ API (UipAttackProbeMiddleware بيغذّي الأحداث دي)
+        'attack_probe_ip' => [
+            'event' => 'attack_probe', 'subject' => 'ip', 'alert_type' => 'injection_attempt',
+            'unit' => 'attack attempts', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+        ],
+        'path_scan' => [
+            'event' => 'path_probe', 'subject' => 'ip', 'alert_type' => 'path_scanning',
+            'unit' => 'probing requests', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
+        ],
+        // Credential stuffing: فشل دخول كتير من عناوين وحسابات كتير (موزّع) — مش مرتبط بـ IP أو حساب واحد.
+        'credential_stuffing' => [
+            'event' => 'failed_login', 'subject' => 'global', 'alert_type' => 'credential_stuffing',
+            'unit' => 'failed attempts', 'windowed' => true, 'actions' => ['alert'],
+        ],
     ];
 
     private const SETTINGS_KEY = 'detection.settings';
@@ -189,7 +203,7 @@ class SecurityDetectionService
             }
 
             // الأحداث اللي بنعدّها (مش role_granted/login_success اللي مفيهمش window).
-            if (in_array($event, ['failed_login', 'file_download', 'login_success', 'role_granted'], true)) {
+            if (in_array($event, ['failed_login', 'file_download', 'login_success', 'role_granted', 'attack_probe', 'path_probe'], true)) {
                 DB::table('security_detection_events')->insert([
                     'event_type' => $event,
                     'user_id'    => $userId ?: null,
@@ -212,6 +226,8 @@ class SecurityDetectionService
                         $this->evaluateBaseline($rule, $def, $ctx, $learned[$def['baseline']] ?? null);
                     } elseif ($rule->rule_type === 'privilege_escalation') {
                         $this->evaluatePrivilege($rule, $def, $ctx);
+                    } elseif (($def['subject'] ?? null) === 'global') {
+                        $this->evaluateGlobal($rule, $def);
                     } else {
                         $this->evaluateWindowed($rule, $def, $ctx);
                     }
@@ -270,6 +286,39 @@ class SecurityDetectionService
         $this->fire($rule, $def, $subject === 'user' ? 'user' : ($subject === 'ip' ? 'ip' : 'account'), (string) $value, $observed, $ctx, [
             'window_minutes' => $window,
             'megabytes'      => isset($mb) ? round($mb, 1) : null,
+        ]);
+    }
+
+    /**
+     * Credential stuffing: عدد محاولات الدخول الفاشلة الكلي في الـ window + لازم تكون من عناوين وحسابات مختلفة كتير
+     * (config.min_ips / config.min_accounts) — عشان زحمة طبيعية من IP واحد أو حساب واحد (بتغطيها القواعد التانية) مماتعدّش.
+     * بتتقيّم بحد أقصى مرة كل 15 ثانية لكل قاعدة عشان هجوم كبير مايكلّفش 3 استعلامات على كل محاولة.
+     */
+    private function evaluateGlobal(object $rule, array $def): void
+    {
+        $gate = 'det:glob:' . \App\Services\Tenancy\TenantContext::ns() . $rule->id;
+        if (!Cache::add($gate, 1, 15)) {
+            return;
+        }
+        $window = max(1, (int) $rule->window_minutes);
+        $q = DB::table('security_detection_events')
+            ->where('event_type', $def['event'])
+            ->where('created_at', '>=', now()->subMinutes($window));
+
+        $observed = (int) (clone $q)->count();
+        if ($observed < (int) $rule->threshold) {
+            return;
+        }
+        $config = $this->decode($rule->config);
+        $ips = (int) (clone $q)->whereNotNull('ip_address')->distinct()->count('ip_address');
+        $accounts = (int) (clone $q)->whereNotNull('identifier')->distinct()->count('identifier');
+        if ($ips < max(1, (int) ($config['min_ips'] ?? 5)) || $accounts < max(1, (int) ($config['min_accounts'] ?? 5))) {
+            return;
+        }
+
+        // ctx فاضي: التنبيه عن الهجوم كله مش عن آخر IP/حساب.
+        $this->fire($rule, $def, 'global', 'all', $observed, [], [
+            'window_minutes' => $window, 'distinct_ips' => $ips, 'distinct_accounts' => $accounts,
         ]);
     }
 
@@ -407,6 +456,18 @@ class SecurityDetectionService
                 $title = 'Account under repeated attack';
                 $msg = "{$observed} failed sign-in attempts against {$subjectValue} within {$w} minutes (any source IP).";
                 break;
+            case 'attack_probe_ip':
+                $title = 'Attack attempts detected';
+                $msg = "{$observed} attack attempts (SQL injection / XSS / path traversal / scanner tools) from {$subjectValue} within {$w} minutes.";
+                break;
+            case 'path_scan':
+                $title = 'Endpoint scanning detected';
+                $msg = "{$subjectValue} sent {$observed} requests to non-existent endpoints within {$w} minutes (reconnaissance / scanning).";
+                break;
+            case 'credential_stuffing':
+                $title = 'Possible credential stuffing';
+                $msg = "{$observed} failed sign-ins within {$w} minutes from {$extra['distinct_ips']} different addresses against {$extra['distinct_accounts']} different accounts.";
+                break;
             case 'mass_download':
                 $title = 'Mass file download';
                 $mb = !empty($extra['megabytes']) ? " (~{$extra['megabytes']} MB)" : '';
@@ -511,7 +572,7 @@ class SecurityDetectionService
     public function preview(string $ruleType, int $threshold, int $windowMinutes): array
     {
         $def = self::TYPES[$ruleType] ?? null;
-        if (!$def || !$def['windowed'] || !$this->available()) {
+        if (!$def || !$def['windowed'] || ($def['subject'] ?? null) === 'global' || !$this->available()) {
             return ['supported' => false, 'rows' => [], 'would_trigger' => 0, 'events_in_window' => 0];
         }
         $col = ['ip' => 'ip_address', 'identifier' => 'identifier', 'user' => 'user_id'][$def['subject']];

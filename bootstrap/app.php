@@ -65,6 +65,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(\App\Http\Middleware\ResolveTenant::class);
         // الخطوة 4: يقفل الميزات اللي مش مفعّلة للعميل (403). لازم بعد ResolveTenant مباشرة.
         $middleware->append(\App\Http\Middleware\TenantFeatureGate::class);
+        // بند 10 — كشف هجمات الـ API (SQLi/XSS/Traversal/Scanning): مراقبة بس بعد الرد (terminate)، global عشان يشوف كمان الطلبات اللي مالهاش route.
+        $middleware->append(\App\Http\Middleware\UipAttackProbeMiddleware::class);
 
         $middleware->alias([
             // يستبدل throttle الافتراضي: عدّاد مستقل لكل روت/شخص + بيحترم إيقاف الـ Rate Limit من داشبورد الأدمن.

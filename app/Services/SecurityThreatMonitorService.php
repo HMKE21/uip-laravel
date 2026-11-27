@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Schema;
  * Security Portal — بند 9: لوحة التهديدات الحية (Live Threat Monitor).
  *
  * مفيش جدول جديد ولا كتابة هنا — الخدمة دي بتقرا بس من المصادر الحقيقية الموجودة وتوحّدها في تدفّق واحد:
- *   - security_detection_events : failed_login / login_success / file_download / role_granted
+ *   - security_detection_events : failed_login / login_success / file_download / role_granted / attack_probe / path_probe (بند 10)
  *   - security_detection_hits   : كل مرة قاعدة كشف اتفعّلت
  *   - security_alerts           : التنبيهات
  *   - blocked_ips               : عمليات الحظر الجديدة (يدوي/تلقائي)
@@ -32,9 +32,9 @@ class SecurityThreatMonitorService
     ];
 
     /** الأنواع اللي بتتعدّ "تهديد" في الأرقام والخريطة والاتجاهات (login_success/file_download/role_granted سياق بس). */
-    public const HOSTILE = ['failed_login', 'detection_hit', 'alert', 'ip_blocked', 'log_threat'];
+    public const HOSTILE = ['failed_login', 'detection_hit', 'alert', 'ip_blocked', 'log_threat', 'attack_probe', 'path_probe'];
 
-    private const DETECTION_EVENT_TYPES = ['failed_login', 'login_success', 'file_download', 'role_granted'];
+    private const DETECTION_EVENT_TYPES = ['failed_login', 'login_success', 'file_download', 'role_granted', 'attack_probe', 'path_probe'];
     private const SEV_RANK = ['info' => 0, 'low' => 1, 'medium' => 2, 'high' => 3, 'critical' => 4];
     private const ROW_CAP = 15000;
 
@@ -142,7 +142,7 @@ class SecurityThreatMonitorService
         $endB = intdiv($nowTs + $off, $b) * $b - $off;
         $trend = [];
         for ($t = $startB; $t <= $endB; $t += $b) {
-            $trend[$t] = ['t' => $t, 'failed_login' => 0, 'detection_hit' => 0, 'alert' => 0, 'ip_blocked' => 0, 'log_threat' => 0];
+            $trend[$t] = ['t' => $t, 'failed_login' => 0, 'detection_hit' => 0, 'alert' => 0, 'ip_blocked' => 0, 'log_threat' => 0, 'attack_probe' => 0, 'path_probe' => 0];
         }
         foreach ($rows as $r) {
             $slot = intdiv($r['ts'] + $off, $b) * $b - $off;
@@ -152,7 +152,7 @@ class SecurityThreatMonitorService
         }
 
         // ---- counters
-        $kinds = array_fill_keys(['failed_login', 'login_success', 'file_download', 'role_granted', 'detection_hit', 'alert', 'ip_blocked', 'log_threat'], 0);
+        $kinds = array_fill_keys(['failed_login', 'login_success', 'file_download', 'role_granted', 'detection_hit', 'alert', 'ip_blocked', 'log_threat', 'attack_probe', 'path_probe'], 0);
         $sev = ['info' => 0, 'low' => 0, 'medium' => 0, 'high' => 0, 'critical' => 0];
         foreach ($rows as $r) {
             $kinds[$r['kind']] = ($kinds[$r['kind']] ?? 0) + 1;
@@ -251,7 +251,9 @@ class SecurityThreatMonitorService
             'to_ts'          => $nowTs,
             'truncated'      => $this->truncated,
             'kpis'           => [
-                'threats'        => $kinds['failed_login'] + $kinds['detection_hit'] + $kinds['alert'] + $kinds['ip_blocked'] + $kinds['log_threat'],
+                'threats'        => $kinds['failed_login'] + $kinds['detection_hit'] + $kinds['alert'] + $kinds['ip_blocked'] + $kinds['log_threat'] + $kinds['attack_probe'] + $kinds['path_probe'],
+                'attack_probes'  => $kinds['attack_probe'],
+                'path_probes'    => $kinds['path_probe'],
                 'failed_logins'  => $kinds['failed_login'],
                 'detection_hits' => $kinds['detection_hit'],
                 'alerts'         => $kinds['alert'],
@@ -382,7 +384,7 @@ class SecurityThreatMonitorService
         if (!$this->has('security_detection_events')) {
             return [];
         }
-        $sev = ['failed_login' => 'low', 'login_success' => 'info', 'file_download' => 'info', 'role_granted' => 'medium'];
+        $sev = ['failed_login' => 'low', 'login_success' => 'info', 'file_download' => 'info', 'role_granted' => 'medium', 'attack_probe' => 'high', 'path_probe' => 'low'];
         try {
             $q = DB::table('security_detection_events')->where('created_at', '>=', $from);
             if ($kinds !== null) {
@@ -394,9 +396,17 @@ class SecurityThreatMonitorService
             return $rows->map(function ($r) use ($sev, $full) {
                 $meta = $full && $r->meta ? (json_decode((string) $r->meta, true) ?: []) : [];
                 return $this->row('de:' . $r->id, (string) $r->event_type, $sev[$r->event_type] ?? 'info', $r->ip_address, $r->identifier, $r->created_at, $full ? [
-                    'meta' => $r->event_type === 'file_download'
-                        ? ['bytes' => $r->bytes !== null ? (int) $r->bytes : null]
-                        : ($r->event_type === 'role_granted' ? ['role' => $meta['role'] ?? null] : null),
+                    'meta' => match ($r->event_type) {
+                        'file_download' => ['bytes' => $r->bytes !== null ? (int) $r->bytes : null],
+                        'role_granted'  => ['role' => $meta['role'] ?? null],
+                        'attack_probe'  => [
+                            'category' => $meta['category'] ?? null, 'where' => $meta['where'] ?? null, 'field' => $meta['field'] ?? null,
+                            'method' => $meta['method'] ?? null, 'path' => $meta['path'] ?? null, 'status' => $meta['status'] ?? null,
+                            'sample' => isset($meta['sample']) ? mb_substr((string) $meta['sample'], 0, 120) : null,
+                        ],
+                        'path_probe'    => ['method' => $meta['method'] ?? null, 'path' => $meta['path'] ?? null, 'status' => $meta['status'] ?? null],
+                        default         => null,
+                    },
                 ] : []);
             })->all();
         } catch (\Throwable) {
