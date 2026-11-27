@@ -108,6 +108,7 @@ use App\Http\Controllers\Api\SecurityDashboardApiController;
 use App\Http\Controllers\Api\SecuritySessionsApiController;
 use App\Http\Controllers\Api\SecurityAlertsApiController;
 use App\Http\Controllers\Api\SecurityDetectionApiController;
+use App\Http\Controllers\Api\SecurityInvestigationApiController;
 use App\Http\Controllers\Api\SecurityLogsApiController;
 use App\Http\Controllers\Api\SecurityReportsApiController;
 use App\Http\Controllers\Api\SecurityReportFilesApiController;
@@ -2812,6 +2813,18 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/resolve', [SecurityAlertsApiController::class, 'resolve']);
             Route::post('/{id}/escalate', [SecurityAlertsApiController::class, 'escalate']);
             Route::patch('/{id}/assign', [SecurityAlertsApiController::class, 'assign']);
+        });
+
+        // بند 2 — Account Investigation Center. الصلاحيات الدقيقة (قفل/MFA/حظر IP للـ admins بس) جوّه الكنترولر.
+        Route::prefix('investigate')->middleware('uip.can:security.sessions.manage')->group(function () {
+            Route::get('/users', [SecurityInvestigationApiController::class, 'search']);
+            Route::get('/users/{id}', [SecurityInvestigationApiController::class, 'show'])->where('id', '[0-9]+');
+            Route::post('/users/{id}/revoke-sessions', [SecurityInvestigationApiController::class, 'revokeSessions'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+            Route::post('/users/{id}/lock', [SecurityInvestigationApiController::class, 'lock'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+            Route::post('/users/{id}/unlock', [SecurityInvestigationApiController::class, 'unlock'])->where('id', '[0-9]+')->middleware('throttle:30,1');
+            Route::post('/users/{id}/reset-mfa', [SecurityInvestigationApiController::class, 'resetMfa'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+            Route::post('/users/{id}/require-password-change', [SecurityInvestigationApiController::class, 'requirePasswordChange'])->where('id', '[0-9]+')->middleware('throttle:20,1');
+            Route::post('/users/{id}/block-ip', [SecurityInvestigationApiController::class, 'blockIp'])->where('id', '[0-9]+')->middleware(['throttle:20,1', 'uip.can:security.ip.manage']);
         });
 
         // بند 1 — Threat Detection Rules. القراءة: أي موظف أمن (notifications.manage أو policies.manage)،

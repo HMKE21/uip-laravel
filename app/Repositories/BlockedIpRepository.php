@@ -94,6 +94,36 @@ class BlockedIpRepository
         return true;
     }
 
+    /** حظر يدوي مؤقت (من مركز التحقيق). $expires = null => دائم. */
+    public function blockTimed(string $ip, ?string $reason, $adminId, $expires): bool
+    {
+        if ($ip === '' || $this->isBlocked($ip)) {
+            return false;
+        }
+        BlockedIp::where('ip_address', $ip)->delete();
+        $row = new BlockedIp(['ip_address' => $ip, 'reason' => $reason, 'blocked_by' => $adminId]);
+        if ($this->hasExpiryColumn()) {
+            $row->setAttribute('expires_at', $expires);
+            $row->setAttribute('source', 'manual');
+        }
+        $row->save();
+        self::forget($ip);
+        return true;
+    }
+
+    /** @param string[] $ips @return string[] اللي منهم محظور حاليًا (نشط). */
+    public function activeAmong(array $ips): array
+    {
+        if (!$ips) {
+            return [];
+        }
+        $q = BlockedIp::whereIn('ip_address', $ips);
+        if ($this->hasExpiryColumn()) {
+            $q = $this->active($q);
+        }
+        return $q->pluck('ip_address')->all();
+    }
+
     /** حظر تلقائي من قاعدة كشف. $expires = null => دائم. */
     public function blockAuto(string $ip, string $reason, int $ruleId, $expires): bool
     {
