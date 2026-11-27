@@ -116,6 +116,7 @@ use App\Http\Controllers\Api\SecuritySettingsApiController;
 use App\Http\Controllers\Api\SecurityIncidentsApiController;
 use App\Http\Controllers\Api\SecurityComplianceApiController;
 use App\Http\Controllers\Api\SecurityEscalationApiController;
+use App\Http\Controllers\Api\SecurityExamMonitoringApiController;
 use App\Http\Controllers\Api\SecurityVulnerabilitiesApiController;
 use App\Http\Controllers\Api\SecurityPoliciesApiController;
 use App\Http\Controllers\Api\SupervisorsApiController;
@@ -2975,6 +2976,16 @@ Route::prefix('v1')->group(function () {
             Route::post('/digests/{id}/run', [SecurityEscalationApiController::class, 'digestRun'])->whereNumber('id')->middleware('throttle:6,1');
 
             Route::get('/deliveries', [SecurityEscalationApiController::class, 'deliveries']);
+        });
+
+        // بند 8 (نواقص بورتال الأمان) — أمان الامتحانات: تجميع أحداث الأمان المسجلة لمحاولات الامتحانات عبر كل الامتحانات
+        // (محاولات مشبوهة، طلاب متكررين، IP/جهاز مشترك). قراءة بس. /attempts/export قبل /attempts/{id}.
+        Route::prefix('exam-monitoring')->middleware('uip.can:security.exams.view')->group(function () {
+            Route::get('/overview', [SecurityExamMonitoringApiController::class, 'overview']);
+            Route::get('/attempts', [SecurityExamMonitoringApiController::class, 'attempts']);
+            Route::get('/attempts/export', [SecurityExamMonitoringApiController::class, 'export'])->middleware('throttle:20,1');
+            Route::get('/attempts/{id}', [SecurityExamMonitoringApiController::class, 'attemptShow'])->whereNumber('id');
+            Route::get('/students', [SecurityExamMonitoringApiController::class, 'students']);
         });
 
         // بند 25 batch 4 — Logs. /export لازم يتسجل قبل /blocked-ips/{id}/unblock
