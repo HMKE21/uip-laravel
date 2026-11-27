@@ -28,6 +28,8 @@ class SecurityAlertRepository
         'password_spray', 'account_under_attack', 'mass_download', 'new_device_login',
         // بند 10 — كشف هجمات الـ API
         'injection_attempt', 'path_scanning', 'credential_stuffing',
+        // مراقبة الداتا
+        'mass_export', 'mass_delete', 'mass_modify', 'sensitive_change',
     ];
 
     public const STATUSES = ['open', 'acknowledged', 'resolved', 'escalated'];

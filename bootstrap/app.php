@@ -143,6 +143,8 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\UipActivityLogMiddleware::class,
             // Threat Detection: يغذّي قاعدة mass_download بأحداث التحميل (مراقبة بس، بعد الرد).
             \App\Http\Middleware\UipDetectionTapMiddleware::class,
+            // مراقبة الداتا: تصدير / حذف / تعديل جماعي / تغيير صلاحيات (مراقبة بس، بعد الرد).
+            \App\Http\Middleware\UipDataGuardMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

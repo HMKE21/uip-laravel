@@ -308,6 +308,8 @@ class SecurityDetectionApiController extends Controller
         }
         if (isset($def['baseline'])) {
             $config['min_known'] = max(1, min(50, (int) ($cfgIn['min_known'] ?? 1)));
+            // مقصورة على أدوار معيّنة (فاضي = كل المستخدمين) — مثلًا دخول من جهاز/بلد جديد للأدمن بس.
+            $config['roles'] = array_values(array_filter(array_map('strval', (array) ($cfgIn['roles'] ?? [])), fn ($r) => preg_match('/^[a-z0-9_\-]{2,60}$/', $r)));
         }
         if ($type === 'credential_stuffing') {
             $config['min_ips'] = max(1, min(1000, (int) ($cfgIn['min_ips'] ?? 5)));

@@ -70,6 +70,23 @@ class SecurityDetectionService
             'event' => 'path_probe', 'subject' => 'ip', 'alert_type' => 'path_scanning',
             'unit' => 'probing requests', 'windowed' => true, 'actions' => ['alert', 'block_ip'],
         ],
+        // بند 1 (مراقبة الداتا) — UipDataGuardMiddleware بيغذّي الأحداث دي (config/data_guard.php)
+        'mass_export' => [
+            'event' => 'data_export', 'subject' => 'user', 'alert_type' => 'mass_export',
+            'unit' => 'exports', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+        ],
+        'mass_delete' => [
+            'event' => 'data_delete', 'subject' => 'user', 'sum' => 'amount', 'alert_type' => 'mass_delete',
+            'unit' => 'deleted items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+        ],
+        'mass_modify' => [
+            'event' => 'data_bulk_update', 'subject' => 'user', 'sum' => 'amount', 'alert_type' => 'mass_modify',
+            'unit' => 'modified items', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions', 'lock_account'],
+        ],
+        'sensitive_change' => [
+            'event' => 'config_change', 'subject' => 'user', 'alert_type' => 'sensitive_change',
+            'unit' => 'sensitive changes', 'windowed' => true, 'actions' => ['alert', 'revoke_sessions'],
+        ],
         // Credential stuffing: فشل دخول كتير من عناوين وحسابات كتير (موزّع) — مش مرتبط بـ IP أو حساب واحد.
         'credential_stuffing' => [
             'event' => 'failed_login', 'subject' => 'global', 'alert_type' => 'credential_stuffing',
@@ -203,8 +220,8 @@ class SecurityDetectionService
             }
 
             // الأحداث اللي بنعدّها (مش role_granted/login_success اللي مفيهمش window).
-            if (in_array($event, ['failed_login', 'file_download', 'login_success', 'role_granted', 'attack_probe', 'path_probe'], true)) {
-                DB::table('security_detection_events')->insert([
+            if (in_array($event, ['failed_login', 'file_download', 'login_success', 'role_granted', 'attack_probe', 'path_probe', 'data_export', 'data_delete', 'data_bulk_update', 'config_change'], true)) {
+                $row = [
                     'event_type' => $event,
                     'user_id'    => $userId ?: null,
                     'ip_address' => $ip ? mb_substr($ip, 0, 45) : null,
@@ -213,7 +230,11 @@ class SecurityDetectionService
                     'bytes'      => isset($ctx['bytes']) ? max(0, (int) $ctx['bytes']) : null,
                     'meta'       => !empty($ctx['meta']) ? json_encode($ctx['meta'], JSON_UNESCAPED_UNICODE) : null,
                     'created_at' => now(),
-                ]);
+                ];
+                if (isset($ctx['amount']) && $this->hasAmountColumn()) {
+                    $row['amount'] = max(1, (int) $ctx['amount']);
+                }
+                DB::table('security_detection_events')->insert($row);
             }
 
             foreach ($this->rulesForEvent($event) as $rule) {
@@ -268,6 +289,9 @@ class SecurityDetectionService
 
         if (isset($def['distinct'])) {
             $observed = (int) (clone $q)->whereNotNull($def['distinct'])->distinct()->count($def['distinct']);
+        } elseif (isset($def['sum']) && $this->hasAmountColumn()) {
+            // حذف/تعديل جماعي: كل حدث ليه amount (عدد العناصر)؛ الحدث من غير amount بيعدّ 1.
+            $observed = (int) (clone $q)->sum(DB::raw('COALESCE(amount, 1)'));
         } else {
             $observed = (int) (clone $q)->count();
         }
@@ -286,6 +310,7 @@ class SecurityDetectionService
         $this->fire($rule, $def, $subject === 'user' ? 'user' : ($subject === 'ip' ? 'ip' : 'account'), (string) $value, $observed, $ctx, [
             'window_minutes' => $window,
             'megabytes'      => isset($mb) ? round($mb, 1) : null,
+            'last'           => isset($ctx['meta']) && is_array($ctx['meta']) ? array_intersect_key($ctx['meta'], ['route' => 1, 'method' => 1, 'target' => 1]) : null,
         ]);
     }
 
@@ -329,6 +354,11 @@ class SecurityDetectionService
             return;
         }
         $config = $this->decode($rule->config);
+        // قاعدة مقصورة على أدوار معيّنة (مثلًا دخول من جهاز/بلد جديد للأدمن بس). فاضي = كل المستخدمين.
+        $onlyRoles = array_values(array_filter((array) ($config['roles'] ?? [])));
+        if ($onlyRoles && !$this->userHasAnyRole($userId, $onlyRoles)) {
+            return;
+        }
         $minKnown = max(1, (int) ($config['min_known'] ?? 1));
         if ((int) $learn['known_before'] < $minKnown) {
             return; // أول دخول/أول جهاز: مفيش "معروف" نقارن بيه
@@ -468,6 +498,22 @@ class SecurityDetectionService
                 $title = 'Possible credential stuffing';
                 $msg = "{$observed} failed sign-ins within {$w} minutes from {$extra['distinct_ips']} different addresses against {$extra['distinct_accounts']} different accounts.";
                 break;
+            case 'mass_export':
+                $title = 'Mass data export';
+                $msg = ($email ?: "User #{$subjectValue}") . " ran {$observed} data exports within {$w} minutes" . $this->lastSuffix($extra) . '.';
+                break;
+            case 'mass_delete':
+                $title = 'Mass deletion';
+                $msg = ($email ?: "User #{$subjectValue}") . " deleted about {$observed} items within {$w} minutes" . $this->lastSuffix($extra) . '.';
+                break;
+            case 'mass_modify':
+                $title = 'Mass modification';
+                $msg = ($email ?: "User #{$subjectValue}") . " bulk-modified about {$observed} items within {$w} minutes" . $this->lastSuffix($extra) . '.';
+                break;
+            case 'sensitive_change':
+                $title = 'Sensitive permission / configuration change';
+                $msg = ($email ?: "User #{$subjectValue}") . " made {$observed} permission/security configuration change(s) within {$w} minutes" . $this->lastSuffix($extra) . '.';
+                break;
             case 'mass_download':
                 $title = 'Mass file download';
                 $mb = !empty($extra['megabytes']) ? " (~{$extra['megabytes']} MB)" : '';
@@ -582,7 +628,7 @@ class SecurityDetectionService
             ->where('event_type', $def['event'])->whereNotNull($col)
             ->where('created_at', '>=', now()->subMinutes($window));
 
-        $measure = isset($def['distinct']) ? "COUNT(DISTINCT {$def['distinct']})" : 'COUNT(*)';
+        $measure = isset($def['distinct']) ? "COUNT(DISTINCT {$def['distinct']})" : (isset($def['sum']) && $this->hasAmountColumn() ? 'SUM(COALESCE(amount, 1))' : 'COUNT(*)');
         $rows = (clone $base)->selectRaw("{$col} as subject, {$measure} as observed")
             ->groupBy($col)->orderByDesc('observed')->limit(8)->get()
             ->map(fn ($r) => ['subject' => (string) $r->subject, 'observed' => (int) $r->observed, 'would_trigger' => (int) $r->observed >= $threshold])
@@ -671,6 +717,42 @@ class SecurityDetectionService
             'first_seen_at' => now(), 'last_seen_at' => now(),
         ]);
         return ['is_new' => true, 'known_before' => $knownBefore, 'value' => $value, 'previous' => $kind === 'device' ? [] : $previous];
+    }
+
+    private static ?bool $amountCol = null;
+
+    /** عمود amount اتضاف بـ migration بند 1 — الكود لازم يفضل شغال قبل الـ migration. */
+    private function hasAmountColumn(): bool
+    {
+        if (self::$amountCol === null) {
+            try {
+                self::$amountCol = Schema::hasColumn('security_detection_events', 'amount');
+            } catch (\Throwable) {
+                self::$amountCol = false;
+            }
+        }
+        return self::$amountCol;
+    }
+
+    /** @param string[] $slugs */
+    private function userHasAnyRole(int $userId, array $slugs): bool
+    {
+        try {
+            return DB::table('user_roles as ur')->join('roles as r', 'r.id', '=', 'ur.role_id')
+                ->where('ur.user_id', $userId)->whereIn('r.slug', $slugs)->exists();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function lastSuffix(array $extra): string
+    {
+        $l = $extra['last'] ?? null;
+        if (!is_array($l) || empty($l['route'])) {
+            return '';
+        }
+        $t = !empty($l['target']) ? " #{$l['target']}" : '';
+        return ' (last: ' . trim(($l['method'] ?? '') . ' /' . ltrim((string) $l['route'], '/')) . $t . ')';
     }
 
     private function cleanCountry($label): ?string

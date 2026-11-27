@@ -34,7 +34,7 @@ class SecurityThreatMonitorService
     /** الأنواع اللي بتتعدّ "تهديد" في الأرقام والخريطة والاتجاهات (login_success/file_download/role_granted سياق بس). */
     public const HOSTILE = ['failed_login', 'detection_hit', 'alert', 'ip_blocked', 'log_threat', 'attack_probe', 'path_probe'];
 
-    private const DETECTION_EVENT_TYPES = ['failed_login', 'login_success', 'file_download', 'role_granted', 'attack_probe', 'path_probe'];
+    private const DETECTION_EVENT_TYPES = ['failed_login', 'login_success', 'file_download', 'role_granted', 'attack_probe', 'path_probe', 'data_export', 'data_delete', 'data_bulk_update', 'config_change'];
     private const SEV_RANK = ['info' => 0, 'low' => 1, 'medium' => 2, 'high' => 3, 'critical' => 4];
     private const ROW_CAP = 15000;
 
@@ -152,7 +152,7 @@ class SecurityThreatMonitorService
         }
 
         // ---- counters
-        $kinds = array_fill_keys(['failed_login', 'login_success', 'file_download', 'role_granted', 'detection_hit', 'alert', 'ip_blocked', 'log_threat', 'attack_probe', 'path_probe'], 0);
+        $kinds = array_fill_keys(['failed_login', 'login_success', 'file_download', 'role_granted', 'detection_hit', 'alert', 'ip_blocked', 'log_threat', 'attack_probe', 'path_probe', 'data_export', 'data_delete', 'data_bulk_update', 'config_change'], 0);
         $sev = ['info' => 0, 'low' => 0, 'medium' => 0, 'high' => 0, 'critical' => 0];
         foreach ($rows as $r) {
             $kinds[$r['kind']] = ($kinds[$r['kind']] ?? 0) + 1;
@@ -384,14 +384,14 @@ class SecurityThreatMonitorService
         if (!$this->has('security_detection_events')) {
             return [];
         }
-        $sev = ['failed_login' => 'low', 'login_success' => 'info', 'file_download' => 'info', 'role_granted' => 'medium', 'attack_probe' => 'high', 'path_probe' => 'low'];
+        $sev = ['failed_login' => 'low', 'login_success' => 'info', 'file_download' => 'info', 'role_granted' => 'medium', 'attack_probe' => 'high', 'path_probe' => 'low', 'data_export' => 'info', 'data_delete' => 'info', 'data_bulk_update' => 'info', 'config_change' => 'medium'];
         try {
             $q = DB::table('security_detection_events')->where('created_at', '>=', $from);
             if ($kinds !== null) {
                 $q->whereIn('event_type', array_values(array_intersect($kinds, self::DETECTION_EVENT_TYPES)));
             }
             $rows = $q->orderByDesc('id')->limit($cap)
-                ->get(['id', 'event_type', 'ip_address', 'identifier', 'bytes', 'meta', 'created_at']);
+                ->get(['id', 'event_type', 'user_id', 'ip_address', 'identifier', 'bytes', 'meta', 'created_at']);
             $this->truncated = $this->truncated || $rows->count() >= $cap;
             return $rows->map(function ($r) use ($sev, $full) {
                 $meta = $full && $r->meta ? (json_decode((string) $r->meta, true) ?: []) : [];
@@ -405,6 +405,8 @@ class SecurityThreatMonitorService
                             'sample' => isset($meta['sample']) ? mb_substr((string) $meta['sample'], 0, 120) : null,
                         ],
                         'path_probe'    => ['method' => $meta['method'] ?? null, 'path' => $meta['path'] ?? null, 'status' => $meta['status'] ?? null],
+                        'data_export', 'data_delete', 'data_bulk_update', 'config_change'
+                                        => ['method' => $meta['method'] ?? null, 'route' => $meta['route'] ?? null, 'target' => $meta['target'] ?? null, 'user_id' => $r->user_id],
                         default         => null,
                     },
                 ] : []);
