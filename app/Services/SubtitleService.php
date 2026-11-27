@@ -6,6 +6,7 @@ use App\Repositories\SettingRepository;
 use App\Services\Ai\AIClient;
 use App\Services\Concerns\ConfiguresAIClient;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -41,7 +42,7 @@ class SubtitleService
         // نسخة خاصة بالخدمة دي (مش المحقونة من الـ container) عشان نرفع المهلة من غير ما نأثر على باقي الخدمات.
         $this->client = new AIClient();
         $this->applySettingsOverrides($this->client, $this->settings);
-        $this->client->setTimeout(max(90, (int) config('ai.timeout', 30)));
+        $this->client->setTimeout(40); // الترجمة بالـ LLM: مهلة قصيرة (دفعة صغيرة) — لو المزوّد بطيء نفشل بسرعة بدل ما الفيديو يستنى دقايق
     }
 
     private function setting(string $key): string
@@ -101,6 +102,19 @@ class SubtitleService
      */
     public function generate(UploadedFile $audio, ?string $target, ?string $sourceHint = null): array
     {
+        // الإنجليزي: Whisper بيترجم لوحده (/audio/translations) في نفس الطلب — من غير LLM فبقى أسرع بكتير. لو المزوّد مش بيدعمه نكمّل عادي.
+        if ($target === 'en' && !Cache::get('subtitle_stt_no_translations')) {
+            try {
+                $fast = $this->transcribe($audio, null, true);
+                if ($fast['cues']) {
+                    return ['language' => $fast['language'], 'translated' => true, 'cues' => $fast['cues']];
+                }
+            } catch (\RuntimeException $e) {
+                Cache::put('subtitle_stt_no_translations', 1, 1800);
+                Log::info('Whisper translations endpoint unavailable, falling back', ['error' => mb_substr($e->getMessage(), 0, 200)]);
+            }
+        }
+
         $raw      = $this->transcribe($audio, $sourceHint);
         $cues     = $raw['cues'];
         $detected = $raw['language'];
@@ -119,9 +133,8 @@ class SubtitleService
             }
             if (!$todo) {
                 $translated = true; // كل السطور أصلاً باللغة المطلوبة
-            } elseif ($this->client->isConfigured()) {
-                [$cues, $translated] = $this->translate($cues, $target, $todo);
             }
+            // الترجمة بالـ LLM مش بتحصل هنا: الفرونت بيطلبها دفعات صغيرة من /translate (طلب التفريغ يفضل سريع ومبيعلّقش).
         } elseif ($wantsTranslation) {
             $translated = true;
         }
@@ -164,7 +177,7 @@ class SubtitleService
      * @return array{language:?string, cues:array<int,array{s:float,e:float,text:string}>}
      * @throws \RuntimeException
      */
-    protected function transcribe(UploadedFile $audio, ?string $sourceHint): array
+    protected function transcribe(UploadedFile $audio, ?string $sourceHint, bool $toEnglish = false): array
     {
         $stt = $this->sttConfig();
         if ($stt === null) {
@@ -182,7 +195,7 @@ class SubtitleService
             'response_format' => 'verbose_json',
             'temperature'     => '0',
         ];
-        if ($sourceHint !== null && $sourceHint !== '') {
+        if (!$toEnglish && $sourceHint !== null && $sourceHint !== '') {
             $fields['language'] = $sourceHint;
         }
 
@@ -194,7 +207,7 @@ class SubtitleService
             $res = $req
                 ->timeout(max(20, (int) ($cfg['timeout'] ?? 120)))
                 ->attach('file', $handle, 'audio.wav')
-                ->post($stt['base'] . '/audio/transcriptions', $fields);
+                ->post($stt['base'] . ($toEnglish ? '/audio/translations' : '/audio/transcriptions'), $fields);
         } catch (\Throwable $e) {
             throw new \RuntimeException('Transcription request failed: ' . $e->getMessage());
         } finally {
