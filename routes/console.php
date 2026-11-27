@@ -105,6 +105,11 @@ Schedule::command('dev:maintenance --prune')->dailyAt('05:00')->withoutOverlappi
 Schedule::command('mail:security-scan')->everyFiveMinutes()->withoutOverlapping();
 Schedule::command('mail:retention')->dailyAt('04:40')->withoutOverlapping();
 
+// Audit & Compliance (بند 6) على المنصة نفسها: ختم سلسلة التدقيق كل ساعة + فحص السلامة يوميًا + الاحتفاظ (لو مفعّل من الأدمن).
+Schedule::command('audit:seal')->hourly()->withoutOverlapping();
+Schedule::command('audit:verify --scheduled')->dailyAt('02:10')->withoutOverlapping();
+Schedule::command('audit:retention')->dailyAt('02:40')->withoutOverlapping();
+
 // Lexicon Hub: مزامنة قوايم الدومينات/الكلمات المحظورة (هاشات موقّعة) يوميًا — بتشتغل بس لو CONTENT_SAFETY_REMOTE_URLS متظبط.
 // (بديل الـ crontab المنفصل: `30 3 * * * cd /var/www/uipe && php artisan lexicon:sync`. اختار واحد بس، التكرار مش بيضر لأن نفس الإصدار = no-op.)
 Schedule::command('lexicon:sync')->dailyAt('03:20')->withoutOverlapping()->when(fn () => !empty(config('content_safety.remote.urls')));
@@ -143,3 +148,8 @@ Schedule::call(fn () => app(\App\Services\ContentSafetyService::class)->purgeQua
 
 // Network control (بند 4): تنضيف الحظر المنتهي وإدخالات الموثوقين المنتهية (الفحص نفسه بيتجاهل المنتهي حتى لو الأمر ده ما اشتغلش).
 Schedule::call(fn () => app(\App\Repositories\BlockedIpRepository::class)->purgeExpired())->name('network:purge-expired')->hourly()->withoutOverlapping();
+
+// Audit & Compliance (بند 6): ختم صفوف التدقيق في السلسلة + فحص السلامة يوميًا + سياسة الاحتفاظ (بتشتغل بس لو الأدمن فعّلها).
+Schedule::command('tenants:run', ['audit:seal'])->hourly()->withoutOverlapping();
+Schedule::command('tenants:run', ['audit:verify --scheduled'])->dailyAt('02:10')->withoutOverlapping();
+Schedule::command('tenants:run', ['audit:retention'])->dailyAt('02:40')->withoutOverlapping();

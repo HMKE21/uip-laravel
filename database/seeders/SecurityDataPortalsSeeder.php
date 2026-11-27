@@ -60,6 +60,8 @@ INSERT INTO permissions (slug, module, description) VALUES
 ('security.notifications.manage','security', 'View and manage security notifications'),
 ('security.reports.generate',    'security', 'Generate security reports'),
 ('security.users.manage',        'security', 'Manage Security Officer / Security Administrator accounts'),
+('security.compliance.view',      'security', 'View audit integrity, retention, access reviews and compliance checklists'),
+('security.compliance.manage',    'security', 'Manage audit retention, run access reviews and update compliance checklists'),
 
 -- Data Analysis module (analytics.view / reports.generate already exist and are reused)
 ('data_analysis.dashboard.view',   'data_analysis', 'View the Data Analysis Dashboard'),
@@ -88,7 +90,7 @@ SELECT r.id, p.id FROM roles r JOIN permissions p
     'security.dashboard.view','security.incidents.manage','security.sessions.manage',
     'security.vulnerabilities.manage','security.policies.manage','security.risk.view',
     'security.ip.manage','security.notifications.manage','security.reports.generate',
-    'security.users.manage','logs.view_security','logs.view_audit',
+    'security.users.manage','security.compliance.view','security.compliance.manage','logs.view_security','logs.view_audit',
     'messaging.use','notifications.manage'
   )
 WHERE r.slug = 'security_admin';
@@ -101,7 +103,7 @@ SELECT r.id, p.id FROM roles r JOIN permissions p
   ON p.slug IN (
     'security.dashboard.view','security.incidents.manage','security.sessions.manage',
     'security.vulnerabilities.manage','security.risk.view','security.notifications.manage',
-    'security.reports.generate','logs.view_security','logs.view_audit',
+    'security.reports.generate','security.compliance.view','logs.view_security','logs.view_audit',
     'messaging.use','notifications.manage'
   )
 WHERE r.slug = 'security_officer';

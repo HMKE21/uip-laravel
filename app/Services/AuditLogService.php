@@ -24,19 +24,47 @@ class AuditLogService
 
     public function record($userId, string $action, ?string $subjectType = null, $subjectId = null, ?array $oldValues = null, ?array $newValues = null, ?string $ip = null): void
     {
+        $attrs = [
+            'user_id'      => $userId,
+            'action'       => $action,
+            'subject_type' => $subjectType,
+            'subject_id'   => $subjectId,
+            'old_values'   => $oldValues,
+            'new_values'   => $newValues,
+            'ip_address'   => $ip,
+        ];
         try {
-            AuditLog::create([
-                'user_id'      => $userId,
-                'action'       => $action,
-                'subject_type' => $subjectType,
-                'subject_id'   => $subjectId,
-                'old_values'   => $oldValues,
-                'new_values'   => $newValues,
-                'ip_address'   => $ip,
-            ]);
+            // بند 6: الصف بيتختم في سلسلة هاش (tamper-evident) لو الجداول الجديدة موجودة.
+            if ($this->chainReady()) {
+                app(AuditChainService::class)->seal($attrs);
+
+                return;
+            }
+        } catch (\Throwable $e) {
+            // الختم فشل (lock timeout مثلًا): الإجراء ميتضيعش — بيتسجل من غير ختم، وأمر audit:seal هيختمه بعدين.
+            Log::error('Audit log seal failed, writing unsealed', ['action' => $action, 'error' => $e->getMessage()]);
+        }
+        try {
+            AuditLog::create($attrs);
         } catch (\Throwable $e) {
             Log::error('Audit log write failed', ['action' => $action, 'error' => $e->getMessage()]);
         }
+    }
+
+    private static ?bool $chainReady = null;
+
+    private function chainReady(): bool
+    {
+        if (self::$chainReady === true) {
+            return true;
+        }
+        $ready = \Illuminate\Support\Facades\Schema::hasTable('audit_chain_state')
+            && \Illuminate\Support\Facades\Schema::hasColumn('audit_logs', 'chain_seq');
+        if ($ready) {
+            self::$chainReady = true; // مبنخزّنش false: الـ migration ممكن تشتغل بعدين في نفس الـ worker
+        }
+
+        return $ready;
     }
 
     /**

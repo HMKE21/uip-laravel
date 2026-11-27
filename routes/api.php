@@ -114,6 +114,7 @@ use App\Http\Controllers\Api\SecurityReportsApiController;
 use App\Http\Controllers\Api\SecurityReportFilesApiController;
 use App\Http\Controllers\Api\SecuritySettingsApiController;
 use App\Http\Controllers\Api\SecurityIncidentsApiController;
+use App\Http\Controllers\Api\SecurityComplianceApiController;
 use App\Http\Controllers\Api\SecurityVulnerabilitiesApiController;
 use App\Http\Controllers\Api\SecurityPoliciesApiController;
 use App\Http\Controllers\Api\SupervisorsApiController;
@@ -2912,6 +2913,38 @@ Route::prefix('v1')->group(function () {
             Route::patch('/device-restriction', [SecurityPoliciesApiController::class, 'updateDeviceRestrictionPolicy']);
 
             Route::post('/unlock/{id}', [SecurityPoliciesApiController::class, 'unlockAccount']);
+        });
+
+        // بند 6 (نواقص بورتال الأمان) — التدقيق والامتثال: سلسلة هاش سجلات التدقيق، الاحتفاظ بالسجلات،
+        // مراجعة الصلاحيات الدورية، وقوائم الامتثال. القراءة: compliance.view أو manage، وأي كتابة: manage بس.
+        // المسارات الحرفية (export/matrix/settings/...) قبل أي {id}.
+        Route::prefix('compliance')->middleware(['uip.can:security.compliance.view,security.compliance.manage', 'uip.can:write:security.compliance.manage'])->group(function () {
+            Route::get('/overview', [SecurityComplianceApiController::class, 'overview']);
+
+            Route::get('/integrity', [SecurityComplianceApiController::class, 'integrity']);
+            Route::post('/integrity/verify', [SecurityComplianceApiController::class, 'verify'])->middleware('throttle:6,1');
+            Route::post('/integrity/seal', [SecurityComplianceApiController::class, 'seal'])->middleware('throttle:6,1');
+            Route::post('/integrity/checkpoint', [SecurityComplianceApiController::class, 'checkpoint'])->middleware('throttle:20,1');
+
+            Route::get('/retention', [SecurityComplianceApiController::class, 'retentionShow']);
+            Route::patch('/retention', [SecurityComplianceApiController::class, 'retentionUpdate']);
+            Route::post('/retention/run', [SecurityComplianceApiController::class, 'retentionRun'])->middleware('throttle:3,1');
+
+            Route::get('/access', [SecurityComplianceApiController::class, 'accessState']);
+            Route::get('/access/matrix', [SecurityComplianceApiController::class, 'accessMatrix']);
+            Route::patch('/access/settings', [SecurityComplianceApiController::class, 'accessSettings']);
+            Route::post('/access/reviews', [SecurityComplianceApiController::class, 'reviewStart']);
+            Route::get('/access/reviews/{id}', [SecurityComplianceApiController::class, 'reviewShow'])->whereNumber('id');
+            Route::post('/access/reviews/{id}/items/{itemId}/decision', [SecurityComplianceApiController::class, 'reviewDecide'])->whereNumber('id')->whereNumber('itemId');
+            Route::post('/access/reviews/{id}/items/{itemId}/remediate', [SecurityComplianceApiController::class, 'reviewRemediate'])->whereNumber('id')->whereNumber('itemId');
+            Route::post('/access/reviews/{id}/complete', [SecurityComplianceApiController::class, 'reviewComplete'])->whereNumber('id');
+            Route::post('/access/reviews/{id}/cancel', [SecurityComplianceApiController::class, 'reviewCancel'])->whereNumber('id');
+
+            Route::get('/controls', [SecurityComplianceApiController::class, 'controls']);
+            Route::get('/controls/export', [SecurityComplianceApiController::class, 'controlsExport']);
+            Route::post('/controls', [SecurityComplianceApiController::class, 'controlStore']);
+            Route::patch('/controls/{id}', [SecurityComplianceApiController::class, 'controlUpdate'])->whereNumber('id');
+            Route::delete('/controls/{id}', [SecurityComplianceApiController::class, 'controlDestroy'])->whereNumber('id');
         });
 
         // بند 25 batch 4 — Logs. /export لازم يتسجل قبل /blocked-ips/{id}/unblock
