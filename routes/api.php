@@ -115,6 +115,7 @@ use App\Http\Controllers\Api\SecurityReportFilesApiController;
 use App\Http\Controllers\Api\SecuritySettingsApiController;
 use App\Http\Controllers\Api\SecurityIncidentsApiController;
 use App\Http\Controllers\Api\SecurityComplianceApiController;
+use App\Http\Controllers\Api\SecurityEscalationApiController;
 use App\Http\Controllers\Api\SecurityVulnerabilitiesApiController;
 use App\Http\Controllers\Api\SecurityPoliciesApiController;
 use App\Http\Controllers\Api\SupervisorsApiController;
@@ -2945,6 +2946,35 @@ Route::prefix('v1')->group(function () {
             Route::post('/controls', [SecurityComplianceApiController::class, 'controlStore']);
             Route::patch('/controls/{id}', [SecurityComplianceApiController::class, 'controlUpdate'])->whereNumber('id');
             Route::delete('/controls/{id}', [SecurityComplianceApiController::class, 'controlDestroy'])->whereNumber('id');
+        });
+
+        // بند 7 (نواقص بورتال الأمان) — قنوات التصعيد: قنوات (إيميل/Slack/Telegram/Webhook)، قواعد تصعيد، مناوبة،
+        // وملخصات مجدولة. القراءة: escalation.view أو manage، وأي كتابة: manage بس.
+        Route::prefix('escalation')->middleware(['uip.can:security.escalation.view,security.escalation.manage', 'uip.can:write:security.escalation.manage'])->group(function () {
+            Route::get('/overview', [SecurityEscalationApiController::class, 'overview']);
+
+            Route::get('/channels', [SecurityEscalationApiController::class, 'channels']);
+            Route::post('/channels', [SecurityEscalationApiController::class, 'channelStore']);
+            Route::patch('/channels/{id}', [SecurityEscalationApiController::class, 'channelUpdate'])->whereNumber('id');
+            Route::delete('/channels/{id}', [SecurityEscalationApiController::class, 'channelDestroy'])->whereNumber('id');
+            Route::post('/channels/{id}/test', [SecurityEscalationApiController::class, 'channelTest'])->whereNumber('id')->middleware('throttle:10,1');
+
+            Route::get('/policies', [SecurityEscalationApiController::class, 'policies']);
+            Route::post('/policies', [SecurityEscalationApiController::class, 'policyStore']);
+            Route::patch('/policies/{id}', [SecurityEscalationApiController::class, 'policyUpdate'])->whereNumber('id');
+            Route::delete('/policies/{id}', [SecurityEscalationApiController::class, 'policyDestroy'])->whereNumber('id');
+
+            Route::get('/oncall', [SecurityEscalationApiController::class, 'oncall']);
+            Route::post('/oncall/shifts', [SecurityEscalationApiController::class, 'shiftStore']);
+            Route::delete('/oncall/shifts/{id}', [SecurityEscalationApiController::class, 'shiftDestroy'])->whereNumber('id');
+
+            Route::get('/digests', [SecurityEscalationApiController::class, 'digests']);
+            Route::post('/digests', [SecurityEscalationApiController::class, 'digestStore']);
+            Route::patch('/digests/{id}', [SecurityEscalationApiController::class, 'digestUpdate'])->whereNumber('id');
+            Route::delete('/digests/{id}', [SecurityEscalationApiController::class, 'digestDestroy'])->whereNumber('id');
+            Route::post('/digests/{id}/run', [SecurityEscalationApiController::class, 'digestRun'])->whereNumber('id')->middleware('throttle:6,1');
+
+            Route::get('/deliveries', [SecurityEscalationApiController::class, 'deliveries']);
         });
 
         // بند 25 batch 4 — Logs. /export لازم يتسجل قبل /blocked-ips/{id}/unblock

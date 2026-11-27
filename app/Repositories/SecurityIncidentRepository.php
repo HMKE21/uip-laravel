@@ -27,7 +27,11 @@ class SecurityIncidentRepository
     {
         $data['reference_code'] = $data['reference_code'] ?? $this->nextReferenceCode();
         $data['sla_due_at'] = $data['sla_due_at'] ?? $this->slaDueAt((string) ($data['severity'] ?? 'low'), $data['detected_at'] ?? null);
-        return SecurityIncident::create($data);
+        $incident = SecurityIncident::create($data);
+        // بند 7: تصعيد الحوادث الجديدة (بعد الرد؛ بيتجاهل الخطورة المنخفضة حسب القواعد).
+        \App\Services\EscalationService::fire('incident', (int) $incident->id, (string) ($incident->severity ?? $data['severity'] ?? 'low'), (string) ($incident->category ?? $data['category'] ?? 'other'), (string) ($incident->title ?? 'Security incident'), isset($data['description']) ? (string) $data['description'] : null, array_filter(['Reference' => $incident->reference_code ?? null]));
+
+        return $incident;
     }
 
     public function find($id): ?SecurityIncident

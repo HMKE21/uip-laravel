@@ -328,6 +328,29 @@ class MailService
         return true;
     }
 
+    /**
+     * تصعيد أمني (بند 7). عكس باقي الميثودز المجدولة: بترجّع true/false حسب نجاح الإرسال الفعلي،
+     * عشان سجل التسليم يقول الحقيقة (getLastError() فيه السبب لو فشل).
+     *
+     * @param string[] $lines
+     */
+    public function sendSecurityEscalation(string $toEmail, string $subject, string $heading, array $lines, ?string $url = null, string $locale = 'en'): bool
+    {
+        $ar = $locale === 'ar';
+
+        return $this->deliver(
+            $toEmail,
+            $subject,
+            $heading,
+            $lines,
+            $url ? ['label' => $ar ? 'فتح في بورتال الأمان' : 'Open in Security Portal', 'url' => $url] : null,
+            $locale,
+            [],
+            'sendSecurityEscalation',
+            'security'
+        );
+    }
+
     public function sendDataExportReady(string $toEmail, string $exportTypeLabel, string $format, ?string $downloadUrl, string $locale = 'ar'): bool
     {
         $ar = $locale === 'ar';

@@ -74,6 +74,9 @@ class SecurityAlertService
                 'meta'      => array_merge(['occurrences' => 1], $meta),
             ]);
 
+            // بند 7: تصعيد على القنوات/المناوب (بعد الرد، وأي فشل بيتسجّل بس). التنبيه المتكرر (dedupe) مبيتصعّدش تاني.
+            EscalationService::fire('alert', (int) $alert->id, $severity, $type, $title, $message, array_filter(['IP' => $ip, 'User' => $userId ? '#' . $userId : null]));
+
             return (int) $alert->id;
         } catch (\Throwable $e) {
             Log::warning('Security alert could not be recorded: ' . $e->getMessage(), ['type' => $type]);

@@ -110,6 +110,11 @@ Schedule::command('audit:seal')->hourly()->withoutOverlapping();
 Schedule::command('audit:verify --scheduled')->dailyAt('02:10')->withoutOverlapping();
 Schedule::command('audit:retention')->dailyAt('02:40')->withoutOverlapping();
 
+// قنوات التصعيد (بند 7): كل دقيقة نصعّد التنبيهات/الحوادث اللي محدش استلمها للمستوى التاني ونبعت الملخصات المستحقة.
+Schedule::command('escalation:tick')->everyMinute()->withoutOverlapping();
+// التقارير المجدولة (report_schedules) كانت من غير أي مُشغّل — دلوقتي بتتبعت تلقائي كل 15 دقيقة.
+Schedule::command('reports:run-due')->everyFifteenMinutes()->withoutOverlapping();
+
 // Lexicon Hub: مزامنة قوايم الدومينات/الكلمات المحظورة (هاشات موقّعة) يوميًا — بتشتغل بس لو CONTENT_SAFETY_REMOTE_URLS متظبط.
 // (بديل الـ crontab المنفصل: `30 3 * * * cd /var/www/uipe && php artisan lexicon:sync`. اختار واحد بس، التكرار مش بيضر لأن نفس الإصدار = no-op.)
 Schedule::command('lexicon:sync')->dailyAt('03:20')->withoutOverlapping()->when(fn () => !empty(config('content_safety.remote.urls')));
@@ -153,3 +158,7 @@ Schedule::call(fn () => app(\App\Repositories\BlockedIpRepository::class)->purge
 Schedule::command('tenants:run', ['audit:seal'])->hourly()->withoutOverlapping();
 Schedule::command('tenants:run', ['audit:verify --scheduled'])->dailyAt('02:10')->withoutOverlapping();
 Schedule::command('tenants:run', ['audit:retention'])->dailyAt('02:40')->withoutOverlapping();
+
+// قنوات التصعيد (بند 7) + التقارير المجدولة لكل عميل معزول.
+Schedule::command('tenants:run', ['escalation:tick'])->everyMinute()->withoutOverlapping();
+Schedule::command('tenants:run', ['reports:run-due'])->everyFifteenMinutes()->withoutOverlapping();
