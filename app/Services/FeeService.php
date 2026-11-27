@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Services\Export\PdfWriter;
 use Illuminate\Support\Facades\DB;
 
@@ -199,8 +200,7 @@ class FeeService
             $q->whereIn('f.status', ['unpaid', 'partial'])->whereNotNull('f.due_on')->where('f.due_on', '<', date('Y-m-d'));
         }
         if (!empty($f['q'])) {
-            $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], trim($f['q'])) . '%';
-            $q->where(fn ($w) => $w->where('u.full_name', 'like', $like)->orWhere('s.student_number', 'like', $like));
+            SearchLike::apply($q, ['u.full_name', 's.student_number'], trim($f['q']));
         }
         $rows = $q->orderByDesc('f.id')->limit(300)->get(['f.*', 'i.name as item_name', 'i.kind as item_kind', 'i.currency', 'u.full_name as student_name', 's.student_number']);
         $pending = DB::table('fee_payments')->whereIn('student_fee_id', $rows->pluck('id'))->where('status', 'pending')->get()->groupBy('student_fee_id');

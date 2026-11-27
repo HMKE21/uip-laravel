@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Models\AuditLog;
 use App\Models\Meeting;
 use App\Models\MeetingActionItem;
@@ -105,12 +106,10 @@ class MeetingAdminService
             $q->where('created_at', '<=', $f['to'] . ' 23:59:59');
         }
         if (!empty($f['q'])) {
-            $term = '%' . str_replace(['%', '_'], ['\\%', '\\_'], trim((string) $f['q'])) . '%';
-            $q->where(function ($w) use ($term) {
-                $w->where('title', 'like', $term)
-                  ->orWhere('meeting_code', 'like', $term)
-                  ->orWhere('uuid', 'like', $term)
-                  ->orWhereHas('host', fn ($h) => $h->where('full_name', 'like', $term)->orWhere('email', 'like', $term));
+            $raw = trim((string) $f['q']);
+            $q->where(function ($w) use ($raw) {
+                $w->where(fn ($x) => SearchLike::apply($x, ['title', 'meeting_code', 'uuid'], $raw))
+                  ->orWhereHas('host', fn ($h) => SearchLike::apply($h, ['full_name', 'email'], $raw));
             });
         }
 

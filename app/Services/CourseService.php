@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Models\Course;
 use Illuminate\Support\Facades\DB;
 
@@ -143,10 +144,7 @@ class CourseService
             });
         }
         if (($needle = trim((string) ($f['q'] ?? ''))) !== '') {
-            $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $needle) . '%';
-            $q->where(function ($w) use ($like) {
-                $w->where('c.code', 'like', $like)->orWhere('c.name_en', 'like', $like)->orWhere('c.name_ar', 'like', $like);
-            });
+            SearchLike::apply($q, ['c.code', 'c.name_en', 'c.name_ar'], $needle);
         }
 
         $rows = $q->orderBy('c.code')->limit(500)->get();
@@ -387,8 +385,7 @@ class CourseService
             $query->where('s.faculty_id', $c->faculty_id);
         }
         if (($needle = trim((string) $q)) !== '') {
-            $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $needle) . '%';
-            $query->where(fn ($w) => $w->where('u.full_name', 'like', $like)->orWhere('u.email', 'like', $like)->orWhere('s.student_number', 'like', $like));
+            SearchLike::apply($query, ['u.full_name', 'u.email', 's.student_number'], $needle);
         }
         return ['success' => true, 'data' => $query->orderBy('u.full_name')->limit(50)->get()->map(fn ($r) => (array) $r)->all()];
     }

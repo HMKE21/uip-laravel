@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Repositories\SettingRepository;
 use Illuminate\Support\Facades\DB;
 
@@ -295,12 +296,7 @@ class ChatSafetyService
         }
         $q = trim((string) ($filters['q'] ?? ''));
         if ($q !== '') {
-            $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%';
-            $query->where(function ($w) use ($like) {
-                $w->where('rep.full_name', 'like', $like)->orWhere('rep.email', 'like', $like)
-                    ->orWhere('tgt.full_name', 'like', $like)->orWhere('tgt.email', 'like', $like)
-                    ->orWhere('r.message_snapshot', 'like', $like)->orWhere('r.details', 'like', $like);
-            });
+            SearchLike::apply($query, ['rep.full_name', 'rep.email', 'tgt.full_name', 'tgt.email', 'r.message_snapshot', 'r.details'], $q);
         }
 
         $rows = $query->orderByRaw("CASE r.status WHEN 'pending' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END")

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -329,11 +330,7 @@ class UserActivityService
             $q->where('occurred_at', '<=', $f['date_to']);
         }
         if ($f['q'] !== '') {
-            $like = '%' . $this->like($f['q']) . '%';
-            $q->where(function ($w) use ($like) {
-                $w->where('title', 'like', $like)->orWhere('path', 'like', $like)->orWhere('target', 'like', $like)
-                    ->orWhere('endpoint', 'like', $like)->orWhere('message', 'like', $like)->orWhere('url', 'like', $like);
-            });
+            SearchLike::apply($q, ['title', 'path', 'target', 'endpoint', 'message', 'url'], (string) $f['q']);
         }
 
         return $q;

@@ -2,6 +2,7 @@
 
 namespace App\Services\Mail;
 
+use App\Support\SearchLike;
 use App\Models\Mail\MailAccount;
 use App\Models\User;
 use App\Services\Developer\DevEventBus;
@@ -162,15 +163,18 @@ class MailboxService
         }
         $term = trim((string) ($f['q'] ?? ''));
         if ($term !== '') {
-            $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
-            $q->where(function ($w) use ($like) {
-                // نص الرسائل السرية اللي وصلتك مش بيتبحث فيه
-                $w->where('m.subject', 'like', $like)
-                    ->orWhere(fn ($x) => $x->where('m.body_text', 'like', $like)->where(fn ($y) => $y->where('m.confidential', 0)->orWhereColumn('m.sender_account_id', 'i.account_id')))
-                    ->orWhere('s.address', 'like', $like)->orWhere('s.display_name', 'like', $like)
-                    ->orWhere('m.ext_from_address', 'like', $like)->orWhere('m.ext_from_name', 'like', $like)
-                    ->orWhereExists(fn ($s) => $s->select(DB::raw(1))->from('mail_recipients as r')->whereColumn('r.message_id', 'm.id')->where('r.kind', '!=', 'bcc')->where(fn ($x) => $x->where('r.address', 'like', $like)->orWhere('r.name', 'like', $like)));
-            });
+            // كل كلمة لازم تظهر في أي مكان (موضوع/نص/مرسل/مستلمين) — بأي ترتيب.
+            foreach (SearchLike::tokens($term) ?: [$term] as $tk) {
+                $like = '%' . SearchLike::escape($tk) . '%';
+                $q->where(function ($w) use ($like) {
+                    // نص الرسائل السرية اللي وصلتك مش بيتبحث فيه
+                    $w->where('m.subject', 'like', $like)
+                        ->orWhere(fn ($x) => $x->where('m.body_text', 'like', $like)->where(fn ($y) => $y->where('m.confidential', 0)->orWhereColumn('m.sender_account_id', 'i.account_id')))
+                        ->orWhere('s.address', 'like', $like)->orWhere('s.display_name', 'like', $like)
+                        ->orWhere('m.ext_from_address', 'like', $like)->orWhere('m.ext_from_name', 'like', $like)
+                        ->orWhereExists(fn ($s) => $s->select(DB::raw(1))->from('mail_recipients as r')->whereColumn('r.message_id', 'm.id')->where('r.kind', '!=', 'bcc')->where(fn ($x) => $x->where('r.address', 'like', $like)->orWhere('r.name', 'like', $like)));
+                });
+            }
         }
         $threads = ($f['view'] ?? 'messages') === 'threads';
         if ($threads) {

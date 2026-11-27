@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Repositories\NotificationRepository;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -204,12 +205,17 @@ class NetworkService
             $bind[] = $esc($lower) . '%';
         }
         if (!$handleOnly && $core !== '') {
-            $tokens = array_values(array_filter(preg_split('/\s+/u', $core)));
+            $tokens = SearchLike::tokens($core);
             if ($tokens) {
-                $conds[] = '(' . implode(' AND ', array_fill(0, count($tokens), 'u.full_name LIKE ?')) . ')';
+                $parts = [];
                 foreach ($tokens as $t) {
-                    $bind[] = '%' . $esc($t) . '%';
+                    $vs = SearchLike::variants($t);
+                    $parts[] = '(' . implode(' OR ', array_fill(0, count($vs), 'u.full_name LIKE ?')) . ')';
+                    foreach ($vs as $v) {
+                        $bind[] = '%' . $esc($v) . '%';
+                    }
                 }
+                $conds[] = '(' . implode(' AND ', $parts) . ')';
             }
         }
         if ($idNum > 0) {
@@ -652,7 +658,7 @@ class NetworkService
         $per = max(1, min(50, $per));
         $base->whereNull('u.deleted_at')->where('u.status', 'active')->whereRaw($this->notBlockedSql(), [$uid, $uid]);
         if (($q = trim($q)) !== '') {
-            $base->where('u.full_name', 'like', '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%');
+            SearchLike::apply($base, ['u.full_name', 'u.username'], $q);
         }
         $rows = $base->selectRaw('u.id, u.full_name, u.username, u.avatar_path, ' . $atExpr . ' AS rel_at' . ($extra ? ', ' . implode(', ', $extra) : ''))
             ->orderByRaw($atExpr . ' DESC')->offset(($page - 1) * $per)->limit($per + 1)->get()->all();

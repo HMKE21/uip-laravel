@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -142,8 +143,8 @@ class PostFeedService
                 }
                 $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
                 $tag = mb_strtolower(ltrim($term, '#'));
-                return $q->where(function ($w) use ($like, $tag) {
-                    $w->where('p.body', 'like', $like)->orWhere('p.title', 'like', $like)->orWhere('u.full_name', 'like', $like)
+                return $q->where(function ($w) use ($term, $tag) {
+                    $w->where(fn ($x) => SearchLike::apply($x, ['p.body', 'p.title', 'u.full_name'], $term))
                         ->orWhereRaw('EXISTS (SELECT 1 FROM post_hashtags h WHERE h.post_id = p.id AND h.tag = ?)', [$tag]);
                 })->orderByDesc('p.published_at')->orderByDesc('p.id');
 

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
@@ -506,8 +507,7 @@ class StoryService
         $query = DB::table('users as u')->whereNull('u.deleted_at')->where('u.status', 'active')->where('u.id', '!=', $uid)
             ->whereRaw('NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = ?))', [$uid, $uid]);
         if ($q !== '') {
-            $like = '%' . str_replace(['%', '_'], ['\\%', '\\_'], $q) . '%';
-            $query->where(fn ($w) => $w->where('u.full_name', 'like', $like)->orWhere('u.email', 'like', $like));
+            SearchLike::apply($query, ['u.full_name', 'u.email', 'u.username'], $q);
         } else {
             $query->whereRaw('EXISTS (SELECT 1 FROM conversations c
                 JOIN conversation_participants pa ON pa.conversation_id = c.id AND pa.user_id = ?

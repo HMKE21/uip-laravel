@@ -2,6 +2,7 @@
 
 namespace App\Repositories;
 
+use App\Support\SearchLike;
 use App\Models\Message;
 use App\Models\MessageVersion;
 use Illuminate\Support\Facades\DB;
@@ -273,7 +274,7 @@ class MessageRepository
                     $j->on('cp.conversation_id', '=', 'm.conversation_id')->where('cp.user_id', $viewerId);
                 })
                 ->where('m.is_deleted', 0)
-                ->where('m.body', 'like', '%' . $needle . '%')
+                ->tap(fn ($qb) => SearchLike::apply($qb, ['m.body'], $needle))
                 ->select('m.*', 'u.full_name as sender_name');
         }
 

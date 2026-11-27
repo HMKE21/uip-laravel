@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\SearchLike;
 use App\Models\DriveNode;
 use App\Models\DriveNodeVersion;
 use App\Support\DriveArchive;
@@ -222,8 +223,7 @@ class DriveService
         if ($term === '') {
             return [];
         }
-        $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
-        $rows = $this->q($uid)->whereNull('deleted_at')->where('name', 'like', $like)
+        $rows = $this->q($uid)->whereNull('deleted_at')->tap(fn ($qb) => SearchLike::apply($qb, ['name'], $term))
             ->orderByRaw("type = 'folder' desc")->orderBy('name')->limit(min(200, max(1, $limit)))->get();
         return $rows->map(function (DriveNode $n) use ($uid) {
             $r = $n->toRowArray();
