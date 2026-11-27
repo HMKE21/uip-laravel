@@ -91,6 +91,12 @@ return [
 
     'geoip' => [
         'enabled'      => (bool) env('GEOIP_ENABLED', true),
+        // بيتسأل أكتر من مزوّد بالتوازي ويتدمجوا في موقع واحد (مدينة + إحداثيات + ثقة). الأسماء: ip-api, ipwho, ipapi, geojs, freeipapi, ipinfo, maxmind.
+        'providers'    => array_values(array_filter(array_map('trim', explode(',', (string) env('GEOIP_PROVIDERS', 'ip-api,ipwho,ipapi,geojs'))))),
+        'ipapi_key'    => env('GEOIP_IPAPI_KEY', ''),      // اختياري: مفتاح ip-api Pro (HTTPS + حدود أعلى)
+        'ipinfo_token' => env('GEOIP_IPINFO_TOKEN', ''),   // اختياري: توكن ipinfo.io (أدق + أعلام VPN/hosting)
+        'mmdb_city'    => env('GEOIP_MMDB_CITY', ''),      // اختياري: مسار GeoLite2-City.mmdb (محتاج composer require geoip2/geoip2)
+        // fallback قديم: رابط بيرجّع كود دولة نصي بس — بيتستخدم لو كل المزوّدين فشلوا.
         'provider_url' => env('GEOIP_PROVIDER_URL', 'https://ipapi.co/{ip}/country/'),
         'timeout'      => (int) env('GEOIP_TIMEOUT', 3),
         'cache_days'   => (int) env('GEOIP_CACHE_DAYS', 30),

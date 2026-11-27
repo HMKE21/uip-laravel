@@ -2851,6 +2851,7 @@ Route::prefix('v1')->group(function () {
             Route::get('/summary', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'summary'])->middleware('throttle:60,1');
             Route::get('/feed', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'feed'])->middleware('throttle:180,1');
             Route::get('/geo-resolve', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'geoResolve'])->middleware('throttle:20,1');
+            Route::get('/ip', [\App\Http\Controllers\Api\SecurityThreatMonitorApiController::class, 'ip'])->middleware('throttle:30,1');
         });
 
         // بند 2 — صحة السيرفر (CPU/RAM/ديسك/5xx/طابور/DB). قراءة بس لأي موظف أمن؛ الحدود بتتظبط من Detection Rules.

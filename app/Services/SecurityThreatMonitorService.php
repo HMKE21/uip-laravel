@@ -97,8 +97,9 @@ class SecurityThreatMonitorService
 
         $geo = $this->geoMap(array_column($rows, 'ip'));
         $blocks = $this->activeBlocks();
+        $ua = $this->deviceMap(array_column($rows, 'ip'));
         foreach ($rows as &$r) {
-            $r = $this->decorate($r, $geo, $blocks);
+            $r = $this->decorate($r, $geo, $blocks, $ua);
         }
         unset($r);
 
@@ -204,28 +205,75 @@ class SecurityThreatMonitorService
         $blocks = $this->activeBlocks();
         $rankName = array_flip(self::SEV_RANK);
 
-        // ---- countries
+        // ---- countries + city-level locations
+        $ua = $this->deviceMap(array_slice(array_keys($ips), 0, 250));
         $countries = [];
+        $locations = [];
+        $devices = ['mobile' => 0, 'tablet' => 0, 'desktop' => 0, 'bot' => 0, 'tool' => 0, 'unknown' => 0];
+        $connections = ['datacenter' => 0, 'proxy' => 0, 'mobile' => 0, 'broadband' => 0, 'unknown' => 0];
         $internal = 0;
         $pending = [];
+        $refine = 0;
         foreach ($ips as $ip => $i) {
             $g = $geo[$ip] ?? null;
             if ($g && $g['status'] === 'local') {
                 $internal += $i['events'];
-            } elseif ($g && $g['code']) {
+                continue;
+            }
+            $dev = $ua[$ip]['type'] ?? 'unknown';
+            $devices[$dev] = ($devices[$dev] ?? 0) + $i['events'];
+            $conn = $g['connection'] ?? null;
+            $connections[$conn && isset($connections[$conn]) ? $conn : 'unknown'] += $i['events'];
+
+            if ($g && $g['code']) {
                 $countries[$g['code']] ??= ['code' => $g['code'], 'events' => 0, 'ips' => 0, 'failed_login' => 0];
                 $countries[$g['code']]['events'] += $i['events'];
                 $countries[$g['code']]['ips']++;
                 $countries[$g['code']]['failed_login'] += $i['failed_login'];
+                if ($g['lat'] !== null && $g['lng'] !== null) {
+                    $lk = $g['code'] . ':' . round($g['lat'], 2) . ':' . round($g['lng'], 2);
+                    $locations[$lk] ??= [
+                        'key' => $lk, 'lat' => $g['lat'], 'lng' => $g['lng'], 'country' => $g['code'], 'city' => $g['city'], 'region' => $g['region'],
+                        'events' => 0, 'ips' => 0, 'failed_login' => 0, 'accuracy_km' => $g['accuracy_km'], 'confidence' => 0, 'list' => [],
+                    ];
+                    $L = &$locations[$lk];
+                    $L['events'] += $i['events'];
+                    $L['ips']++;
+                    $L['failed_login'] += $i['failed_login'];
+                    $L['accuracy_km'] = max((int) $L['accuracy_km'], (int) ($g['accuracy_km'] ?? 0)) ?: null;
+                    $L['confidence'] += (int) ($g['confidence'] ?? 0);
+                    $L['list'][] = [
+                        'ip' => $ip, 'events' => $i['events'], 'connection' => $conn, 'isp' => $g['isp'], 'asn' => $g['asn'],
+                        'proxy' => $g['proxy'], 'hosting' => $g['hosting'], 'mobile' => $g['mobile'], 'confidence' => $g['confidence'],
+                        'device' => $ua[$ip] ?? null, 'blocked' => false,
+                    ];
+                    unset($L);
+                }
+                if (!$g['detail'] && in_array($g['status'], ['ok', 'unknown'], true)) {
+                    $refine++;
+                }
             } elseif (!$g) {
                 $pending[$ip] = $i['events'];
             }
         }
         usort($countries, fn ($a, $b2) => $b2['events'] <=> $a['events']);
 
+        $blocksNow = $this->activeBlocks();
+        $locations = array_values($locations);
+        usort($locations, fn ($a, $b2) => $b2['events'] <=> $a['events']);
+        $locations = array_map(function ($L) use ($blocksNow) {
+            $L['confidence'] = $L['ips'] ? (int) round($L['confidence'] / $L['ips']) : null;
+            usort($L['list'], fn ($a, $b2) => $b2['events'] <=> $a['events']);
+            $L['list'] = array_map(function ($x) use ($blocksNow) {
+                $x['blocked'] = $this->isBlocked($x['ip'], $blocksNow);
+                return $x;
+            }, array_slice($L['list'], 0, 6));
+            return $L;
+        }, array_slice($locations, 0, 150));
+
         $topIps = array_values($ips);
         usort($topIps, fn ($a, $b2) => $b2['events'] <=> $a['events'] ?: $b2['last_ts'] <=> $a['last_ts']);
-        $topIps = array_map(function ($i) use ($geo, $blocks, $rankName) {
+        $topIps = array_map(function ($i) use ($geo, $blocks, $rankName, $ua) {
             $g = $geo[$i['ip']] ?? null;
             return [
                 'ip'            => $i['ip'],
@@ -235,6 +283,10 @@ class SecurityThreatMonitorService
                 'last_ts'       => $i['last_ts'],
                 'severity'      => $rankName[$i['sev']] ?? 'low',
                 'country'       => $g['code'] ?? null,
+                'city'          => $g['city'] ?? null,
+                'connection'    => $g['connection'] ?? null,
+                'isp'           => $g['isp'] ?? null,
+                'device'        => $ua[$i['ip']] ?? null,
                 'geo'           => $g ? $g['status'] : 'pending',
                 'blocked'       => $this->isBlocked($i['ip'], $blocks),
             ];
@@ -271,9 +323,12 @@ class SecurityThreatMonitorService
             'top_ips'        => $topIps,
             'top_targets'    => $topTargets,
             'countries'      => array_slice($countries, 0, 40),
+            'locations'      => $locations,
+            'devices'        => $devices,
+            'connections'    => $connections,
             'geo'            => [
                 'internal_events' => $internal,
-                'pending_ips'     => count($pending),
+                'pending_ips'     => count($pending) + $refine,
                 'pending_events'  => array_sum($pending),
                 'resolved_events' => array_sum(array_column($countries, 'events')),
             ],
@@ -298,7 +353,7 @@ class SecurityThreatMonitorService
         $resolved = 0;
         foreach (array_slice($missing, 0, max(1, min(5, $budget))) as $ip) {
             try {
-                $res = $this->geo->resolve($ip);
+                $res = $this->geo->resolve($ip, true);
             } catch (\Throwable) {
                 $res = ['status' => 'error'];
             }
@@ -329,7 +384,9 @@ class SecurityThreatMonitorService
         $geo = $this->geoMap(array_keys($count));
         $out = [];
         foreach (array_keys($count) as $ip) {
-            if (!isset($geo[$ip]) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            $g = $geo[$ip] ?? null;
+            $needs = !$g || (!$g['detail'] && in_array($g['status'], ['ok', 'unknown'], true));
+            if ($needs && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
                 $out[] = (string) $ip;
             }
         }
@@ -569,10 +626,16 @@ class SecurityThreatMonitorService
      * @param array<int,string> $blocks
      * @return array<string,mixed>
      */
-    private function decorate(array $r, array $geo, array $blocks): array
+    private function decorate(array $r, array $geo, array $blocks, array $ua = []): array
     {
         $g = $r['ip'] ? ($geo[$r['ip']] ?? null) : null;
         $r['country'] = $g['code'] ?? null;
+        $r['city'] = $g['city'] ?? null;
+        $r['lat'] = $g['lat'] ?? null;
+        $r['lng'] = $g['lng'] ?? null;
+        $r['connection'] = $g['connection'] ?? null;
+        $r['isp'] = $g['isp'] ?? null;
+        $r['device'] = $r['ip'] ? ($ua[$r['ip']] ?? null) : null;
         $r['geo'] = !$r['ip'] ? 'none' : ($g ? $g['status'] : 'pending');
         $r['blocked'] = $r['ip'] ? $this->isBlocked($r['ip'], $blocks) : false;
         return $r;
@@ -621,10 +684,28 @@ class SecurityThreatMonitorService
             $public[] = $ip;
         }
         if ($public && $this->has('ip_geo_cache')) {
+            $detailCol = $this->hasCol('ip_geo_cache', 'detail_at');
             try {
                 foreach (array_chunk($public, 500) as $chunk) {
-                    foreach (DB::table('ip_geo_cache')->whereIn('ip_address', $chunk)->get(['ip_address', 'country_code', 'lookup_status']) as $g) {
-                        $out[$g->ip_address] = ['status' => (string) $g->lookup_status, 'code' => $g->country_code ? strtoupper((string) $g->country_code) : null];
+                    foreach (DB::table('ip_geo_cache')->whereIn('ip_address', $chunk)->get() as $g) {
+                        $out[$g->ip_address] = [
+                            'status'      => (string) $g->lookup_status,
+                            'code'        => $g->country_code ? strtoupper((string) $g->country_code) : null,
+                            'city'        => $g->city ?? null,
+                            'region'      => $g->region ?? null,
+                            'lat'         => isset($g->latitude) ? (float) $g->latitude : null,
+                            'lng'         => isset($g->longitude) ? (float) $g->longitude : null,
+                            'accuracy_km' => isset($g->accuracy_km) ? (int) $g->accuracy_km : null,
+                            'isp'         => $g->isp ?? null,
+                            'asn'         => $g->asn ?? null,
+                            'connection'  => $g->connection_type ?? null,
+                            'proxy'       => (bool) ($g->is_proxy ?? false),
+                            'hosting'     => (bool) ($g->is_hosting ?? false),
+                            'mobile'      => (bool) ($g->is_mobile ?? false),
+                            'confidence'  => isset($g->confidence) ? (int) $g->confidence : null,
+                            // من غير العمود (الـ migration لسه) نعتبرها مفصّلة عشان مندخلش في حلقة "ترقية" ما بتخلصش.
+                            'detail'      => $detailCol ? ($g->detail_at ?? null) !== null : true,
+                        ];
                     }
                 }
             } catch (\Throwable) {
@@ -632,6 +713,74 @@ class SecurityThreatMonitorService
             }
         }
         return $out;
+    }
+
+    /**
+     * ip => ['type','os','browser','label'] من آخر User-Agent اتسجّل للعنوان في security_logs (لو العمود موجود).
+     * مؤشر مش دليل: الـ User-Agent بيتزوّر، وأدوات الفحص غالبًا بتسيبه فاضي أو بتحط اسمها.
+     *
+     * @param array<int,mixed> $ips
+     * @return array<string,array{type:string,os:?string,browser:?string,label:?string}>
+     */
+    private function deviceMap(array $ips): array
+    {
+        $ips = array_values(array_unique(array_filter(array_map('strval', $ips))));
+        if (!$ips || !$this->has('security_logs') || !$this->hasCol('security_logs', 'user_agent')) {
+            return [];
+        }
+        $out = [];
+        try {
+            foreach (array_chunk($ips, 200) as $chunk) {
+                $rows = DB::table('security_logs')->whereIn('ip_address', $chunk)->whereNotNull('user_agent')
+                    ->orderByDesc('id')->limit(1500)->get(['ip_address', 'user_agent']);
+                foreach ($rows as $r) {
+                    if (!isset($out[$r->ip_address])) {
+                        $out[$r->ip_address] = \App\Support\UserAgentInfo::parse((string) $r->user_agent);
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            return [];
+        }
+
+        return $out;
+    }
+
+    /**
+     * تفاصيل عنوان واحد (للـ drill-down): موقع مدمج من كل المزوّدين + الجهاز + نشاطه آخر 24 ساعة. بيعمل lookup حقيقي لو مفيش تفاصيل.
+     *
+     * @return array<string,mixed>
+     */
+    public function ipDetail(string $ip): array
+    {
+        $ip = trim($ip);
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            throw new \InvalidArgumentException('Enter a valid IP address.');
+        }
+        try {
+            $geo = $this->geo->lookup($ip);
+        } catch (\Throwable) {
+            $geo = ['status' => 'error'];
+        }
+        $events = 0;
+        $lastTs = null;
+        $kinds = [];
+        foreach ($this->fetch(now()->subDay(), self::ROW_CAP, false) as $r) {
+            if (($r['ip'] ?? null) === $ip) {
+                $events++;
+                $kinds[$r['kind']] = ($kinds[$r['kind']] ?? 0) + 1;
+                $lastTs = max((int) $lastTs, (int) $r['ts']);
+            }
+        }
+        $ua = $this->deviceMap([$ip]);
+
+        return [
+            'ip'      => $ip,
+            'geo'     => $geo,
+            'device'  => $ua[$ip] ?? null,
+            'blocked' => $this->isBlocked($ip, $this->activeBlocks()),
+            'last_24h' => ['events' => $events, 'last_ts' => $lastTs, 'kinds' => $kinds],
+        ];
     }
 
     private function has(string $table): bool

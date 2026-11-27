@@ -12,7 +12,8 @@ use Illuminate\Http\Request;
  *
  *   GET /security/threats/summary?window=1h|6h|24h|7d  — أرقام + اتجاه زمني + أعلى IPs/حسابات + توزيع الدول
  *   GET /security/threats/feed?since=<epoch>&limit=&kinds=&min_severity=&ip=  — تدفّق الأحداث (polling)
- *   GET /security/threats/geo-resolve                   — حلّ دولة كام IP ناقصين (ميزانية صغيرة + cooldown)
+ *   GET /security/threats/geo-resolve                   — حلّ موقع (مدينة + إحداثيات) كام IP ناقصين (ميزانية صغيرة + cooldown)
+ *   GET /security/threats/ip?ip=1.2.3.4                 — تفاصيل عنوان واحد: موقع مدمج من عدة مزوّدين + ISP + نوع الاتصال + الجهاز
  */
 class SecurityThreatMonitorApiController extends Controller
 {
@@ -69,6 +70,19 @@ class SecurityThreatMonitorApiController extends Controller
         }
 
         return $this->apiSuccess($this->monitor->resolvePending(3), 'Geo lookup finished.');
+    }
+
+    public function ip(Request $request)
+    {
+        if (!$this->isStaff($request)) {
+            return $this->apiError('Only Security Portal staff can view the threat monitor.', null, 403);
+        }
+
+        try {
+            return $this->apiSuccess($this->monitor->ipDetail((string) $request->query('ip', '')), 'IP details retrieved successfully.');
+        } catch (\InvalidArgumentException $e) {
+            return $this->apiError($e->getMessage(), null, 422);
+        }
     }
 
     private function isStaff(Request $request): bool

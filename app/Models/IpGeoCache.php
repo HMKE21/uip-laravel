@@ -25,5 +25,17 @@ class IpGeoCache extends Model
 
     protected $fillable = [
         'ip_address', 'country_code', 'country_name', 'lookup_status', 'resolved_at',
+        'region', 'city', 'postal', 'latitude', 'longitude', 'accuracy_km', 'timezone', 'isp', 'asn',
+        'connection_type', 'is_proxy', 'is_hosting', 'is_mobile', 'confidence', 'sources', 'detail_at',
+    ];
+
+    protected $casts = [
+        'latitude'    => 'float',
+        'longitude'   => 'float',
+        'accuracy_km' => 'integer',
+        'confidence'  => 'integer',
+        'is_proxy'    => 'boolean',
+        'is_hosting'  => 'boolean',
+        'is_mobile'   => 'boolean',
     ];
 }
