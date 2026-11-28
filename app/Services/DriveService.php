@@ -1405,6 +1405,33 @@ class DriveService
             'main.py'          => "print('Hello from {name}')\n",
             'requirements.txt' => "",
         ],
+        // React + Vite: dependencies are installed in the sandbox (npm install); the dev server listens on all interfaces for the preview.
+        'react'  => [
+            'package.json' => "{\n  \"name\": \"{slug}\",\n  \"private\": true,\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite --host 0.0.0.0\",\n    \"build\": \"vite build\",\n    \"preview\": \"vite preview --host 0.0.0.0\"\n  },\n  \"dependencies\": {\n    \"react\": \"^18.3.1\",\n    \"react-dom\": \"^18.3.1\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-react\": \"^4.3.3\",\n    \"vite\": \"^5.4.10\"\n  }\n}\n",
+            'vite.config.js' => "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({\n  plugins: [react()],\n  server: { host: true, port: 5173, allowedHosts: true },\n});\n",
+            'index.html' => "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n    <title>{name}</title>\n  </head>\n  <body>\n    <div id=\"root\"></div>\n    <script type=\"module\" src=\"/src/main.jsx\"></script>\n  </body>\n</html>\n",
+            'src/main.jsx' => "import { StrictMode } from 'react';\nimport { createRoot } from 'react-dom/client';\nimport App from './App.jsx';\nimport './index.css';\n\ncreateRoot(document.getElementById('root')).render(\n  <StrictMode>\n    <App />\n  </StrictMode>,\n);\n",
+            'src/App.jsx' => "import { useState } from 'react';\n\nexport default function App() {\n  const [count, setCount] = useState(0);\n  return (\n    <main className=\"app\">\n      <h1>Hello from React + Vite</h1>\n      <button onClick={() => setCount((c) => c + 1)}>Clicked {count} times</button>\n      <p>Edit <code>src/App.jsx</code> and save to see changes.</p>\n    </main>\n  );\n}\n",
+            'src/index.css' => "body { font-family: system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh; }\n.app { text-align: center; }\nbutton { font-size: 1rem; padding: .6rem 1.1rem; border-radius: 10px; border: 1px solid #cbd5e1; cursor: pointer; }\n",
+            '.gitignore' => "node_modules\ndist\n",
+        ],
+        'vue'    => [
+            'package.json' => "{\n  \"name\": \"{slug}\",\n  \"private\": true,\n  \"version\": \"0.0.0\",\n  \"type\": \"module\",\n  \"scripts\": {\n    \"dev\": \"vite --host 0.0.0.0\",\n    \"build\": \"vite build\",\n    \"preview\": \"vite preview --host 0.0.0.0\"\n  },\n  \"dependencies\": {\n    \"vue\": \"^3.5.12\"\n  },\n  \"devDependencies\": {\n    \"@vitejs/plugin-vue\": \"^5.1.4\",\n    \"vite\": \"^5.4.10\"\n  }\n}\n",
+            'vite.config.js' => "import { defineConfig } from 'vite';\nimport vue from '@vitejs/plugin-vue';\n\nexport default defineConfig({\n  plugins: [vue()],\n  server: { host: true, port: 5173, allowedHosts: true },\n});\n",
+            'index.html' => "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n    <title>{name}</title>\n  </head>\n  <body>\n    <div id=\"app\"></div>\n    <script type=\"module\" src=\"/src/main.js\"></script>\n  </body>\n</html>\n",
+            'src/main.js' => "import { createApp } from 'vue';\nimport App from './App.vue';\n\ncreateApp(App).mount('#app');\n",
+            'src/App.vue' => "<script setup>\nimport { ref } from 'vue';\nconst count = ref(0);\n</script>\n\n<template>\n  <main class=\"app\">\n    <h1>Hello from Vue + Vite</h1>\n    <button @click=\"count++\">Clicked {{ count }} times</button>\n    <p>Edit <code>src/App.vue</code> and save to see changes.</p>\n  </main>\n</template>\n\n<style>\nbody { font-family: system-ui, sans-serif; margin: 0; display: grid; place-items: center; min-height: 100vh; }\n.app { text-align: center; }\nbutton { font-size: 1rem; padding: .6rem 1.1rem; border-radius: 10px; border: 1px solid #cbd5e1; cursor: pointer; }\n</style>\n",
+            '.gitignore' => "node_modules\ndist\n",
+        ],
+        'express' => [
+            'package.json' => "{\n  \"name\": \"{slug}\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"scripts\": { \"start\": \"node index.js\", \"dev\": \"node --watch index.js\" },\n  \"dependencies\": { \"express\": \"^4.21.1\" }\n}\n",
+            'index.js'     => "const express = require('express');\n\nconst app = express();\nconst port = process.env.PORT || 3000;\n\napp.use(express.json());\n\napp.get('/', (req, res) => res.send('<h1>Hello from Express</h1>'));\napp.get('/api/hello', (req, res) => res.json({ message: 'Hello from the API' }));\n\napp.listen(port, '0.0.0.0', () => console.log(`Server running on http://localhost:\${port}`));\n",
+            '.gitignore'   => "node_modules\n",
+        ],
+        'flask'  => [
+            'app.py'           => "from flask import Flask, jsonify\n\napp = Flask(__name__)\n\n\n@app.get(\"/\")\ndef home():\n    return \"<h1>Hello from Flask</h1>\"\n\n\n@app.get(\"/api/hello\")\ndef hello():\n    return jsonify(message=\"Hello from the API\")\n\n\nif __name__ == \"__main__\":\n    app.run(host=\"0.0.0.0\", port=5000, debug=True)\n",
+            'requirements.txt' => "flask>=3.0\n",
+        ],
     ];
 
     public static function templateKeys(): array
