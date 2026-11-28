@@ -1393,9 +1393,236 @@ class DriveService
     private const TEMPLATES = [
         'blank'  => ['README.md' => "# {name}\n\n"],
         'web'    => [
-            'index.html' => "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{name}</title>\n  <link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n  <h1>{name}</h1>\n  <script src=\"script.js\"></script>\n</body>\n</html>\n",
-            'style.css'  => "body { font-family: system-ui, sans-serif; margin: 2rem; }\n",
-            'script.js'  => "console.log('Hello from {name}');\n",
+            'index.html' => <<<'EOT'
+<!DOCTYPE html>
+<!--
+  index.html  -  the STRUCTURE of the page (what is on it).
+  The browser reads this file first. It then loads the style sheet (css/style.css)
+  and the script (js/main.js) that are linked below.
+-->
+<html lang="en">
+<head>
+  <!-- Use UTF-8 so every language and emoji displays correctly -->
+  <meta charset="UTF-8">
+  <!-- Makes the page fit phone screens instead of shrinking a desktop layout -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="{name} - a website built on UIPE">
+  <!-- The text shown in the browser tab -->
+  <title>{name}</title>
+  <!-- Link to the style sheet: colours, fonts and layout live there -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- HEADER: the logo and the navigation links -->
+  <header class="site-header">
+    <a class="brand" href="#home">{name}</a>
+    <nav>
+      <!-- "#about" jumps to the element whose id is "about" -->
+      <a href="#about">About</a>
+      <a href="#features">Features</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HERO: the first big section visitors see -->
+    <section id="home" class="hero">
+      <h1>Welcome to UIPE</h1>
+      <p>This is your new website. Edit the files, save, and refresh the preview to see your changes.</p>
+      <!-- The script (js/main.js) finds this button by its id and reacts when it is clicked -->
+      <button id="greet-btn" class="btn" type="button">Say hello</button>
+      <p id="greeting" class="greeting" aria-live="polite"></p>
+    </section>
+
+    <!-- ABOUT -->
+    <section id="about" class="section">
+      <h2>About</h2>
+      <p>Write a short description of your project here: what it does and who it is for.</p>
+    </section>
+
+    <!-- FEATURES: three cards. Copy one <article> block to add another card. -->
+    <section id="features" class="section">
+      <h2>Features</h2>
+      <div class="cards">
+        <article class="card">
+          <h3>HTML</h3>
+          <p>Gives the page its structure: headings, paragraphs, links and buttons.</p>
+        </article>
+        <article class="card">
+          <h3>CSS</h3>
+          <p>Controls how it looks: colours, spacing, fonts and the responsive layout.</p>
+        </article>
+        <article class="card">
+          <h3>JavaScript</h3>
+          <p>Makes it interactive: reacts to clicks, changes text and talks to servers.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- CONTACT -->
+    <section id="contact" class="section">
+      <h2>Contact</h2>
+      <p>Add your email or social links here.</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; <span id="year"></span> {name}. Built with UIPE.</p>
+  </footer>
+
+  <!-- Load the script at the END so the elements above already exist when it runs -->
+  <script src="js/main.js"></script>
+</body>
+</html>
+EOT,
+            'css/style.css' => <<<'EOT'
+/*
+  style.css  -  the LOOK of the page (how it is displayed).
+  Each rule has a selector (which elements) and declarations (what to change).
+*/
+
+/* 1) Variables: change a colour here and it updates everywhere it is used */
+:root {
+  --primary: #4f46e5;       /* main brand colour */
+  --primary-dark: #4338ca;  /* darker shade for hover */
+  --text: #1f2937;          /* normal text */
+  --muted: #6b7280;         /* secondary text */
+  --bg: #f9fafb;            /* page background */
+  --card: #ffffff;          /* card background */
+  --radius: 14px;           /* rounded corners */
+}
+
+/* 2) Reset: remove the browser's default spacing so we start clean */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Smooth scrolling when a navigation link jumps to a section */
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.6;
+}
+
+/* 3) Header: sticks to the top while scrolling */
+.site-header {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 6vw;
+  background: rgba(255, 255, 255, .9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid #e5e7eb;
+}
+.brand { font-weight: 800; font-size: 1.2rem; color: var(--primary); text-decoration: none; }
+.site-header nav a { margin-inline-start: 20px; color: var(--text); text-decoration: none; font-weight: 500; }
+.site-header nav a:hover { color: var(--primary); }
+
+/* 4) Hero section: big welcome area with a gradient background */
+.hero {
+  text-align: center;
+  padding: 110px 6vw;
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary), #7c3aed);
+}
+.hero h1 { font-size: clamp(2rem, 6vw, 3.5rem); margin-bottom: 12px; }   /* clamp = responsive font size */
+.hero p { max-width: 560px; margin: 0 auto 24px; opacity: .92; }
+
+/* 5) Button */
+.btn {
+  padding: 12px 28px;
+  border: 0; border-radius: 999px;
+  background: #fff; color: var(--primary);
+  font-size: 1rem; font-weight: 700; cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0, 0, 0, .2); }
+.greeting { margin-top: 18px; min-height: 1.6em; font-weight: 600; }
+
+/* 6) Sections and cards */
+.section { max-width: 960px; margin: 0 auto; padding: 64px 6vw; }
+.section h2 { margin-bottom: 14px; font-size: 1.8rem; }
+.section p { color: var(--muted); }
+
+/* CSS Grid: as many 220px+ columns as fit, they wrap on small screens */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; margin-top: 20px; }
+.card { background: var(--card); padding: 22px; border-radius: var(--radius); border: 1px solid #e5e7eb; transition: transform .15s ease; }
+.card:hover { transform: translateY(-4px); }
+.card h3 { color: var(--primary); margin-bottom: 6px; }
+
+/* 7) Footer */
+.site-footer { text-align: center; padding: 28px; color: var(--muted); border-top: 1px solid #e5e7eb; }
+
+/* 8) Small screens: hide the nav links so the header stays tidy */
+@media (max-width: 600px) {
+  .site-header nav { display: none; }
+}
+EOT,
+            'js/main.js' => <<<'EOT'
+/*
+  main.js  -  the BEHAVIOUR of the page (what happens when the visitor does something).
+  It runs in the browser after index.html has loaded.
+*/
+
+// 1) Grab the elements we want to control (found by the ids written in index.html)
+const greetButton = document.getElementById('greet-btn');
+const greetingText = document.getElementById('greeting');
+const yearText = document.getElementById('year');
+
+// 2) A function is a reusable block of code. This one returns a greeting based on the time of day.
+function getGreeting() {
+  const hour = new Date().getHours();      // 0 - 23
+  if (hour < 12) return 'Good morning!';
+  if (hour < 18) return 'Good afternoon!';
+  return 'Good evening!';
+}
+
+// 3) Listen for a click on the button, then change the text on the page
+greetButton.addEventListener('click', () => {
+  greetingText.textContent = `${getGreeting()} Welcome to UIPE.`;
+  console.log('The button was clicked');   // open the browser console (F12) to see this
+});
+
+// 4) Put the current year in the footer automatically
+yearText.textContent = new Date().getFullYear();
+EOT,
+            'README.md' => <<<'EOT'
+# {name}
+
+A starter website built with plain **HTML, CSS and JavaScript**. No installation needed.
+
+## Files
+
+| File | What it does |
+| --- | --- |
+| `index.html` | The structure of the page (headings, sections, buttons). Open this first. |
+| `css/style.css` | The look: colours, fonts, spacing, responsive layout. |
+| `js/main.js` | The behaviour: reacts to clicks and updates the page. |
+
+## How to run
+
+Open the project in the code editor and press **Run** to see the live preview. Edit a file, save, and refresh.
+
+## Things to try
+
+1. Change `--primary` in `css/style.css` to another colour.
+2. Change the heading text in `index.html`.
+3. Add a new card inside the "Features" section.
+4. Edit the message in `js/main.js`.
+
+---
+
+## بالعربي
+
+موقع جاهز للبدء بـ HTML و CSS و JavaScript من غير أي تثبيت.
+
+- `index.html` الهيكل (العناوين والأقسام والأزرار).
+- `css/style.css` الشكل (الألوان والخطوط والتصميم المتجاوب).
+- `js/main.js` السلوك (التفاعل مع الضغط على الأزرار).
+
+دوس **Run** لمعاينة الموقع، عدّل أي ملف واحفظ وحدّث المعاينة.
+EOT,
         ],
         'node'   => [
             'package.json' => "{\n  \"name\": \"{slug}\",\n  \"version\": \"1.0.0\",\n  \"main\": \"index.js\",\n  \"scripts\": { \"start\": \"node index.js\" }\n}\n",
@@ -1449,7 +1676,11 @@ class DriveService
             $folder = $this->createFolder($uid, $parentId, $name, 'project');
             $slug = Str::slug($folder->name) ?: 'project';
             foreach ($tpl as $fname => $body) {
-                $this->createTextFile($uid, (int) $folder->id, $fname, str_replace(['{name}', '{slug}'], [$folder->name, $slug], $body));
+                // "src/main.jsx" -> make the sub-folders first, then the file inside them
+                $segs = explode('/', $fname);
+                $leaf = array_pop($segs);
+                $dir = $segs ? $this->ensureFolderPath($uid, (int) $folder->id, $segs) : (int) $folder->id;
+                $this->createTextFile($uid, $dir, $leaf, str_replace(['{name}', '{slug}'], [$folder->name, $slug], $body));
             }
             return $folder;
         });
