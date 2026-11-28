@@ -765,13 +765,18 @@ class SecurityThreatMonitorService
         $events = 0;
         $lastTs = null;
         $kinds = [];
-        foreach ($this->fetch(now()->subDay(), self::ROW_CAP, false) as $r) {
+        $recent = [];
+        // full = true: نفس الصفوف بتفاصيلها (المسار، الحالة، العيّنة…) عشان المحقق يشوف العنوان ده عمل إيه بالظبط.
+        foreach ($this->fetch(now()->subDay(), self::ROW_CAP, true) as $r) {
             if (($r['ip'] ?? null) === $ip) {
                 $events++;
                 $kinds[$r['kind']] = ($kinds[$r['kind']] ?? 0) + 1;
                 $lastTs = max((int) $lastTs, (int) $r['ts']);
+                $recent[] = $r;
             }
         }
+        usort($recent, fn ($a, $b) => $b['ts'] <=> $a['ts']);
+        $recent = array_slice($recent, 0, 12);
         $ua = $this->deviceMap([$ip]);
 
         return [
@@ -780,6 +785,7 @@ class SecurityThreatMonitorService
             'device'  => $ua[$ip] ?? null,
             'blocked' => $this->isBlocked($ip, $this->activeBlocks()),
             'last_24h' => ['events' => $events, 'last_ts' => $lastTs, 'kinds' => $kinds],
+            'recent'  => $recent,
         ] + $this->accountsForIp($ip);
     }
 
